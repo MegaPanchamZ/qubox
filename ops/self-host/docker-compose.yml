@@ -1,0 +1,76 @@
+# Self-host stack: signaling + coturn (+ optional Caddy for wss://).
+#
+# From repo root:
+#   export QUBOX_SIGNALING_SECRET=$(openssl rand -hex 32)
+#   export QUBOX_TURN_SECRET=$(openssl rand -hex 16)
+#   docker compose -f ops/self-host/docker-compose.yml up -d --build
+#
+# Clients:
+#   export QUBOX_SERVER=ws://127.0.0.1:7000/ws
+#   qubox-host-agent --server "$QUBOX_SERVER" --name "$(hostname)"
+#   qubox-client-cli --server "$QUBOX_SERVER" list-hosts
+#
+# LAN migration only: see README (allow-unsigned-hello override).
+# TLS: docker compose --profile tls up -d
+
+services:
+  coturn:
+    build:
+      context: ../../
+      dockerfile: ops/coturn/Dockerfile
+    image: qubox/coturn:latest
+    container_name: qubox-coturn
+    restart: unless-stopped
+    ports:
+      - "3478:3478/udp"
+      - "3478:3478/tcp"
+      - "5349:5349/udp"
+      - "5349:5349/tcp"
+    environment:
+      QUBOX_TURN_SECRET: ${QUBOX_TURN_SECRET:-dev_turn_secret_change_me}
+    healthcheck:
+      test: ["CMD", "turnutils_stunclient", "-p", "3478", "localhost"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  signaling:
+    build:
+      context: ../../
+      dockerfile: apps/qubox-signaling-server/Dockerfile
+    image: qubox/signaling-server:latest
+    container_name: qubox-signaling
+    restart: unless-stopped
+    ports:
+      - "7000:7000/tcp"
+    environment:
+      QUBOX_BIND: 0.0.0.0:7000
+      QUBOX_PAIRING_STORE: /data/pairings.json
+      QUBOX_SIGNALING_SECRET: ${QUBOX_SIGNALING_SECRET:-dev_signaling_secret_change_me}
+      QUBOX_TURN_SECRET: ${QUBOX_TURN_SECRET:-dev_turn_secret_change_me}
+      QUBOX_TURN_URLS: turn:coturn:3478
+      RUST_LOG: info
+    volumes:
+      - qubox-data:/data
+    depends_on:
+      coturn:
+        condition: service_healthy
+
+  caddy:
+    profiles: ["tls"]
+    image: caddy:2-alpine
+    container_name: qubox-caddy
+    restart: unless-stopped
+    ports:
+      - "443:443"
+      - "80:80"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+    depends_on:
+      - signaling
+
+volumes:
+  qubox-data:
+  caddy-data:

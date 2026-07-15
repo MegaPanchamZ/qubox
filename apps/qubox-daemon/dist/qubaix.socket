@@ -1,0 +1,11 @@
+[Unit]
+Description=Qubox daemon IPC socket
+PartOf=qubox.service
+
+[Socket]
+ListenStream=%t/qubox/qubox.sock
+SocketMode=0600
+DirectoryMode=0700
+
+[Install]
+WantedBy=sockets.target

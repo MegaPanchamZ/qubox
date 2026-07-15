@@ -1,0 +1,40 @@
+[package]
+name = "qubox-display"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[features]
+default = ["x11"]
+e2e = []
+x11 = ["dep:x11rb"]
+dxgi = ["dep:windows"]
+screencapturekit = []
+pipewire = []
+pipewire-zero-copy = []
+dxgi-zero-copy = ["dxgi"]
+screencapturekit-zero-copy = ["screencapturekit"]
+
+[dependencies]
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+thiserror = "2"
+async-trait = "0.1"
+wgpu = { workspace = true }
+libc = "0.2"
+# Linux
+x11rb = { version = "0.13", optional = true, features = ["randr"] }
+# Windows — DXGI Output Duplication + D3D11 staging map
+windows = { version = "0.58", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Direct3D",
+    "Win32_Graphics_Direct3D11",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
+    "Win32_System_Com",
+    "Win32_System_Threading",
+], optional = true }
+# Errors
+anyhow = { workspace = true }

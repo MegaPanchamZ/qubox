@@ -1,0 +1,8 @@
+[package]
+name = "qubox-platform"
+edition.workspace = true
+version.workspace = true
+
+[dependencies]
+qubox-proto = { path = "../qubox-proto" }
+uuid.workspace = true

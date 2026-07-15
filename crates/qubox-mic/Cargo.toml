@@ -1,0 +1,29 @@
+[package]
+name = "qubox-mic"
+edition.workspace = true
+version.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+qubox-proto = { path = "../qubox-proto" }
+qubox-transport = { path = "../qubox-transport" }
+bytes = "1"
+cpal.workspace = true
+dasp.workspace = true
+nnnoiseless.workspace = true
+opus.workspace = true
+serde.workspace = true
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "time", "sync"] }
+tracing.workspace = true
+webrtc-audio-processing = { workspace = true, optional = true }
+webrtc-audio-processing-sys = "0.3"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+pipewire = { workspace = true, optional = true }
+libspa = { workspace = true, optional = true }
+
+[features]
+default = ["webrtc-apm"]
+webrtc-apm = ["dep:webrtc-audio-processing"]
+ns-rnnoise = []
+pipewire-virtual-source = ["dep:pipewire", "dep:libspa"]

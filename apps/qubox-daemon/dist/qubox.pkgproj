@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+qubox.pkgproj — Packages.app project file for the Qubox Daemon.
+
+NOTE: This file is a REFERENCE for the GUI-based workflow using "Packages"
+by Stéphane Sudre (http://s.sudre.free.fr/Software/Packages/about.html).
+
+The primary build method is build-pkg.sh (pkgbuild + productbuild CLI).
+Use this .pkgproj in the Packages GUI app for fine-grained distribution
+customisation (welcome screen, license, customisation panel, etc.).
+
+To open:
+  open apps/daemon/dist/qubox.pkgproj
+
+The equivalent CLI-only build command is:
+  ./apps/daemon/dist/build-pkg.sh
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>IBProjectOptions</key>
+	<dict>
+		<key>IBShowProjectDescription</key>
+		<true/>
+		<key>IBShowProjectName</key>
+		<string>Qubox Daemon</string>
+		<key>IBShowProjectVersion</key>
+		<string>0.1.0</string>
+		<key>IBShowProjectIdentifier</key>
+		<string>com.qubox.daemon</string>
+	</dict>
+	<key>IBProjectType</key>
+	<integer>0</integer>
+	<key>IBProjectPackages</key>
+	<array>
+		<dict>
+			<key>IBPackageIdentifier</key>
+			<string>com.qubox.daemon.component</string>
+			<key>IBPackageVersion</key>
+			<string>0.1.0</string>
+			<key>IBPackageSettings</key>
+			<dict>
+				<key>IBPackageSettingPayload</key>
+				<dict>
+					<key>IBPackageSettingPayloadRootPath</key>
+					<string>../../target/release</string>
+				</dict>
+				<key>IBPackageSettingScripts</key>
+				<dict>
+					<key>IBPackageSettingScriptsPreInstallationScriptPath</key>
+					<string>./preinstall</string>
+					<key>IBPackageSettingScriptsPostInstallationScriptPath</key>
+					<string>./postinstall</string>
+				</dict>
+			</dict>
+		</dict>
+	</array>
+</dict>
+</plist>

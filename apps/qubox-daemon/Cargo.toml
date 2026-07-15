@@ -1,0 +1,130 @@
+[package]
+name = "qubox-daemon"
+edition.workspace = true
+version.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+uuid.workspace = true
+futures.workspace = true
+
+# IPC
+interprocess = { version = "2.4", features = ["tokio"] }
+
+# State store
+redb = "4.1"
+
+# ADR-022 FileSync domain types
+qubox-sync = { path = "../../crates/qubox-sync" }
+
+# Binary serialization
+bincode = "1.3"
+
+# Platform paths
+directories = "5"
+
+# Windows SDDL (via interprocess)
+widestring = "1"
+
+# Error derive
+thiserror = "2"
+
+# TUF client
+tough = { version = "0.17", default-features = false, features = ["http"] }
+
+# Target version comparison
+semver = "1"
+
+# Hash verification
+sha2 = "0.10"
+hex = "0.4"
+
+# URLs
+url = "2"
+
+# HTTP client (separate from tough's internal reqwest 0.11)
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+
+[target.'cfg(unix)'.dependencies]
+nix = { version = "0.29", features = ["socket", "user", "signal"] }
+systemd = { version = "0.10", optional = true }
+
+[features]
+default = ["systemd"]
+systemd = ["dep:systemd"] 
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.58", features = [
+    "Win32_System_Pipes",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_Foundation",
+] }
+windows-sys = { version = "=0.59.0" }
+windows-service = "0.8"
+
+[dev-dependencies]
+tempfile = "3"
+# Test TUF repo generation
+chrono = { version = "0.4", features = ["serde"] }
+olpc-cjson = "0.1"
+ring = "0.17"
+
+# ---------------------------------------------------------------------------
+# Packaging metadata — consumed by cargo-deb and cargo-rpm respectively.
+# These sections are inert during normal builds (cargo build, cargo test).
+# Install tools: cargo install cargo-deb && cargo deb -p qubox
+#                cargo install cargo-rpm && cargo rpm -p qubox
+# ---------------------------------------------------------------------------
+
+[package.metadata.deb]
+name = "qubox-daemon"
+maintainer = "Qubox contributors <dev@qubox.app>"
+copyright = "2026, Qubox contributors"
+license = "AGPL-3.0"
+section = "net"
+priority = "optional"
+depends = "$auto"
+extended-description = "Qubox background daemon — see docs at https://qubox.app"
+
+[[package.metadata.deb.asset]]
+target = "x86_64-unknown-linux-gnu"
+path = "../target/release/qubox-daemon"
+mode = "0755"
+
+[[package.metadata.deb.systemd-unit]]
+unit-name = "qubox.service"
+enable = true
+
+[[package.metadata.deb.systemd-unit]]
+unit-name = "qubox.socket"
+enable = true
+
+[package.metadata.deb.default-features]
+systemd = true
+
+[package.metadata.rpm]
+package = "qubox"
+summary = "Qubox background daemon"
+license = "AGPL-3.0"
+group = "Applications/Internet"
+pre-install = "pre-install.sh"
+post-install = "post-install.sh"
+pre-uninstall = "pre-uninstall.sh"
+post-uninstall = "post-uninstall.sh"
+
+[[package.metadata.rpm.data]]
+path = "../target/release/qubox"
+mode = "0755"
+
+[[package.metadata.rpm.service-file]]
+path = "qubox.service"
+
+[[package.metadata.rpm.service-file]]
+path = "qubox.socket"

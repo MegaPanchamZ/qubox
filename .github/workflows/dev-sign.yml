@@ -1,0 +1,44 @@
+name: Dev signing dry-run
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+jobs:
+  gpg-detach-sign:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build release binaries (linux)
+        run: |
+          cargo build --release -p qubox-daemon -p qubox-host-agent -p qubox-client-cli
+
+      - name: Generate ephemeral GPG key + sign
+        run: |
+          export GNUPGHOME=$(mktemp -d)
+          cat >"$GNUPGHOME/key.batch" <<'EOF'
+          %no-protection
+          Key-Type: RSA
+          Key-Length: 3072
+          Name-Real: Qubox CI Dev
+          Name-Email: ci-dev@qubox.local
+          Expire-Date: 0
+          %commit
+          EOF
+          gpg --batch --generate-key "$GNUPGHOME/key.batch"
+          KEY=$(gpg --list-keys --with-colons | awk -F: '/^pub/ {print $5; exit}')
+          for f in target/release/qubox-daemon target/release/qubox-host-agent target/release/qubox-client-cli; do
+            gpg --local-user "$KEY" --detach-sign --armor "$f"
+            test -f "${f}.asc"
+            gpg --verify "${f}.asc" "$f"
+          done
+          echo "Dev GPG signing dry-run OK for key $KEY"
+
+      - name: Note on production certs
+        run: |
+          echo "Production Authenticode/notarization requires org certs — see ops/signing/README.md"

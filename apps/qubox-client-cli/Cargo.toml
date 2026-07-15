@@ -1,0 +1,51 @@
+[package]
+name = "qubox-client-cli"
+edition.workspace = true
+version.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+qubox-clipboard = { path = "../../crates/qubox-clipboard" }
+qubox-display = { path = "../../crates/qubox-display" }
+qubox-identity = { path = "../../crates/qubox-identity" }
+qubox-mic = { path = "../../crates/qubox-mic" }
+qubox-pen = { path = "../../crates/qubox-pen" }
+qubox-platform = { path = "../../crates/qubox-platform" }
+qubox-proto = { path = "../../crates/qubox-proto" }
+qubox-transport = { path = "../../crates/qubox-transport" }
+qubox-daemon = { path = "../qubox-daemon" }
+qubox-sync = { path = "../../crates/qubox-sync" }
+directories = "5"
+bytes = "1"
+clap.workspace = true
+cpal.workspace = true
+crossbeam-channel.workspace = true
+futures.workspace = true
+pollster.workspace = true
+raw-window-handle.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+softbuffer.workspace = true
+tokio.workspace = true
+tokio-tungstenite.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+uuid.workspace = true
+wgpu.workspace = true
+wgpu_glyph.workspace = true
+winit.workspace = true
+gilrs.workspace = true
+minifb.workspace = true
+hex.workspace = true
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+
+# P0-3: in-process HW-accelerated decoder via ffmpeg-next. Off by
+# default; the subprocess decoder remains the source of truth. When
+# enabled, the binary links against libav* (system FFmpeg >= 5.0
+# required at runtime) and a `--decoder hw` flag activates the
+# in-process path with `get_format` + `av_hwframe_transfer_data`.
+ffmpeg-next = { version = "8.1", optional = true }
+
+[features]
+default = []
+hw-decode = ["dep:ffmpeg-next"]  # links libav; real av_hwdevice_ctx_create  

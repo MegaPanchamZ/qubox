@@ -1,0 +1,223 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_REGISTRIES_CRATES_IO_PROTOCOL: sparse
+
+permissions:
+  contents: write
+
+jobs:
+  resolve-ref:
+    runs-on: ubuntu-latest
+    outputs:
+      ref: ${{ steps.set-ref.outputs.ref }}
+      tag: ${{ steps.set-ref.outputs.tag }}
+    steps:
+      - id: set-ref
+        run: |
+          echo "ref=${{ github.ref }}" >> "$GITHUB_OUTPUT"
+          echo "tag=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build (${{ matrix.os }})
+    needs: resolve-ref
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            binary: qubox-daemon
+            artifact: release-linux
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            binary: qubox-daemon
+            artifact: release-macos
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            binary: qubox-daemon.exe
+            artifact: release-windows
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve-ref.outputs.ref }}
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            . -> target
+
+      - name: Install Linux system dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libx11-dev libxrandr-dev libxdo-dev libxkbcommon-dev \
+            libwayland-dev libxext-dev libclang-18-dev \
+            libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libavfilter-dev libavdevice-dev \
+            libpulse-dev libdbus-1-dev libasound2-dev \
+            autoconf automake libtool \
+            libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
+            librsvg2-dev libssl-dev \
+            libudev-dev libopus-dev \
+            libpipewire-0.3-dev libspa-0.2-dev libsystemd-dev \
+            pkg-config \
+            rpm
+
+      - name: Install macOS system dependencies
+        if: runner.os == 'macOS'
+        run: |
+          brew update
+          brew install opus pkg-config autoconf automake libtool
+
+      - name: Install Windows system dependencies (vcpkg + opus)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          vcpkg --version 2>&1 | Out-Null
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "Installing vcpkg..."
+            git clone https://github.com/microsoft/vcpkg C:\vcpkg
+            C:\vcpkg\bootstrap-vcpkg.bat -disableMetrics
+          }
+          $env:VCPKG_ROOT = "C:\vcpkg"
+          $env:PATH = "C:\vcpkg;$env:PATH"
+          vcpkg integrate install
+          vcpkg install opus:x64-windows-static-md
+          echo "VCPKG_ROOT=C:\vcpkg" >> $env:GITHUB_ENV
+          echo "PKG_CONFIG_PATH=C:\vcpkg\installed\x64-windows-static-md\lib\pkgconfig" >> $env:GITHUB_ENV
+          $env:PKG_CONFIG_PATH = "C:\vcpkg\installed\x64-windows-static-md\lib\pkgconfig"
+          pkg-config --modversion opus
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: "Build daemon, host-agent, client-cli (Linux)"
+        if: runner.os == 'Linux'
+        run: cargo build --release -p qubox-daemon -p qubox-host-agent -p qubox-client-cli -p qubox-signaling-server
+
+      - name: "Build daemon (macOS, no systemd)"
+        if: runner.os == 'macOS'
+        run: cargo build --release --no-default-features -p qubox-daemon
+
+      - name: "Build host-agent, client-cli, signaling-server (macOS)"
+        if: runner.os == 'macOS'
+        run: cargo build --release --no-default-features -p qubox-host-agent -p qubox-client-cli -p qubox-signaling-server
+
+      - name: "Build daemon (Windows, no systemd, vcpkg opus) -- optional"
+        if: runner.os == 'Windows'
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $env:LIBOPUS_LIB_DIR = "C:\vcpkg\packages\opus_x64-windows-static-md\lib"
+          $env:LIBOPUS_INCLUDE_DIR = "C:\vcpkg\packages\opus_x64-windows-static-md\include"
+          cargo build --release --no-default-features -p qubox-daemon
+
+      - name: "Build host-agent, client-cli, signaling-server (Windows, vcpkg opus)"
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $env:LIBOPUS_LIB_DIR = "C:\vcpkg\packages\opus_x64-windows-static-md\lib"
+          $env:LIBOPUS_INCLUDE_DIR = "C:\vcpkg\packages\opus_x64-windows-static-md\include"
+          cargo build --release --no-default-features -p qubox-host-agent -p qubox-client-cli -p qubox-signaling-server
+
+      - name: Build client-gui (Tauri)
+        if: runner.os != 'Windows'
+        continue-on-error: true
+        working-directory: apps/qubox-client-gui
+        run: |
+          npm ci
+          npx tauri build
+
+      - name: Collect artifacts
+        run: |
+          mkdir -p dist
+          for bin in qubox-daemon qubox-host-agent qubox-client-cli qubox-signaling-server; do
+            [ -f "target/release/$bin" ] && cp "target/release/$bin" "dist/$bin" && echo "copied $bin"
+            [ -f "target/release/$bin.exe" ] && cp "target/release/$bin.exe" "dist/$bin.exe" && echo "copied $bin.exe"
+          done
+          if [ -d "apps/qubox-client-gui/src-tauri/target/release/bundle" ]; then
+            cp -r apps/qubox-client-gui/src-tauri/target/release/bundle/* dist/ 2>/dev/null || true
+          fi
+          find target/release -maxdepth 1 -name '*.deb' -exec cp {} dist/ \; 2>/dev/null || true
+          find target/release -maxdepth 1 -name '*.rpm' -exec cp {} dist/ \; 2>/dev/null || true
+
+      - name: Generate SHA256SUMS
+        working-directory: dist
+        run: sha256sum * > SHA256SUMS
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: dist/
+          retention-days: 5
+
+  sbom:
+    needs: [build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve-ref.outputs.ref }}
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            . -> target
+
+      - name: Install cargo-cyclonedx
+        run: cargo install cargo-cyclonedx
+
+      - name: Generate CycloneDX SBOM
+        run: cargo cyclonedx --override-filename-suffix .cdx.json
+
+      - name: Upload SBOM
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom
+          path: "*.cdx.json"
+          retention-days: 5
+
+  release:
+    needs: [build, sbom]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.resolve-ref.outputs.tag }}
+          name: "Qubox ${{ needs.resolve-ref.outputs.tag }}"
+          body_path: .github/release-template.md
+          files: |
+            artifacts/release-linux/*
+            artifacts/release-macos/*
+            artifacts/release-windows/*
+            artifacts/sbom/*
+          generate_release_notes: true
+          fail_on_unmatched_files: false

@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Qubox
+Comment=Qubox background daemon — remote gaming/streaming
+Exec=qubox-daemon
+Icon=qubox
+Terminal=false
+Categories=Network;RemoteAccess;Game;
+StartupNotify=false

@@ -1,0 +1,14 @@
+[package]
+name = "qubox-clipboard"
+edition.workspace = true
+version.workspace = true
+
+[dependencies]
+arboard.workspace = true
+qubox-proto = { path = "../qubox-proto" }
+blake3.workspace = true
+png.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "time", "sync"] }
+tracing.workspace = true

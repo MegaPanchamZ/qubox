@@ -1,0 +1,49 @@
+# CODEOWNERS
+# Each line is a file pattern followed by one or more owners.
+# Order matters: later patterns take precedence. The last matching
+# pattern wins. See https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+
+# Default owner for everything unless overridden below.
+/.github/                @qubox/maintainers
+/docs/                   @qubox/maintainers
+LICENSE                  @qubox/maintainers
+NOTICE                   @qubox/maintainers
+README.md                @qubox/maintainers
+SECURITY.md              @qubox/maintainers
+CONTRIBUTING.md          @qubox/maintainers
+CODE_OF_CONDUCT.md       @qubox/maintainers
+
+# Transport / QUIC stack
+/crates/qubox-transport/  @qubox/transport-reviewers
+/crates/qubox-proto/      @qubox/transport-reviewers
+/apps/qubox-signaling-server/  @qubox/transport-reviewers
+
+# Capture / display
+/crates/qubox-display/   @qubox/capture-reviewers
+/apps/qubox-host-agent/  @qubox/capture-reviewers
+/crates/qubox-media/     @qubox/capture-reviewers
+
+# Audio / pen / clipboard
+/crates/qubox-mic/       @qubox/media-reviewers
+/crates/qubox-pen/       @qubox/media-reviewers
+/crates/qubox-clipboard/ @qubox/media-reviewers
+
+# Daemon / IPC / packaging
+/apps/qubox-daemon/      @qubox/daemon-reviewers
+/dist/                   @qubox/daemon-reviewers
+
+# Clients
+/apps/qubox-client-cli/  @qubox/client-reviewers
+/apps/qubox-client-gui/  @qubox/client-reviewers
+
+# Identity
+/crates/qubox-identity/  @qubox/security-reviewers
+
+# Platform helpers
+/crates/qubox-platform/  @qubox/maintainers
+
+# Operations / infra
+/ops/                    @qubox/infra-reviewers
+
+# CI
+/.github/workflows/       @qubox/infra-reviewers

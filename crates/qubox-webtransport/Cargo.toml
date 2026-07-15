@@ -1,0 +1,17 @@
+[package]
+name = "qubox-webtransport"
+edition.workspace = true
+version.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+hex.workspace = true
+qubox-proto = { path = "../qubox-proto" }
+rcgen.workspace = true
+sha2.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+wtransport = "0.7"
+
+[dev-dependencies]
+x509-parser = "0.16"

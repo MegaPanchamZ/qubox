@@ -1,0 +1,79 @@
+# Build artifacts
+/target/
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS metadata
+.DS_Store
+Thumbs.db
+
+# Local development state — never commit
+/.local/
+/.local.bak/
+/.local.bak/**
+/.local.bak/**
+
+# Local identity files (contain UUIDs that should not be public)
+/.local/aws/
+/.local/client-id.json
+/.local/host-id.json
+/.local/pairings.json
+/.local/session.h264
+/.local/vm-lab/
+/.local/e2e/
+/.local/e2e/**
+
+# TUF signing keys — never commit
+/ops/tuf/keys/
+/ops/tuf/keys/**
+
+# Python (used in some ops scripts)
+/__pycache__/
+*.pyc
+.venv/
+
+# Environment files — never commit
+.env
+.env.local
+.env.*.local
+
+# Secrets & credentials
+*.pem
+*.key
+*.p12
+*.kubeconfig
+credentials.json
+credentials-*.json
+*.sig
+*.asc
+
+# Build outputs from subprojects
+apps/qubox-client-gui/dist/
+apps/qubox-client-gui/node_modules/
+apps/qubox-daemon/dist/qubox-*
+
+# Pre-built release artifacts (built by release.yml per tag)
+dist/windows-x86_64/*.exe
+dist/windows-x86_64/*.msi
+
+# OS-specific temporary
+*.tmp
+*.bak
+*.log.gz
+
+# Vagrant per-VM state (regenerated on `vagrant up`)
+scratch/.vagrant/
+**/.vagrant/
+
+# Cargo lock for libraries — workspace keeps one
+# (Cargo.lock is intentionally committed at the workspace root)
+
+# Generated coverage / docs
+*.lcov
+/coverage/
+/docs/_build/

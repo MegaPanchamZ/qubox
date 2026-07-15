@@ -1,0 +1,16 @@
+[package]
+name = "qubox-media"
+edition.workspace = true
+version.workspace = true
+
+[dependencies]
+qubox-display = { path = "../qubox-display" }
+qubox-proto = { path = "../qubox-proto" }
+serde.workspace = true
+qubox-rl-policy = { path = "../qubox-rl-policy", optional = true }
+
+[dev-dependencies]
+serial_test = "3"
+
+[features]
+rl-abr = ["qubox-rl-policy"]

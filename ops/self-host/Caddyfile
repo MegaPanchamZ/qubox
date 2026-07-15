@@ -1,0 +1,8 @@
+# TLS front for self-host signaling (profile "tls").
+# Replace {$QUBOX_DOMAIN} with your hostname (or set env for Caddy).
+#
+#   QUBOX_DOMAIN=rd.example.com docker compose --profile tls up -d
+
+{$QUBOX_DOMAIN:localhost} {
+	reverse_proxy signaling:7000
+}

@@ -1,0 +1,139 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+qubox.wxs — WiX 4.x installer for Qubox Daemon
+
+Build:
+  wix build -arch x64 qubox.wxs -out QuboxDaemon-0.1.0-x64.msi
+
+Requires WiX Toolset v4+ (https://wixtoolset.org).
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+
+  <Product Name="Qubox Daemon"
+           Version="0.1.0"
+           Manufacturer="Qubox"
+           UpgradeCode="12345678-1234-1234-1234-123456789abc"
+           Language="1033"
+           Codepage="1252">
+
+    <Package InstallerVersion="500"
+             Compressed="yes"
+             InstallScope="perMachine"
+             Platform="x64"
+             Manufacturer="Qubox"
+             Description="Qubox background daemon — remote gaming/streaming"
+             Comments="This installer registers the QuboxDaemon Windows service."
+             SummaryCodepage="1252" />
+
+    <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
+
+    <!-- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ -->
+    <!-- Directory structure                            -->
+    <!-- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ -->
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="CompanyFolder" Name="Qubox">
+        <Directory Id="InstallFolder" Name="daemon">
+          <Component Id="DaemonFiles" Guid="22345678-1234-1234-1234-123456789abc"
+                     Bitness="always64">
+            <File Id="DaemonExe" Name="qubox-daemon.exe"
+                  Source="$(var.ReleaseDir)\qubox-daemon.exe"
+                  KeyPath="yes" />
+            <Environment Id="PathEnv"
+                         Name="PATH"
+                         Value="[InstallFolder]"
+                         Permanent="no"
+                         Part="last"
+                         Action="set"
+                         System="yes" />
+          </Component>
+        </Directory>
+      </Directory>
+    </StandardDirectory>
+
+    <StandardDirectory Id="ProgramDataFolder">
+      <Directory Id="AppDataCompany" Name="Qubox">
+        <Directory Id="AppDataDaemon" Name="daemon">
+          <Component Id="DataDirectory" Guid="32345678-1234-1234-1234-123456789abc"
+                     Bitness="always64">
+            <CreateFolder Directory="AppDataDaemon" />
+          </Component>
+        </Directory>
+      </Directory>
+    </StandardDirectory>
+
+    <!-- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ -->
+    <!-- Service registration                          -->
+    <!-- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ -->
+    <Component Id="ServiceComponent" Guid="42345678-1234-1234-1234-123456789abc"
+               Bitness="always64"
+               Directory="InstallFolder">
+      <File Id="ServiceExe" Name="qubox-daemon.exe"
+            Source="$(var.ReleaseDir)\qubox-daemon.exe"
+            KeyPath="yes" />
+      <ServiceInstall Id="QuboxServiceInstaller"
+                      Name="QuboxDaemon"
+                      DisplayName="Qubox Daemon"
+                      Description="Background service for Qubox remote gaming/streaming — pairing, signaling, auto-update."
+                      Start="auto"
+                      Type="ownProcess"
+                      ErrorControl="normal"
+                      Vital="yes"
+                      Account="NT AUTHORITY\LocalService"
+                      Interactive="no">
+        <ServiceDependency Id="Tcpip" />
+        <ServiceDependency Id="Dhcp" />
+      </ServiceInstall>
+      <ServiceControl Id="QuboxServiceControl"
+                      Name="QuboxDaemon"
+                      Start="install"
+                      Stop="both"
+                      Remove="uninstall"
+                      Wait="yes" />
+    </Component>
+
+    <!-- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ -->
+    <!-- Uninstall cleanup                             -->
+    <!-- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ -->
+    <Component Id="UninstallCleanup" Guid="52345678-1234-1234-1234-123456789abc"
+               Bitness="always64"
+               Directory="InstallFolder">
+      <!-- Remove data directory on uninstall -->
+      <RemoveFolder Id="RemoveAppDataDaemon" On="uninstall"
+                    Directory="AppDataDaemon" />
+      <RemoveFolder Id="RemoveAppDataCompany" On="uninstall"
+                    Directory="AppDataCompany" />
+      <RemoveFolder Id="RemoveCompanyFolder" On="uninstall"
+                    Directory="CompanyFolder" />
+      <RemoveFile Id="RemoveLogs" On="both"
+                  Directory="InstallFolder"
+                  Name="*.log" />
+    </Component>
+
+    <!-- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ -->
+    <!-- Feature tree                                  -->
+    <!-- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ -->
+    <Feature Id="DaemonFeature"
+             Title="Qubox Daemon"
+             Description="Installs the Qubox background daemon and registers it as a Windows service."
+             Level="1"
+             ConfigurableDirectory="InstallFolder">
+      <ComponentRef Id="DaemonFiles" />
+      <ComponentRef Id="DataDirectory" />
+      <ComponentRef Id="ServiceComponent" />
+      <ComponentRef Id="UninstallCleanup" />
+    </Feature>
+
+    <!-- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ -->
+    <!-- UI (minimal — silent install is primary path) -->
+    <!-- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ -->
+    <UI Id="QuboxUI">
+      <UIRef Id="WixUI_Minimal" />
+    </UI>
+
+    <Property Id="WIXUI_INSTALLDIR" Value="InstallFolder" />
+
+    <!-- Allow users to set RELEASEDIR via msiexec -->
+    <WixVariable Id="ReleaseDir" Value="..\..\target\release" />
+
+  </Product>
+</Wix>
