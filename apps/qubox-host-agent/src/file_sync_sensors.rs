@@ -79,7 +79,10 @@ async fn process_lock_loop(socket: PathBuf, rules: Arc<Vec<SyncRule>>) -> anyhow
             }
         };
 
-        let tracked = match client.call::<IpcResponse>(&IpcRequest::SyncListTrackedFiles).await {
+        let tracked = match client
+            .call::<IpcResponse>(&IpcRequest::SyncListTrackedFiles)
+            .await
+        {
             Ok(IpcResponse::SyncTrackedFiles { files }) => files,
             Ok(_) | Err(_) => {
                 tokio::time::sleep(PROCESS_POLL).await;

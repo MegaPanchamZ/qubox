@@ -44,7 +44,9 @@ pub fn probe() -> HwProbeReport {
             (&NVIDIA_PRE_ADA_CODECS, nvenc_then_sw_h264())
         }
         (GpuVendor::Nvidia, _) => (&NVIDIA_CODECS, nvenc_then_sw()),
-        (GpuVendor::Intel, GpuGeneration::IntelArc) => (&INTEL_ARC_CODECS, qsv_then_vaapi_then_sw()),
+        (GpuVendor::Intel, GpuGeneration::IntelArc) => {
+            (&INTEL_ARC_CODECS, qsv_then_vaapi_then_sw())
+        }
         (GpuVendor::Intel, _) => (&INTEL_IGPU_CODECS, qsv_then_vaapi_then_sw()),
         (GpuVendor::Apple, _) => (&APPLE_VIDEO_TOOLBOX_CODECS, vt_then_sw()),
         (GpuVendor::Amd, GpuGeneration::AmdRdna3 | GpuGeneration::AmdRdna4) => {
@@ -118,11 +120,7 @@ fn detect_generation(vendor: GpuVendor) -> GpuGeneration {
                 .output();
             if let Ok(o) = out {
                 let cap = String::from_utf8_lossy(&o.stdout).trim().to_string();
-                return match cap
-                    .split('.')
-                    .next()
-                    .and_then(|s| s.parse::<u32>().ok())
-                {
+                return match cap.split('.').next().and_then(|s| s.parse::<u32>().ok()) {
                     Some(8) => GpuGeneration::NvidiaPreAda,
                     Some(9) => GpuGeneration::NvidiaBlackwell,
                     _ => GpuGeneration::NvidiaAda,
@@ -213,7 +211,10 @@ mod tests {
                 "av1_nvenc".to_string()
             ]
         ));
-        assert!(!backend_available(EncoderBackend::Nvenc, &["libx264".to_string()]));
+        assert!(!backend_available(
+            EncoderBackend::Nvenc,
+            &["libx264".to_string()]
+        ));
     }
 
     #[test]

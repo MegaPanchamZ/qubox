@@ -33,12 +33,7 @@ pub fn pack_st2086(
     buf
 }
 
-pub fn unpack_st2086(buf: &[u8; 24]) -> Option<(
-    [(u16, u16); 3],
-    (u16, u16),
-    u32,
-    u32,
-)> {
+pub fn unpack_st2086(buf: &[u8; 24]) -> Option<([(u16, u16); 3], (u16, u16), u32, u32)> {
     let rx = u16::from_be_bytes([buf[0], buf[1]]);
     let ry = u16::from_be_bytes([buf[2], buf[3]]);
     let gx = u16::from_be_bytes([buf[4], buf[5]]);
@@ -50,12 +45,7 @@ pub fn unpack_st2086(buf: &[u8; 24]) -> Option<(
     let max_lum = u32::from_be_bytes([buf[16], buf[17], buf[18], buf[19]]);
     let min_lum = u32::from_be_bytes([buf[20], buf[21], buf[22], buf[23]]);
 
-    Some((
-        [(rx, ry), (gx, gy), (bx, by)],
-        (wx, wy),
-        max_lum,
-        min_lum,
-    ))
+    Some(([(rx, ry), (gx, gy), (bx, by)], (wx, wy), max_lum, min_lum))
 }
 
 pub fn pack_clli(max_cll: u16, max_fall: u16) -> [u8; 4] {

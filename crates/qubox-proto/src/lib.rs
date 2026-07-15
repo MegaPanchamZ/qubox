@@ -7,7 +7,7 @@ pub mod pen;
 pub mod rkyv_wire;
 pub mod wire;
 
-pub use coalescer::{COALESCE_MAX_EVENTS, DEFAULT_COALESCE_WINDOW, FlushReason, InputCoalescer};
+pub use coalescer::{FlushReason, InputCoalescer, COALESCE_MAX_EVENTS, DEFAULT_COALESCE_WINDOW};
 pub use pen::{
     PenDeviceDescriptor, PenEventError, PenEventFlags, PenTool, WirePenEvent,
     PEN_DATAGRAM_DISCRIMINATOR, PEN_WIRE_HEADER_SIZE, PEN_WIRE_SIZE,
@@ -788,10 +788,7 @@ pub struct SignedHello {
 
 impl SignedHello {
     /// Sign a `PeerDescriptor` with an Ed25519 `SigningKey`.
-    pub fn sign(
-        descriptor: &PeerDescriptor,
-        signing_key: &ed25519_dalek::SigningKey,
-    ) -> Self {
+    pub fn sign(descriptor: &PeerDescriptor, signing_key: &ed25519_dalek::SigningKey) -> Self {
         use ed25519_dalek::Signer;
         let body = serde_json::to_vec(descriptor).expect("PeerDescriptor is serializable");
         let mut signed = Vec::with_capacity(SIGNED_HELLO_CONTEXT.len() + body.len());
@@ -824,7 +821,8 @@ impl SignedHello {
         let mut signed = Vec::with_capacity(SIGNED_HELLO_CONTEXT.len() + body.len());
         signed.extend_from_slice(SIGNED_HELLO_CONTEXT);
         signed.extend_from_slice(&body);
-        vk.verify(&signed, &Signature::from_bytes(&sig_bytes)).is_ok()
+        vk.verify(&signed, &Signature::from_bytes(&sig_bytes))
+            .is_ok()
     }
 }
 
@@ -850,7 +848,10 @@ pub struct AudioStreamParams {
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[cfg_attr(feature = "wire-rkyv-v2", derive(rkyv::Archive, rkyv::Serialize, rkyv::Deserialize))]
+#[cfg_attr(
+    feature = "wire-rkyv-v2",
+    derive(rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)
+)]
 #[cfg_attr(feature = "wire-rkyv-v2", rkyv(derive(Debug, PartialEq, Eq)))]
 #[serde(rename_all = "snake_case")]
 pub enum InputMouseButton {
@@ -1214,10 +1215,15 @@ pub enum ClientMessage {
 #[serde(tag = "type", content = "payload", rename_all = "snake_case")]
 pub enum ServerMessage {
     Welcome(Welcome),
-    Hosts { hosts: Vec<PeerDescriptor> },
+    Hosts {
+        hosts: Vec<PeerDescriptor>,
+    },
     PairingRequested(PairingRequested),
     PairingEstablished(PairingGrant),
-    PairingRejected { request_id: Uuid, reason: String },
+    PairingRejected {
+        request_id: Uuid,
+        reason: String,
+    },
     SessionPlanned(SessionPlan),
     SessionRequested(SessionRequested),
     Signal(RelaySignal),
@@ -2010,7 +2016,10 @@ mod tests {
 
     #[test]
     fn wire_mouse_motion_size_is_twelve() {
-        assert_eq!(std::mem::size_of::<WireMouseMotion>(), WireMouseMotion::SIZE);
+        assert_eq!(
+            std::mem::size_of::<WireMouseMotion>(),
+            WireMouseMotion::SIZE
+        );
         assert_eq!(WireMouseMotion::SIZE, WIRE_MOUSE_MOTION_SIZE);
         assert_eq!(WIRE_MOUSE_MOTION_SIZE, 12);
     }

@@ -101,7 +101,9 @@ async fn main() -> anyhow::Result<()> {
             "TURN/STUN fleet loaded for ICE"
         );
     } else {
-        tracing::warn!("TURN not configured (set QUBOX_TURN_SECRET + QUBOX_TURN_URLS or QUBOX_TURN_REGIONS)");
+        tracing::warn!(
+            "TURN not configured (set QUBOX_TURN_SECRET + QUBOX_TURN_URLS or QUBOX_TURN_REGIONS)"
+        );
     }
 
     let mut state = SignalingState::with_options_and_secret_and_policy(

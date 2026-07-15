@@ -604,9 +604,8 @@ impl StateDb {
     pub fn get_global_ignores(&self) -> Result<Vec<String>> {
         match self.get_setting(SYNC_GLOBAL_IGNORES_KEY)? {
             Some(raw) => {
-                let v: Vec<String> = serde_json::from_str(&raw).unwrap_or_else(|_| {
-                    qubox_sync::default_ignore_globs()
-                });
+                let v: Vec<String> = serde_json::from_str(&raw)
+                    .unwrap_or_else(|_| qubox_sync::default_ignore_globs());
                 Ok(v)
             }
             None => {
@@ -774,7 +773,11 @@ mod tests {
         let g2 = db.get_global_ignores().unwrap();
         assert!(g2.iter().any(|x| x == "*.rom"));
         db.remove_global_ignore("*.rom").unwrap();
-        assert!(!db.get_global_ignores().unwrap().iter().any(|x| x == "*.rom"));
+        assert!(!db
+            .get_global_ignores()
+            .unwrap()
+            .iter()
+            .any(|x| x == "*.rom"));
         let after = db.apply_ignore_preset("emulator-saves").unwrap();
         assert!(after.iter().any(|x| x == "*.gba"));
     }

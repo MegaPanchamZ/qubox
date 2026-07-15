@@ -198,8 +198,8 @@ fn get_known_hosts() -> Result<Vec<KnownHost>, String> {
 #[tauri::command]
 async fn discover_lan_hosts() -> Result<Vec<DiscoveredHost>, String> {
     let cli = resolve_qubox_client_cli_path();
-    let server = std::env::var("QUBOX_SERVER")
-        .unwrap_or_else(|_| DEFAULT_SIGNALING_SERVER.to_string());
+    let server =
+        std::env::var("QUBOX_SERVER").unwrap_or_else(|_| DEFAULT_SIGNALING_SERVER.to_string());
 
     let mut command = Command::new(&cli);
     command
@@ -317,8 +317,8 @@ async fn start_session_subprocess(
     });
 
     let cli = resolve_qubox_client_cli_path();
-    let server = std::env::var("QUBOX_SERVER")
-        .unwrap_or_else(|_| DEFAULT_SIGNALING_SERVER.to_string());
+    let server =
+        std::env::var("QUBOX_SERVER").unwrap_or_else(|_| DEFAULT_SIGNALING_SERVER.to_string());
     let session_id = Uuid::new_v4().to_string();
 
     let mut command = Command::new(&cli);
@@ -521,17 +521,11 @@ async fn list_host_pending_pairings() -> Result<serde_json::Value, String> {
         .timeout(std::time::Duration::from_secs(2))
         .send()
         .await
-        .map_err(|e| {
-            format!(
-                "host pairing UI unreachable ({e}). Is qubox-host-agent running?"
-            )
-        })?;
+        .map_err(|e| format!("host pairing UI unreachable ({e}). Is qubox-host-agent running?"))?;
     if !res.status().is_success() {
         return Err(format!("host pairing UI HTTP {}", res.status()));
     }
-    res.json()
-        .await
-        .map_err(|e| format!("parse pending: {e}"))
+    res.json().await.map_err(|e| format!("parse pending: {e}"))
 }
 
 /// Approve/reject a host-side pairing request (sends PairingDecision on signaling).
@@ -603,8 +597,7 @@ fn kick_session(session_id: String, reason: Option<String>) -> Result<(), String
 async fn get_settings() -> Result<Settings, String> {
     let mut settings = Settings {
         signaling_server: Some(
-            std::env::var("QUBOX_SERVER")
-                .unwrap_or_else(|_| DEFAULT_SIGNALING_SERVER.to_string()),
+            std::env::var("QUBOX_SERVER").unwrap_or_else(|_| DEFAULT_SIGNALING_SERVER.to_string()),
         ),
         auto_approve_pairing: false,
         bitrate_kbps: Some(20_000),
@@ -616,16 +609,14 @@ async fn get_settings() -> Result<Settings, String> {
     };
 
     if let Ok(mut client) = connect_daemon().await {
-        if let Ok(IpcResponse::SettingsMap { entries }) = client
-            .call::<IpcResponse>(&IpcRequest::ListSettings)
-            .await
+        if let Ok(IpcResponse::SettingsMap { entries }) =
+            client.call::<IpcResponse>(&IpcRequest::ListSettings).await
         {
             for (k, v) in entries {
                 match k.as_str() {
                     "signaling_server" => settings.signaling_server = Some(v),
                     "auto_approve_pairing" => {
-                        settings.auto_approve_pairing =
-                            v == "1" || v.eq_ignore_ascii_case("true")
+                        settings.auto_approve_pairing = v == "1" || v.eq_ignore_ascii_case("true")
                     }
                     "bitrate_kbps" => settings.bitrate_kbps = v.parse().ok(),
                     "fps_cap" => settings.fps_cap = v.parse().ok(),
@@ -720,8 +711,8 @@ async fn cloud_enroll(
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(|s| s.to_string());
-    let (identity, _) = load_or_create_identity(None, name.clone())
-        .map_err(|e| format!("identity: {e}"))?;
+    let (identity, _) =
+        load_or_create_identity(None, name.clone()).map_err(|e| format!("identity: {e}"))?;
     let display = name.unwrap_or_else(|| identity.display_name.clone());
     let base = accounts_url
         .as_deref()
@@ -791,9 +782,7 @@ async fn sync_drain_ready() -> Result<Vec<serde_json::Value>, String> {
 #[tauri::command]
 async fn start_host_agent(server: Option<String>) -> Result<(), String> {
     let mut client = connect_daemon().await?;
-    let socket = default_daemon_socket_path()
-        .to_string_lossy()
-        .into_owned();
+    let socket = default_daemon_socket_path().to_string_lossy().into_owned();
     // Load privacy prefs from daemon settings (Host mode GUI).
     let privacy_mode = match client
         .call::<IpcResponse>(&IpcRequest::GetSetting {
@@ -1275,10 +1264,8 @@ pub fn run() {
             let host_stop =
                 MenuItem::with_id(app, "host_stop", "Stop host agent", true, None::<&str>)?;
             let quit_i = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-            let menu = Menu::with_items(
-                app,
-                &[&show_i, &hosts_i, &host_start, &host_stop, &quit_i],
-            )?;
+            let menu =
+                Menu::with_items(app, &[&show_i, &hosts_i, &host_start, &host_stop, &quit_i])?;
 
             let _tray = TrayIconBuilder::new()
                 .icon(app.default_window_icon().cloned().unwrap_or_else(|| {
@@ -1297,14 +1284,20 @@ pub fn run() {
                         let app = app.clone();
                         tauri::async_runtime::spawn(async move {
                             let _ = start_host_agent(None).await;
-                            let _ = app.emit("daemon://state-changed", serde_json::json!({"host":"starting"}));
+                            let _ = app.emit(
+                                "daemon://state-changed",
+                                serde_json::json!({"host":"starting"}),
+                            );
                         });
                     }
                     "host_stop" => {
                         let app = app.clone();
                         tauri::async_runtime::spawn(async move {
                             let _ = stop_host_agent().await;
-                            let _ = app.emit("daemon://state-changed", serde_json::json!({"host":"stopped"}));
+                            let _ = app.emit(
+                                "daemon://state-changed",
+                                serde_json::json!({"host":"stopped"}),
+                            );
                         });
                     }
                     "quit" => {

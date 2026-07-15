@@ -202,10 +202,7 @@ mod tests {
             hdr_requested: true,
             screen_content_likely: false,
         };
-        assert_eq!(
-            choose_codec(&APPLE_VIDEO_TOOLBOX_CODECS, req),
-            Codec::Hevc
-        );
+        assert_eq!(choose_codec(&APPLE_VIDEO_TOOLBOX_CODECS, req), Codec::Hevc);
     }
 
     #[test]
@@ -253,10 +250,7 @@ mod tests {
             hdr_requested: false,
             screen_content_likely: false,
         };
-        assert_eq!(
-            choose_codec(&NVIDIA_PRE_ADA_CODECS, req),
-            Codec::Hevc
-        );
+        assert_eq!(choose_codec(&NVIDIA_PRE_ADA_CODECS, req), Codec::Hevc);
     }
 
     #[test]
@@ -268,10 +262,7 @@ mod tests {
             hdr_requested: false,
             screen_content_likely: false,
         };
-        assert_eq!(
-            choose_codec(&NVIDIA_PRE_ADA_CODECS, req),
-            Codec::Hevc
-        );
+        assert_eq!(choose_codec(&NVIDIA_PRE_ADA_CODECS, req), Codec::Hevc);
     }
 
     #[test]
@@ -316,10 +307,7 @@ mod tests {
             hdr_requested: true,
             screen_content_likely: false,
         };
-        assert_eq!(
-            choose_codec(&APPLE_VIDEO_TOOLBOX_CODECS, req),
-            Codec::Hevc
-        );
+        assert_eq!(choose_codec(&APPLE_VIDEO_TOOLBOX_CODECS, req), Codec::Hevc);
     }
 
     #[test]

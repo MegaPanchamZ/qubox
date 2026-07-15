@@ -102,7 +102,11 @@ impl ContentClassifier {
 
         // Color cardinality estimation from grayscale variance
         let mut quantized_colors = [false; 256];
-        for &p in gray_pixels.iter().take(expected).step_by(DOWNSAMPLE_FACTOR as usize) {
+        for &p in gray_pixels
+            .iter()
+            .take(expected)
+            .step_by(DOWNSAMPLE_FACTOR as usize)
+        {
             let q = (p >> 4) as usize; // 16-bin quantization
             quantized_colors[q] = true;
         }
@@ -240,13 +244,13 @@ mod tests {
         assert_eq!(result, ContentClass::Natural);
     }
 
-#[test]
-fn classifier_detects_checkerboard_as_screen() {
-    let classifier = ContentClassifier::new(1920, 1080);
-    let gray = make_checkerboard(1920, 1080, 32);
-    let result = classifier.classify_from_grayscale(&gray);
-    assert_eq!(result, ContentClass::ScreenContent);
-}
+    #[test]
+    fn classifier_detects_checkerboard_as_screen() {
+        let classifier = ContentClassifier::new(1920, 1080);
+        let gray = make_checkerboard(1920, 1080, 32);
+        let result = classifier.classify_from_grayscale(&gray);
+        assert_eq!(result, ContentClass::ScreenContent);
+    }
 
     #[test]
     fn aggressive_mode_lowers_thresholds() {

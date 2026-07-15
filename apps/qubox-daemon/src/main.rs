@@ -119,17 +119,11 @@ enum SyncAction {
         patterns: Vec<String>,
     },
     /// Add one never-track pattern (glob or path segment, e.g. `.git`, `*.rom`).
-    AddIgnore {
-        pattern: String,
-    },
+    AddIgnore { pattern: String },
     /// Remove one never-track pattern.
-    RemoveIgnore {
-        pattern: String,
-    },
+    RemoveIgnore { pattern: String },
     /// Merge a named preset: default|git|emulator-saves|dev.
-    ApplyPreset {
-        name: String,
-    },
+    ApplyPreset { name: String },
     /// List sync rules.
     ListRules,
     /// Add a watch rule.
@@ -146,9 +140,7 @@ enum SyncAction {
         max_bytes: u64,
     },
     /// Remove a rule by id.
-    RemoveRule {
-        rule_id: String,
-    },
+    RemoveRule { rule_id: String },
     /// Enable/disable a rule.
     SetEnabled {
         rule_id: String,
@@ -353,53 +345,51 @@ async fn main() -> anyhow::Result<()> {
 async fn run_sync_action(client: &mut IpcClient, action: SyncAction) -> anyhow::Result<()> {
     use qubox_sync::{ConflictResolution, SyncRule};
 
-    let print_resp = |resp: IpcResponse| {
-        match resp {
-            IpcResponse::SyncIgnores { patterns } => {
-                if patterns.is_empty() {
-                    println!("(no ignore patterns)");
-                } else {
-                    for p in patterns {
-                        println!("{p}");
-                    }
+    let print_resp = |resp: IpcResponse| match resp {
+        IpcResponse::SyncIgnores { patterns } => {
+            if patterns.is_empty() {
+                println!("(no ignore patterns)");
+            } else {
+                for p in patterns {
+                    println!("{p}");
                 }
             }
-            IpcResponse::SyncRules { rules } => {
-                for r in rules {
-                    println!(
-                        "{} enabled={} paths={:?} processes={:?} peers={:?} ignore={:?}",
-                        r.rule_id, r.enabled, r.paths, r.process_names, r.peer_ids, r.ignore_globs
-                    );
-                }
+        }
+        IpcResponse::SyncRules { rules } => {
+            for r in rules {
+                println!(
+                    "{} enabled={} paths={:?} processes={:?} peers={:?} ignore={:?}",
+                    r.rule_id, r.enabled, r.paths, r.process_names, r.peer_ids, r.ignore_globs
+                );
             }
-            IpcResponse::SyncJobs { jobs } => {
-                for j in jobs {
-                    println!(
-                        "{} file={} peer={} status={:?} retries={}",
-                        j.job_id, j.file_id, j.target_peer, j.status, j.retry_count
-                    );
-                }
+        }
+        IpcResponse::SyncJobs { jobs } => {
+            for j in jobs {
+                println!(
+                    "{} file={} peer={} status={:?} retries={}",
+                    j.job_id, j.file_id, j.target_peer, j.status, j.retry_count
+                );
             }
-            IpcResponse::SyncConflicts { conflicts } => {
-                for c in conflicts {
-                    println!(
-                        "{} file={} local={} remote={} peer={}",
-                        c.conflict_id, c.file_id, c.local_path, c.remote_path, c.peer_id
-                    );
-                }
+        }
+        IpcResponse::SyncConflicts { conflicts } => {
+            for c in conflicts {
+                println!(
+                    "{} file={} local={} remote={} peer={}",
+                    c.conflict_id, c.file_id, c.local_path, c.remote_path, c.peer_id
+                );
             }
-            IpcResponse::SyncJob { job } => {
-                println!("queued job {} for file {}", job.job_id, job.file_id);
-            }
-            IpcResponse::Unit => println!("ok"),
-            IpcResponse::Error { code, message } => {
-                eprintln!("error {code}: {message}");
-                std::process::exit(1);
-            }
-            other => {
-                eprintln!("unexpected: {other:?}");
-                std::process::exit(1);
-            }
+        }
+        IpcResponse::SyncJob { job } => {
+            println!("queued job {} for file {}", job.job_id, job.file_id);
+        }
+        IpcResponse::Unit => println!("ok"),
+        IpcResponse::Error { code, message } => {
+            eprintln!("error {code}: {message}");
+            std::process::exit(1);
+        }
+        other => {
+            eprintln!("unexpected: {other:?}");
+            std::process::exit(1);
         }
     };
 
@@ -443,9 +433,7 @@ async fn run_sync_action(client: &mut IpcClient, action: SyncAction) -> anyhow::
             client.call(&IpcRequest::SyncAddRule { rule }).await?
         }
         SyncAction::RemoveRule { rule_id } => {
-            client
-                .call(&IpcRequest::SyncRemoveRule { rule_id })
-                .await?
+            client.call(&IpcRequest::SyncRemoveRule { rule_id }).await?
         }
         SyncAction::SetEnabled { rule_id, enabled } => {
             client

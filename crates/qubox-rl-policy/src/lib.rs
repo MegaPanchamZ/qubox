@@ -29,7 +29,9 @@ pub struct PolicyServer {
 }
 
 impl PolicyServer {
-    pub async fn spawn(checkpoint_path: &std::path::Path) -> std::io::Result<(Self, tokio::task::JoinHandle<std::io::Result<()>>)> {
+    pub async fn spawn(
+        checkpoint_path: &std::path::Path,
+    ) -> std::io::Result<(Self, tokio::task::JoinHandle<std::io::Result<()>>)> {
         let listener = TcpListener::bind("127.0.0.1:0").await?;
         let bound_port = listener.local_addr()?.port();
         let model = PolicyModel::load(checkpoint_path)?;

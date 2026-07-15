@@ -34,8 +34,8 @@ impl WebTransportServer {
             .with_identity(self.config.identity.clone_identity())
             .build();
 
-        let endpoint = Endpoint::server(wt_config)
-            .context("failed to create wtransport endpoint")?;
+        let endpoint =
+            Endpoint::server(wt_config).context("failed to create wtransport endpoint")?;
 
         tracing::info!(
             addr = %self.config.listen_addr,

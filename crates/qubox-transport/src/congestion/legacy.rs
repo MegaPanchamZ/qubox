@@ -58,8 +58,7 @@ impl RateController for LegacyGccRateController {
         let gradient = self.owd_ewma_ms - self.prev_owd_ewma_ms;
 
         if loss_x1000 > 20 {
-            self.target_bitrate_bps =
-                ((self.target_bitrate_bps as f64) * 0.85) as u32;
+            self.target_bitrate_bps = ((self.target_bitrate_bps as f64) * 0.85) as u32;
         } else if gradient > 5.0 {
             let decrease = ((self.target_bitrate_bps as f64) * 0.90) as u32;
             self.target_bitrate_bps = decrease.max(self.cfg.min_bitrate_bps);
@@ -112,7 +111,8 @@ mod tests {
     fn legacy_gcc_reduces_on_loss() {
         let mut c = mk();
         let baseline = c.on_observation(10.0, 0, Duration::from_millis(20), 1500, Instant::now());
-        let after_loss = c.on_observation(15.0, 50, Duration::from_millis(25), 1500, Instant::now());
+        let after_loss =
+            c.on_observation(15.0, 50, Duration::from_millis(25), 1500, Instant::now());
         assert!(after_loss < baseline, "GCC should reduce bitrate on loss");
     }
 }

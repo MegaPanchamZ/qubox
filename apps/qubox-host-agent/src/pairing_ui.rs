@@ -53,10 +53,7 @@ impl PairingUiState {
                 .map(|d| d.as_millis() as u64)
                 .unwrap_or(0),
         };
-        self.pending
-            .lock()
-            .await
-            .insert(request.request_id, view);
+        self.pending.lock().await.insert(request.request_id, view);
     }
 
     pub async fn remove(&self, request_id: Uuid) {
@@ -87,10 +84,7 @@ async fn decide(
 }
 
 /// Bind loopback control server. Returns the bound port.
-pub async fn spawn_pairing_ui(
-    state: PairingUiState,
-    preferred_port: u16,
-) -> anyhow::Result<u16> {
+pub async fn spawn_pairing_ui(state: PairingUiState, preferred_port: u16) -> anyhow::Result<u16> {
     let app = Router::new()
         .route("/pending", get(list_pending))
         .route("/decide", post(decide))
@@ -120,4 +114,3 @@ pub async fn spawn_pairing_ui(
     }
     Ok(port)
 }
-

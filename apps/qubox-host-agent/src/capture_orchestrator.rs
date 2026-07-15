@@ -208,7 +208,6 @@ impl CaptureOrchestrator {
         let _ = self.hover_display_tx.send(event);
     }
 
-
     /// Build platform-appropriate FFmpeg capture+encode argv for one display.
     fn build_platform_ffmpeg_args(
         display_info: &DisplayInfo,
@@ -234,10 +233,7 @@ impl CaptureOrchestrator {
                 "-f".to_string(),
                 "lavfi".to_string(),
                 "-i".to_string(),
-                format!(
-                    "ddagrab=output_idx={}:framerate={}",
-                    display_info.id.0, fps
-                ),
+                format!("ddagrab=output_idx={}:framerate={}", display_info.id.0, fps),
             ]);
         }
 
@@ -246,8 +242,8 @@ impl CaptureOrchestrator {
             let wayland = std::env::var("XDG_SESSION_TYPE").as_deref() == Ok("wayland")
                 && std::env::var_os("WAYLAND_DISPLAY").is_some();
             if wayland {
-                let node = std::env::var("QUBOX_PIPEWIRE_NODE")
-                    .unwrap_or_else(|_| "default".to_string());
+                let node =
+                    std::env::var("QUBOX_PIPEWIRE_NODE").unwrap_or_else(|_| "default".to_string());
                 args.extend([
                     "-f".to_string(),
                     "pipewire".to_string(),
@@ -400,7 +396,7 @@ impl CaptureOrchestrator {
         let (args, out_w, out_h) =
             Self::build_platform_ffmpeg_args(&display_info, &config, &self.x11_display);
 
-                let plan = qubox_media::FfmpegPipelinePlan {
+        let plan = qubox_media::FfmpegPipelinePlan {
             program: "ffmpeg".to_string(),
             args,
             output: qubox_media::EncodedOutput::H264AnnexBStdout,
@@ -640,8 +636,7 @@ mod tests {
             return Ok(());
         }
 
-        let client_credential =
-            SessionCredential::new_legacy_token(unix_millis_now() + 60_000);
+        let client_credential = SessionCredential::new_legacy_token(unix_millis_now() + 60_000);
         let session_id = uuid::Uuid::new_v4();
         let video_config = qubox_proto::VideoStreamParams {
             codec: qubox_proto::VideoCodec::H264,
@@ -769,8 +764,7 @@ mod tests {
             return Ok(());
         }
 
-        let client_credential =
-            SessionCredential::new_legacy_token(unix_millis_now() + 60_000);
+        let client_credential = SessionCredential::new_legacy_token(unix_millis_now() + 60_000);
         let session_id = uuid::Uuid::new_v4();
         let video_config = qubox_proto::VideoStreamParams {
             codec: qubox_proto::VideoCodec::H264,

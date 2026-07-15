@@ -81,8 +81,8 @@ pub fn policy_from_env() -> qubox_signaling::EnrollmentPolicy {
     if !require {
         return qubox_signaling::EnrollmentPolicy::Open;
     }
-    let accounts = std::env::var("QUBOX_ACCOUNTS_URL")
-        .unwrap_or_else(|_| "http://127.0.0.1:8080".into());
+    let accounts =
+        std::env::var("QUBOX_ACCOUNTS_URL").unwrap_or_else(|_| "http://127.0.0.1:8080".into());
     let token = std::env::var("QUBOX_ADMIN_TOKEN").unwrap_or_default();
     if token.is_empty() {
         tracing::error!(

@@ -44,16 +44,14 @@ async fn dxgi_backend_opens_session_and_yields_frame_or_soft() {
 #[test]
 fn dxgi_d3d11_init_or_skip() {
     match init_d3d11_device() {
-        Ok((device, _ctx)) => {
-            match create_duplication_interface(&device, 0) {
-                Ok(_dup) => {
-                    println!("DXGI DuplicateOutput OK");
-                }
-                Err(e) => {
-                    println!("skip: DuplicateOutput unavailable: {e}");
-                }
+        Ok((device, _ctx)) => match create_duplication_interface(&device, 0) {
+            Ok(_dup) => {
+                println!("DXGI DuplicateOutput OK");
             }
-        }
+            Err(e) => {
+                println!("skip: DuplicateOutput unavailable: {e}");
+            }
+        },
         Err(e) => {
             println!("skip: D3D11 unavailable: {e}");
         }

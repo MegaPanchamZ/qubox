@@ -31,7 +31,8 @@ use qubox_platform::describe_peer;
 use qubox_proto::{
     AudioCodec, AudioStreamParams, CaptureKind, ClientMessage, ControlMsg, InputMouseButton,
     PairingDecision, PeerRole, PlatformOs, RelaySignal, RemoteInputEvent, ServerMessage,
-    SessionPermissions, SessionRequested, SessionSignal, SignedHello, TransportKind, VideoCodec, VideoStreamParams,
+    SessionPermissions, SessionRequested, SessionSignal, SignedHello, TransportKind, VideoCodec,
+    VideoStreamParams,
 };
 use qubox_transport::{
     encode_ticket_b64, NativeQuicAudioSender, NativeQuicHost, NativeQuicInputReceiver,
@@ -66,11 +67,7 @@ use qubox_display::{
 
 #[derive(Debug, Parser)]
 struct Args {
-    #[arg(
-        long,
-        env = "QUBOX_SERVER",
-        default_value = "ws://127.0.0.1:7000/ws"
-    )]
+    #[arg(long, env = "QUBOX_SERVER", default_value = "ws://127.0.0.1:7000/ws")]
     server: String,
 
     #[arg(long)]
@@ -2466,7 +2463,9 @@ fn signaling_url_is_local(server: &str) -> bool {
     if let Ok(ip) = host.parse::<IpAddr>() {
         return match ip {
             IpAddr::V4(v4) => v4.is_loopback() || v4.is_private() || v4.is_link_local(),
-            IpAddr::V6(v6) => v6.is_loopback() || v6.is_unique_local() || v6.is_unicast_link_local(),
+            IpAddr::V6(v6) => {
+                v6.is_loopback() || v6.is_unique_local() || v6.is_unicast_link_local()
+            }
         };
     }
     false

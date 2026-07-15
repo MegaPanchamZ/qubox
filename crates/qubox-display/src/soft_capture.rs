@@ -6,9 +6,7 @@ use std::time::{Duration, Instant};
 
 use crate::error::CaptureError;
 use crate::traits::CaptureSession;
-use crate::types::{
-    CapturedFrame, ColorSpaceId, DisplayId, PixelFormat, Point, Rect, Size,
-};
+use crate::types::{CapturedFrame, ColorSpaceId, DisplayId, PixelFormat, Point, Rect, Size};
 
 pub struct SoftCaptureSession {
     display: DisplayId,

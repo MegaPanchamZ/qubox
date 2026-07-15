@@ -61,7 +61,10 @@ bitflags::bitflags! {
 /// Logical pen tool taxonomy. Mirrors the libinput / Wintab / NSToolbar
 /// tool classification (P2-15 §4.3).
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, Default)]
-#[cfg_attr(feature = "wire-rkyv-v2", derive(rkyv::Archive, rkyv::Serialize, rkyv::Deserialize))]
+#[cfg_attr(
+    feature = "wire-rkyv-v2",
+    derive(rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)
+)]
 #[cfg_attr(feature = "wire-rkyv-v2", rkyv(derive(Debug, PartialEq, Eq, Hash)))]
 #[serde(rename_all = "snake_case")]
 pub enum PenTool {

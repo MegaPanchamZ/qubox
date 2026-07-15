@@ -632,8 +632,9 @@ mod tests {
                     }
                 }
 
-                rs.reconstruct(&mut data, &mut parity)
-                    .unwrap_or_else(|_| panic!("reconstruct failed for drop pair ({}, {})", drop_i, drop_j));
+                rs.reconstruct(&mut data, &mut parity).unwrap_or_else(|_| {
+                    panic!("reconstruct failed for drop pair ({}, {})", drop_i, drop_j)
+                });
 
                 let reassembled: Vec<u8> = data
                     .iter()

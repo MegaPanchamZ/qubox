@@ -22,8 +22,8 @@ use qubox_identity::load_or_create_identity;
 use qubox_platform::describe_peer;
 use qubox_proto::{
     AudioStreamParams, ClientMessage, InputMouseButton, PeerDescriptor, PeerRole, RelaySignal,
-    RemoteInputEvent, ServerMessage, SessionPlan, SessionSignal, SignedHello,
-    StartSessionRequest, TransportKind, VideoCodec, VideoStreamParams,
+    RemoteInputEvent, ServerMessage, SessionPlan, SessionSignal, SignedHello, StartSessionRequest,
+    TransportKind, VideoCodec, VideoStreamParams,
 };
 use qubox_transport::{
     connect_to_native_quic, decode_ticket_b64, NativeQuicAudioReceiver, NativeQuicClientSession,

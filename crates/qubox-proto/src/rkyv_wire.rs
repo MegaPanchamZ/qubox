@@ -27,5 +27,8 @@ where
 #[cfg(feature = "wire-rkyv-v2")]
 pub fn wire_error(message: &'static str) -> CheckTypeError {
     use rkyv::rancor::Source;
-    CheckTypeError::new(std::io::Error::new(std::io::ErrorKind::InvalidData, message))
+    CheckTypeError::new(std::io::Error::new(
+        std::io::ErrorKind::InvalidData,
+        message,
+    ))
 }

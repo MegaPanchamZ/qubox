@@ -61,6 +61,9 @@ mod tests {
         let expected_smooth = 1.0 * ((4_000_000_f32).ln() - (1_000_000_f32).ln()).abs();
         let expected_latency = 0.10 * (20.0 - 16.67);
         let expected = expected_quality - expected_rebuf - expected_smooth - expected_latency;
-        assert!((r - expected).abs() < 1e-3, "reward = {r}, expected = {expected}");
+        assert!(
+            (r - expected).abs() < 1e-3,
+            "reward = {r}, expected = {expected}"
+        );
     }
 }

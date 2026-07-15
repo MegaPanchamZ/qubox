@@ -62,7 +62,9 @@ impl RateController for ScreamRateController {
 
         self.bytes_in_flight_5s = self.bytes_in_flight_5s.saturating_add(sent_bytes);
 
-        if self.last_observation.map_or(true, |t| now.saturating_duration_since(t).as_secs_f64() > 5.0) {
+        if self.last_observation.map_or(true, |t| {
+            now.saturating_duration_since(t).as_secs_f64() > 5.0
+        }) {
             self.bytes_in_flight_5s = 0;
         }
 
@@ -90,7 +92,8 @@ impl RateController for ScreamRateController {
         self.cwnd_bytes = self.cwnd_bytes.clamp(min_cwnd, max_cwnd.max(min_cwnd));
 
         let bps = ((self.cwnd_bytes as f64) / (srtt_ms / 1000.0)) * 8.0;
-        self.target_bitrate_bps = (bps as u32).clamp(self.cfg.min_bitrate_bps, self.cfg.max_bitrate_bps);
+        self.target_bitrate_bps =
+            (bps as u32).clamp(self.cfg.min_bitrate_bps, self.cfg.max_bitrate_bps);
 
         self.last_observation = Some(now);
         self.target_bitrate_bps
@@ -153,12 +156,24 @@ mod tests {
         let t0 = Instant::now();
         let mut pre_loss = 0;
         for i in 0..15 {
-            let bps = c.on_observation(20.0, 0, Duration::from_millis(40), 1500, t0 + Duration::from_millis(20 * i));
+            let bps = c.on_observation(
+                20.0,
+                0,
+                Duration::from_millis(40),
+                1500,
+                t0 + Duration::from_millis(20 * i),
+            );
             if i == 10 {
                 pre_loss = bps;
             }
         }
-        let post_loss = c.on_observation(30.0, 50, Duration::from_millis(40), 1500, t0 + Duration::from_millis(300));
+        let post_loss = c.on_observation(
+            30.0,
+            50,
+            Duration::from_millis(40),
+            1500,
+            t0 + Duration::from_millis(300),
+        );
         assert!(
             (post_loss as f64) <= (pre_loss as f64) * 0.75,
             "loss > 2% should cut cwnd: pre={pre_loss} post={post_loss}"
@@ -175,7 +190,13 @@ mod tests {
         let mut prev = u32::MAX;
         let mut decreased = false;
         for i in 0..30 {
-            let bps = c.on_observation(100.0, 0, Duration::from_millis(40), 1500, t0 + Duration::from_millis(20 * i));
+            let bps = c.on_observation(
+                100.0,
+                0,
+                Duration::from_millis(40),
+                1500,
+                t0 + Duration::from_millis(20 * i),
+            );
             if prev != u32::MAX && bps < prev {
                 decreased = true;
             }

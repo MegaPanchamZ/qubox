@@ -281,7 +281,10 @@ mod tests {
         for i in 0..5 {
             let now = now + Duration::from_millis(250 * (i + 1));
             let b = c.on_observation(30.0 + (i as f64) * 0.1, 0, Duration::from_millis(20), now);
-            assert!(b >= last, "fast-start should monotonically increase: last={last} b={b}");
+            assert!(
+                b >= last,
+                "fast-start should monotonically increase: last={last} b={b}"
+            );
             last = b;
         }
         assert!(c.current_bitrate_bps() >= 1_000_000);
@@ -300,7 +303,10 @@ mod tests {
             Duration::from_millis(20),
             now + Duration::from_millis(250),
         );
-        assert!(before > 1_000_000, "fast-start should have ramped up: {before}");
+        assert!(
+            before > 1_000_000,
+            "fast-start should have ramped up: {before}"
+        );
         // Third call: gradient +20ms → Overuse, exit fast start, apply
         // 0.85x multiplicative decrease.
         let after = c.on_observation(
@@ -320,7 +326,12 @@ mod tests {
         let mut c = mk();
         let now = Instant::now();
         let _ = c.on_observation(30.0, 0, Duration::from_millis(20), now);
-        let b = c.on_observation(300.0, 0, Duration::from_millis(20), now + Duration::from_millis(250));
+        let b = c.on_observation(
+            300.0,
+            0,
+            Duration::from_millis(20),
+            now + Duration::from_millis(250),
+        );
         assert_eq!(b, 500_000);
         assert_eq!(c.current_state(), OveruseState::Overuse);
     }
@@ -341,7 +352,12 @@ mod tests {
         // First call sets baseline at min_reaction.
         let b1 = c.on_observation(30.0, 0, Duration::from_millis(20), now);
         // Immediately after: OWD spikes, but reaction gate blocks.
-        let b2 = c.on_observation(80.0, 0, Duration::from_millis(20), now + Duration::from_millis(10));
+        let b2 = c.on_observation(
+            80.0,
+            0,
+            Duration::from_millis(20),
+            now + Duration::from_millis(10),
+        );
         assert_eq!(b1, b2, "reaction gate should swallow rapid change");
     }
 
@@ -375,8 +391,14 @@ mod tests {
         // than b1. b3 is a further increase (gradient +10 → Overuse) so
         // it should be lower than b2. If the controller's reaction gate
         // were blocking, b2 or b3 would equal b1.
-        assert!(b2 < b1, "overuse at 250ms should decrease rate: {b2} >= {b1}");
-        assert!(b3 < b2, "continued overuse at 500ms should decrease further: {b3} >= {b2}");
+        assert!(
+            b2 < b1,
+            "overuse at 250ms should decrease rate: {b2} >= {b1}"
+        );
+        assert!(
+            b3 < b2,
+            "continued overuse at 500ms should decrease further: {b3} >= {b2}"
+        );
     }
 
     /// Under stable conditions (constant OWD, no loss) after fast-start
@@ -429,9 +451,7 @@ mod tests {
                 last_bps = b;
             }
         }
-        panic!(
-            "EWMA did not converge after 60 stable OWD samples; last_bps={last_bps}"
-        );
+        panic!("EWMA did not converge after 60 stable OWD samples; last_bps={last_bps}");
     }
 
     /// EWMA-based gradient must produce a stable Overuse state when

@@ -88,9 +88,7 @@ fn resolve_update_repo(cli_value: Option<&str>) -> Option<String> {
         return Some(url);
     }
     if let Ok(url) = std::env::var("QUBOX_UPDATE_REPO") {
-        tracing::warn!(
-            "QUBOX_UPDATE_REPO is deprecated, use QUBOX_UPDATE_REPO instead"
-        );
+        tracing::warn!("QUBOX_UPDATE_REPO is deprecated, use QUBOX_UPDATE_REPO instead");
         return Some(url);
     }
     None

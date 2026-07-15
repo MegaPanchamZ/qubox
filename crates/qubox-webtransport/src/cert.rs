@@ -11,9 +11,8 @@ pub const CERT_PERSIST_PATH: &str = "~/.qubox/webtransport-cert.pem";
 /// The hash is SHA-256 of the DER bytes, **not** the SPKI.
 /// The browser's `serverCertificateHashes` expects DER-hash (ADR-017 §13).
 pub fn generate_self_signed() -> anyhow::Result<(Vec<u8>, Vec<u8>, [u8; 32])> {
-    let CertifiedKey { cert, key_pair } = generate_simple_self_signed(
-        vec!["qubox.local".into(), "localhost".into()],
-    )?;
+    let CertifiedKey { cert, key_pair } =
+        generate_simple_self_signed(vec!["qubox.local".into(), "localhost".into()])?;
 
     let der = cert.der().to_vec();
     let key_der = key_pair.serialize_der();
@@ -53,8 +52,7 @@ mod test {
         let (der, _, der_hash) = generate_self_signed().expect("cert generation");
 
         // Parse DER to extract SPKI (SubjectPublicKeyInfo within TBSCertificate)
-        let parsed = x509_parser::parse_x509_certificate(&der)
-            .expect("parse DER cert");
+        let parsed = x509_parser::parse_x509_certificate(&der).expect("parse DER cert");
         let spki_raw = parsed.1.public_key().raw;
 
         // SHA-256 of SPKI (the WRONG thing to hash)

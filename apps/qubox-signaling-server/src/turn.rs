@@ -69,12 +69,20 @@ impl TurnState {
         // Regional form: "ap-southeast-2|turn:host:3478,eu-west-1|turn:host2:3478"
         // or multi-URL per region: "ap-southeast-2|url1;url2"
         if let Some(regions_str) = regions {
-            for entry in regions_str.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+            for entry in regions_str
+                .split(',')
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+            {
                 let (region, urls_part) = entry
                     .split_once('|')
                     .map(|(r, u)| (r.trim().to_string(), u))
                     .unwrap_or_else(|| (String::new(), entry));
-                for url in urls_part.split(';').map(str::trim).filter(|s| !s.is_empty()) {
+                for url in urls_part
+                    .split(';')
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                {
                     server_urls.push(TurnServerConfig {
                         url: url.to_string(),
                         weight: 1,
@@ -337,7 +345,9 @@ pub async fn issue_credential_handler(
         None => {
             return (
                 StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "peer_id must be a hex or base64 32-byte Ed25519 public key"})),
+                Json(
+                    serde_json::json!({"error": "peer_id must be a hex or base64 32-byte Ed25519 public key"}),
+                ),
             );
         }
     };
@@ -522,13 +532,19 @@ mod tests {
         let b = issue_credentials(&cfg, session_id, "same-peer");
         let c = issue_credentials(&cfg, session_id, "different-peer");
 
-        assert_eq!(a.password, b.password, "same (session, peer) ⇒ same password");
+        assert_eq!(
+            a.password, b.password,
+            "same (session, peer) ⇒ same password"
+        );
         assert_eq!(
             a.username.split(':').next().unwrap(),
             b.username.split(':').next().unwrap(),
             "same expiry yields same username prefix"
         );
-        assert_ne!(a.password, c.password, "different peer ⇒ different password");
+        assert_ne!(
+            a.password, c.password,
+            "different peer ⇒ different password"
+        );
     }
 
     #[test]

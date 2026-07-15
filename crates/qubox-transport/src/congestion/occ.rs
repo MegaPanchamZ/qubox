@@ -73,7 +73,10 @@ impl OccRateController {
             abw
         };
 
-        abw.clamp(self.cfg.min_bitrate_bps as u64, self.cfg.max_bitrate_bps as u64)
+        abw.clamp(
+            self.cfg.min_bitrate_bps as u64,
+            self.cfg.max_bitrate_bps as u64,
+        )
     }
 }
 
@@ -92,9 +95,9 @@ impl RateController for OccRateController {
         }
 
         if loss_x1000 == 0
-            && self
-                .last_abw_update
-                .map_or(true, |t| now.saturating_duration_since(t) >= Duration::from_secs(5))
+            && self.last_abw_update.map_or(true, |t| {
+                now.saturating_duration_since(t) >= Duration::from_secs(5)
+            })
         {
             let probe_up = (self.target_bitrate_bps as f64 * 1.05) as u32;
             self.target_bitrate_bps = probe_up.min(self.cfg.max_bitrate_bps);

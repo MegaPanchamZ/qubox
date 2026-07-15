@@ -17,12 +17,8 @@ impl PolicyModel {
     pub fn load(ckpt_path: &std::path::Path) -> std::io::Result<Self> {
         let device = Device::Cpu;
         let vb = unsafe {
-            VarBuilder::from_mmaped_safetensors(
-                &[ckpt_path.to_str().unwrap()],
-                DType::F32,
-                &device,
-            )
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?
+            VarBuilder::from_mmaped_safetensors(&[ckpt_path.to_str().unwrap()], DType::F32, &device)
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?
         };
         let fc1 = linear(11, 128, vb.pp("fc1"))
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
@@ -32,7 +28,13 @@ impl PolicyModel {
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
         let fc_out = linear(128, N_ACTIONS, vb.pp("fc_out"))
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
-        Ok(Self { fc1, fc2, fc3, fc_out, device })
+        Ok(Self {
+            fc1,
+            fc2,
+            fc3,
+            fc_out,
+            device,
+        })
     }
 
     pub fn forward(&self, obs: &Observation) -> candle_core::Result<Tensor> {

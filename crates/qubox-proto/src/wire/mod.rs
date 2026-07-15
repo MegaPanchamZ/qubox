@@ -28,7 +28,17 @@ mod rkyv_structs {
     pub const PEN_RKYV_WIRE_SIZE: usize = 37;
 
     #[repr(C)]
-    #[derive(Archive, Serialize, Deserialize, Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+    #[derive(
+        Archive,
+        Serialize,
+        Deserialize,
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        serde::Serialize,
+        serde::Deserialize,
+    )]
     #[rkyv(derive(Debug, PartialEq))]
     #[rkyv(attr(derive(serde::Serialize, serde::Deserialize)))]
     pub struct RemotePenEvent {
@@ -48,11 +58,15 @@ mod rkyv_structs {
         pub timestamp_us: [u8; 4],
     }
 
-    pub fn pen_to_rkyv_bytes(value: &RemotePenEvent) -> Result<crate::rkyv_wire::RkyvBytes, CheckTypeError> {
+    pub fn pen_to_rkyv_bytes(
+        value: &RemotePenEvent,
+    ) -> Result<crate::rkyv_wire::RkyvBytes, CheckTypeError> {
         crate::rkyv_wire::to_rkyv_bytes(value)
     }
 
-    pub fn pen_from_rkyv_bytes<'a>(buf: &'a [u8]) -> Result<&'a ArchivedRemotePenEvent, CheckTypeError> {
+    pub fn pen_from_rkyv_bytes<'a>(
+        buf: &'a [u8],
+    ) -> Result<&'a ArchivedRemotePenEvent, CheckTypeError> {
         let archived = rkyv::access::<ArchivedRemotePenEvent, CheckTypeError>(buf)?;
         validate_pen(archived)?;
         Ok(archived)
@@ -71,7 +85,17 @@ mod rkyv_structs {
     pub const GAMEPAD_RKYV_WIRE_SIZE: usize = 20;
 
     #[repr(C)]
-    #[derive(Archive, Serialize, Deserialize, Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+    #[derive(
+        Archive,
+        Serialize,
+        Deserialize,
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        serde::Serialize,
+        serde::Deserialize,
+    )]
     #[rkyv(derive(Debug, PartialEq))]
     #[rkyv(attr(derive(serde::Serialize, serde::Deserialize)))]
     pub struct RemoteGamepadEvent {
@@ -91,11 +115,15 @@ mod rkyv_structs {
         pub _pad: [u8; 2],
     }
 
-    pub fn gamepad_to_rkyv_bytes(value: &RemoteGamepadEvent) -> Result<crate::rkyv_wire::RkyvBytes, CheckTypeError> {
+    pub fn gamepad_to_rkyv_bytes(
+        value: &RemoteGamepadEvent,
+    ) -> Result<crate::rkyv_wire::RkyvBytes, CheckTypeError> {
         crate::rkyv_wire::to_rkyv_bytes(value)
     }
 
-    pub fn gamepad_from_rkyv_bytes<'a>(buf: &'a [u8]) -> Result<&'a ArchivedRemoteGamepadEvent, CheckTypeError> {
+    pub fn gamepad_from_rkyv_bytes<'a>(
+        buf: &'a [u8],
+    ) -> Result<&'a ArchivedRemoteGamepadEvent, CheckTypeError> {
         let archived = rkyv::access::<ArchivedRemoteGamepadEvent, CheckTypeError>(buf)?;
         validate_gamepad(archived)?;
         Ok(archived)
@@ -115,7 +143,17 @@ mod rkyv_structs {
     pub const MIC_RKYV_WIRE_SIZE: usize = 9;
 
     #[repr(C)]
-    #[derive(Archive, Serialize, Deserialize, Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+    #[derive(
+        Archive,
+        Serialize,
+        Deserialize,
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        serde::Serialize,
+        serde::Deserialize,
+    )]
     #[rkyv(derive(Debug, PartialEq))]
     #[rkyv(attr(derive(serde::Serialize, serde::Deserialize)))]
     pub struct RemoteMicHeader {
@@ -127,11 +165,15 @@ mod rkyv_structs {
         pub _reserved: [u8; 2],
     }
 
-    pub fn mic_to_rkyv_bytes(value: &RemoteMicHeader) -> Result<crate::rkyv_wire::RkyvBytes, CheckTypeError> {
+    pub fn mic_to_rkyv_bytes(
+        value: &RemoteMicHeader,
+    ) -> Result<crate::rkyv_wire::RkyvBytes, CheckTypeError> {
         crate::rkyv_wire::to_rkyv_bytes(value)
     }
 
-    pub fn mic_from_rkyv_bytes<'a>(buf: &'a [u8]) -> Result<&'a ArchivedRemoteMicHeader, CheckTypeError> {
+    pub fn mic_from_rkyv_bytes<'a>(
+        buf: &'a [u8],
+    ) -> Result<&'a ArchivedRemoteMicHeader, CheckTypeError> {
         let archived = rkyv::access::<ArchivedRemoteMicHeader, CheckTypeError>(buf)?;
         validate_mic(archived)?;
         Ok(archived)
@@ -151,7 +193,17 @@ mod rkyv_structs {
     pub const MEDIA_RKYV_HEADER_SIZE: usize = 15;
 
     #[repr(C)]
-    #[derive(Archive, Serialize, Deserialize, Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+    #[derive(
+        Archive,
+        Serialize,
+        Deserialize,
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        serde::Serialize,
+        serde::Deserialize,
+    )]
     #[rkyv(derive(Debug, PartialEq))]
     #[rkyv(attr(derive(serde::Serialize, serde::Deserialize)))]
     pub struct MediaDatagramHeader {
@@ -165,11 +217,15 @@ mod rkyv_structs {
         pub chunk_count: [u8; 2],
     }
 
-    pub fn media_to_rkyv_bytes(value: &MediaDatagramHeader) -> Result<crate::rkyv_wire::RkyvBytes, CheckTypeError> {
+    pub fn media_to_rkyv_bytes(
+        value: &MediaDatagramHeader,
+    ) -> Result<crate::rkyv_wire::RkyvBytes, CheckTypeError> {
         crate::rkyv_wire::to_rkyv_bytes(value)
     }
 
-    pub fn media_from_rkyv_bytes<'a>(buf: &'a [u8]) -> Result<&'a ArchivedMediaDatagramHeader, CheckTypeError> {
+    pub fn media_from_rkyv_bytes<'a>(
+        buf: &'a [u8],
+    ) -> Result<&'a ArchivedMediaDatagramHeader, CheckTypeError> {
         let archived = rkyv::access::<ArchivedMediaDatagramHeader, CheckTypeError>(buf)?;
         validate_media(archived)?;
         Ok(archived)
@@ -185,7 +241,16 @@ mod rkyv_structs {
     pub const ACCESS_UNIT_RKYV_HEADER_SIZE: usize = 63;
 
     #[repr(C)]
-    #[derive(Archive, Serialize, Deserialize, Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+    #[derive(
+        Archive,
+        Serialize,
+        Deserialize,
+        Debug,
+        Clone,
+        PartialEq,
+        serde::Serialize,
+        serde::Deserialize,
+    )]
     #[rkyv(derive(Debug, PartialEq))]
     #[rkyv(attr(derive(serde::Serialize, serde::Deserialize)))]
     pub struct WireAccessUnitHeader {
@@ -207,11 +272,15 @@ mod rkyv_structs {
         pub hdr_static_metadata_len: [u8; 2],
     }
 
-    pub fn au_to_rkyv_bytes(value: &WireAccessUnitHeader) -> Result<crate::rkyv_wire::RkyvBytes, CheckTypeError> {
+    pub fn au_to_rkyv_bytes(
+        value: &WireAccessUnitHeader,
+    ) -> Result<crate::rkyv_wire::RkyvBytes, CheckTypeError> {
         crate::rkyv_wire::to_rkyv_bytes(value)
     }
 
-    pub fn au_from_rkyv_bytes<'a>(buf: &'a [u8]) -> Result<&'a ArchivedWireAccessUnitHeader, CheckTypeError> {
+    pub fn au_from_rkyv_bytes<'a>(
+        buf: &'a [u8],
+    ) -> Result<&'a ArchivedWireAccessUnitHeader, CheckTypeError> {
         let archived = rkyv::access::<ArchivedWireAccessUnitHeader, CheckTypeError>(buf)?;
         validate_au(archived)?;
         Ok(archived)
@@ -238,8 +307,15 @@ mod rkyv_structs {
     #[derive(Archive, Serialize, Deserialize, Debug, Clone, PartialEq)]
     #[rkyv(derive(Debug, PartialEq))]
     pub enum RemoteCriticalInput {
-        MouseButton { button: InputMouseButton, pressed: bool },
-        Keyboard { key: [u8; 16], key_len: u8, pressed: bool },
+        MouseButton {
+            button: InputMouseButton,
+            pressed: bool,
+        },
+        Keyboard {
+            key: [u8; 16],
+            key_len: u8,
+            pressed: bool,
+        },
         PenDown {
             device_id: u16,
             tool: PenTool,
@@ -252,11 +328,35 @@ mod rkyv_structs {
             button_state: u32,
             timestamp_us: u32,
         },
-        PenUp { device_id: u16, tool: PenTool, timestamp_us: u32 },
-        GamepadLifecycle { connect: bool, device_id: u16, vendor_id: u16, product_id: u16 },
-        MouseDown { button: InputMouseButton, x: u16, y: u16, timestamp_us: u32 },
-        MouseUp { button: InputMouseButton, x: u16, y: u16, timestamp_us: u32 },
-        MouseClick { button: InputMouseButton, x: u16, y: u16, timestamp_us: u32 },
+        PenUp {
+            device_id: u16,
+            tool: PenTool,
+            timestamp_us: u32,
+        },
+        GamepadLifecycle {
+            connect: bool,
+            device_id: u16,
+            vendor_id: u16,
+            product_id: u16,
+        },
+        MouseDown {
+            button: InputMouseButton,
+            x: u16,
+            y: u16,
+            timestamp_us: u32,
+        },
+        MouseUp {
+            button: InputMouseButton,
+            x: u16,
+            y: u16,
+            timestamp_us: u32,
+        },
+        MouseClick {
+            button: InputMouseButton,
+            x: u16,
+            y: u16,
+            timestamp_us: u32,
+        },
     }
 
     pub fn critical_input_to_rkyv_bytes(
@@ -450,7 +550,10 @@ mod tests {
                 hdr_static_metadata_len: 0u16.to_le_bytes(),
             };
             let bytes = super::rkyv_structs::au_to_rkyv_bytes(&hdr).unwrap();
-            assert_eq!(bytes.len(), super::rkyv_structs::ACCESS_UNIT_RKYV_HEADER_SIZE);
+            assert_eq!(
+                bytes.len(),
+                super::rkyv_structs::ACCESS_UNIT_RKYV_HEADER_SIZE
+            );
             let archived = super::rkyv_structs::au_from_rkyv_bytes(&bytes).unwrap();
             assert_eq!(archived.discriminator, 0x41);
             assert!(archived.keyframe);
@@ -482,14 +585,13 @@ mod tests {
                 button: crate::InputMouseButton::Left,
                 pressed: true,
             };
-            let bytes =
-                super::rkyv_structs::critical_input_to_rkyv_bytes(&event).unwrap();
+            let bytes = super::rkyv_structs::critical_input_to_rkyv_bytes(&event).unwrap();
             assert!(bytes.len() < 256, "archive too large: {}", bytes.len());
-            let archived =
-                super::rkyv_structs::critical_input_from_rkyv_bytes(&bytes).unwrap();
+            let archived = super::rkyv_structs::critical_input_from_rkyv_bytes(&bytes).unwrap();
             match archived {
                 rkyv::Archived::<super::rkyv_structs::RemoteCriticalInput>::MouseButton {
-                    pressed, ..
+                    pressed,
+                    ..
                 } => assert_eq!(*pressed, true),
                 _ => panic!("unexpected variant"),
             }
@@ -500,30 +602,69 @@ mod tests {
             use super::rkyv_structs::RemoteCriticalInput;
             use crate::{InputMouseButton, PenTool};
             let variants: Vec<RemoteCriticalInput> = vec![
-                RemoteCriticalInput::MouseButton { button: InputMouseButton::Left, pressed: false },
-                RemoteCriticalInput::Keyboard { key: [0u8; 16], key_len: 0, pressed: true },
+                RemoteCriticalInput::MouseButton {
+                    button: InputMouseButton::Left,
+                    pressed: false,
+                },
+                RemoteCriticalInput::Keyboard {
+                    key: [0u8; 16],
+                    key_len: 0,
+                    pressed: true,
+                },
                 RemoteCriticalInput::PenDown {
                     device_id: 1,
                     tool: PenTool::Pen,
-                    x: 100, y: 200,
+                    x: 100,
+                    y: 200,
                     pressure: 0.5,
-                    tilt_x: 10.0, tilt_y: -5.0,
+                    tilt_x: 10.0,
+                    tilt_y: -5.0,
                     rotation: 45.0,
                     button_state: 0,
                     timestamp_us: 1234,
                 },
-                RemoteCriticalInput::PenUp { device_id: 1, tool: PenTool::Eraser, timestamp_us: 5678 },
-                RemoteCriticalInput::GamepadLifecycle { connect: true, device_id: 0, vendor_id: 0x45e, product_id: 0x28e },
-                RemoteCriticalInput::MouseDown { button: InputMouseButton::Right, x: 10, y: 20, timestamp_us: 100 },
-                RemoteCriticalInput::MouseUp { button: InputMouseButton::Middle, x: 30, y: 40, timestamp_us: 200 },
-                RemoteCriticalInput::MouseClick { button: InputMouseButton::Left, x: 50, y: 60, timestamp_us: 300 },
+                RemoteCriticalInput::PenUp {
+                    device_id: 1,
+                    tool: PenTool::Eraser,
+                    timestamp_us: 5678,
+                },
+                RemoteCriticalInput::GamepadLifecycle {
+                    connect: true,
+                    device_id: 0,
+                    vendor_id: 0x45e,
+                    product_id: 0x28e,
+                },
+                RemoteCriticalInput::MouseDown {
+                    button: InputMouseButton::Right,
+                    x: 10,
+                    y: 20,
+                    timestamp_us: 100,
+                },
+                RemoteCriticalInput::MouseUp {
+                    button: InputMouseButton::Middle,
+                    x: 30,
+                    y: 40,
+                    timestamp_us: 200,
+                },
+                RemoteCriticalInput::MouseClick {
+                    button: InputMouseButton::Left,
+                    x: 50,
+                    y: 60,
+                    timestamp_us: 300,
+                },
             ];
             for event in &variants {
                 let bytes = super::rkyv_structs::critical_input_to_rkyv_bytes(event).unwrap();
-                assert!(bytes.len() < 256, "archive too large: {} B for {event:?}", bytes.len());
+                assert!(
+                    bytes.len() < 256,
+                    "archive too large: {} B for {event:?}",
+                    bytes.len()
+                );
                 let archived = super::rkyv_structs::critical_input_from_rkyv_bytes(&bytes).unwrap();
                 // Round-trip through full deserialize to verify source==archived==source
-                let deserialized: RemoteCriticalInput = rkyv::deserialize::<RemoteCriticalInput, rkyv::rancor::Error>(archived).unwrap();
+                let deserialized: RemoteCriticalInput =
+                    rkyv::deserialize::<RemoteCriticalInput, rkyv::rancor::Error>(archived)
+                        .unwrap();
                 assert_eq!(*event, deserialized);
             }
         }
@@ -555,8 +696,11 @@ mod tests {
             let _check_once = super::rkyv_structs::pen_from_rkyv_bytes(&rkyv_bytes).unwrap();
             let start = std::time::Instant::now();
             for _ in 0..ITERATIONS {
-                let _archived: &rkyv::Archived<super::rkyv_structs::RemotePenEvent> =
-                    unsafe { rkyv::access_unchecked::<rkyv::Archived<super::rkyv_structs::RemotePenEvent>>(&rkyv_bytes) };
+                let _archived: &rkyv::Archived<super::rkyv_structs::RemotePenEvent> = unsafe {
+                    rkyv::access_unchecked::<rkyv::Archived<super::rkyv_structs::RemotePenEvent>>(
+                        &rkyv_bytes,
+                    )
+                };
                 std::hint::black_box(_archived);
             }
             let rkyv_unchecked_dur = start.elapsed();

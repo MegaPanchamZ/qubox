@@ -641,7 +641,10 @@ pub(crate) mod ffi {
     /// [`hw_get_format`] trampoline. Returns the platform-preferred HW pixfmt
     /// as a hint for registration (actual choice happens in `hw_get_format`).
     pub fn register_get_format() -> i32 {
-        preferred_hw_pixfmts().first().copied().unwrap_or(PIX_FMT_NONE)
+        preferred_hw_pixfmts()
+            .first()
+            .copied()
+            .unwrap_or(PIX_FMT_NONE)
     }
 
     /// SAFETY: caller must ensure `device_name` is either `None` or a
@@ -1014,10 +1017,7 @@ mod tests {
             ffi::select_hw_pixfmt(&[0, ffi::PIX_FMT_CUDA], &pref),
             ffi::PIX_FMT_CUDA
         );
-        assert_eq!(
-            ffi::select_hw_pixfmt(&[0, 1, 2], &pref),
-            ffi::PIX_FMT_NONE
-        );
+        assert_eq!(ffi::select_hw_pixfmt(&[0, 1, 2], &pref), ffi::PIX_FMT_NONE);
     }
 
     #[test]

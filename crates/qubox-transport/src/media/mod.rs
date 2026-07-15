@@ -1979,7 +1979,9 @@ mod tests {
 
         // Frame sized so we get exactly two full RS blocks (8 data
         // shards) plus their parity (4 parity shards).
-        let frame: Vec<u8> = (0..(CHUNK_PAYLOAD_MAX * 8)).map(|i| (i % 251) as u8).collect();
+        let frame: Vec<u8> = (0..(CHUNK_PAYLOAD_MAX * 8))
+            .map(|i| (i % 251) as u8)
+            .collect();
         let (data, parity, original_len) = encoder.encode(&frame).expect("encode ok");
         assert_eq!(data.len(), 8);
         assert_eq!(parity.len(), 4);

@@ -32,9 +32,10 @@ pub fn evaluate_watch_event(
         return WatchAction::OutsideRule;
     }
     let path_str = path.to_string_lossy();
-    let under_rule = rule.paths.iter().any(|root| {
-        path_str.starts_with(root.as_str()) || path.starts_with(Path::new(root))
-    });
+    let under_rule = rule
+        .paths
+        .iter()
+        .any(|root| path_str.starts_with(root.as_str()) || path.starts_with(Path::new(root)));
     if !under_rule {
         return WatchAction::OutsideRule;
     }

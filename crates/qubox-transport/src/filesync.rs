@@ -201,9 +201,7 @@ pub async fn write_filesync_msg<T: Serialize>(
     write_json_prefixed(send, msg).await
 }
 
-pub async fn read_filesync_msg<T: DeserializeOwned>(
-    recv: &mut RecvStream,
-) -> anyhow::Result<T> {
+pub async fn read_filesync_msg<T: DeserializeOwned>(recv: &mut RecvStream) -> anyhow::Result<T> {
     read_json_prefixed(recv).await
 }
 
@@ -317,10 +315,7 @@ pub async fn push_file_over_connection(
         anyhow::bail!("invalid file_id");
     }
     let (arr, size) = hash_file_streaming(path).await?;
-    let mut send = conn
-        .open_uni()
-        .await
-        .context("open FileSync uni")?;
+    let mut send = conn.open_uni().await.context("open FileSync uni")?;
     write_stream_envelope(&mut send, StreamPurpose::FileSync)
         .await
         .context("FileSync envelope")?;
@@ -585,12 +580,14 @@ mod tests {
         let mut server_config =
             quinn::ServerConfig::with_single_cert(vec![cert_der.clone()], key.into()).unwrap();
         server_config.transport_config(Arc::new(quinn::TransportConfig::default()));
-        let server = quinn::Endpoint::server(server_config, "127.0.0.1:0".parse().unwrap()).unwrap();
+        let server =
+            quinn::Endpoint::server(server_config, "127.0.0.1:0".parse().unwrap()).unwrap();
         let addr = server.local_addr().unwrap();
 
         let mut roots = RootCertStore::empty();
         roots.add(cert_der).unwrap();
-        let mut client_config = quinn::ClientConfig::with_root_certificates(Arc::new(roots)).unwrap();
+        let mut client_config =
+            quinn::ClientConfig::with_root_certificates(Arc::new(roots)).unwrap();
         client_config.transport_config(Arc::new(quinn::TransportConfig::default()));
         let mut client_ep =
             quinn::Endpoint::client(SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0)).unwrap();
@@ -618,11 +615,10 @@ mod tests {
             .await
             .expect("push");
 
-        let (hdr, path, dest_dir) =
-            tokio::time::timeout(Duration::from_secs(5), server_task)
-                .await
-                .expect("server timed out")
-                .expect("server join");
+        let (hdr, path, dest_dir) = tokio::time::timeout(Duration::from_secs(5), server_task)
+            .await
+            .expect("server timed out")
+            .expect("server join");
         assert_eq!(hdr.file_id, "file-1");
         assert_eq!(hdr.relative_path, "nested/payload.bin");
         assert_eq!(std::fs::read(&path).unwrap(), data);

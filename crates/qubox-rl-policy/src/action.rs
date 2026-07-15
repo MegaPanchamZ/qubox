@@ -1,15 +1,10 @@
 use serde::{Deserialize, Serialize};
 
 pub const BITRATE_LADDER_BPS: &[u32] = &[
-    1_000_000, 2_000_000, 4_000_000, 6_000_000,
-    8_000_000, 12_000_000, 16_000_000, 20_000_000,
+    1_000_000, 2_000_000, 4_000_000, 6_000_000, 8_000_000, 12_000_000, 16_000_000, 20_000_000,
 ];
-pub const RESOLUTION_LADDER: &[(u16, u16)] = &[
-    (1280, 720),
-    (1920, 1080),
-    (2560, 1440),
-    (3840, 2160),
-];
+pub const RESOLUTION_LADDER: &[(u16, u16)] =
+    &[(1280, 720), (1920, 1080), (2560, 1440), (3840, 2160)];
 pub const REFRESH_LADDER_HZ: &[u8] = &[60, 90, 144];
 pub const N_ACTIONS: usize = 96;
 
@@ -61,7 +56,10 @@ mod tests {
     #[test]
     fn action_space_cardinality() {
         assert_eq!(N_ACTIONS, 8 * 4 * 3);
-        assert_eq!(N_ACTIONS, BITRATE_LADDER_BPS.len() * RESOLUTION_LADDER.len() * REFRESH_LADDER_HZ.len());
+        assert_eq!(
+            N_ACTIONS,
+            BITRATE_LADDER_BPS.len() * RESOLUTION_LADDER.len() * REFRESH_LADDER_HZ.len()
+        );
     }
 
     #[test]

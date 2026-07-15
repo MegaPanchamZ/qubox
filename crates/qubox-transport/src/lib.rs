@@ -711,7 +711,7 @@ impl NativeQuicInputSender {
             },
         )
         .await
-                .context("failed to write native QUIC input event")
+        .context("failed to write native QUIC input event")
     }
 
     /// Send a 0x1f IMMEDIATE_ACK frame (ack-eliciting, congestion-controlled).
@@ -1425,9 +1425,7 @@ pub async fn connect_with_fallback_v2(
     match connect_with_fallback(&v2_ticket, client_credential, turn_config.clone()).await {
         Ok(session) => Ok(session),
         Err(e) => {
-            tracing::warn!(
-                "v2 fallback: v2 attempt failed ({e}); retrying with v1 ALPN"
-            );
+            tracing::warn!("v2 fallback: v2 attempt failed ({e}); retrying with v1 ALPN");
             connect_with_fallback(ticket, client_credential, turn_config).await
         }
     }
@@ -2060,16 +2058,10 @@ pub fn build_transport_config_v2(policy: AckPolicy) -> TransportConfig {
     config.datagram_send_buffer_size(2 << 20);
     config.datagram_receive_buffer_size(Some(2 << 20));
     let mut ack = quinn::AckFrequencyConfig::default();
-    ack.ack_eliciting_threshold(VarInt::from_u32(
-        policy.ack_eliciting_threshold() as u32,
-    ));
-    ack.reordering_threshold(VarInt::from_u32(
-        policy.reordering_threshold() as u32,
-    ));
+    ack.ack_eliciting_threshold(VarInt::from_u32(policy.ack_eliciting_threshold() as u32));
+    ack.reordering_threshold(VarInt::from_u32(policy.reordering_threshold() as u32));
     if matches!(policy, AckPolicy::Control | AckPolicy::InputImmediate) {
-        ack.max_ack_delay(Some(Duration::from_micros(
-            policy.min_ack_delay_us(),
-        )));
+        ack.max_ack_delay(Some(Duration::from_micros(policy.min_ack_delay_us())));
     }
     config.ack_frequency_config(Some(ack));
     config.keep_alive_interval(Some(Duration::from_secs(5)));

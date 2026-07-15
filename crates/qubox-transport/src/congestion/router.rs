@@ -50,16 +50,10 @@ impl CongestionRouter {
             NetworkClass::Unknown => CongestionAlgorithm::Scream,
         });
         let controller: Box<dyn RateController> = match algo {
-            CongestionAlgorithm::Scream => {
-                Box::new(ScreamRateController::new(cfg.scream))
-            }
-            CongestionAlgorithm::BbrV3 => {
-                Box::new(BbrV3RateController::new(cfg.bbr_v3))
-            }
+            CongestionAlgorithm::Scream => Box::new(ScreamRateController::new(cfg.scream)),
+            CongestionAlgorithm::BbrV3 => Box::new(BbrV3RateController::new(cfg.bbr_v3)),
             CongestionAlgorithm::Occ => Box::new(OccRateController::new(cfg.occ)),
-            CongestionAlgorithm::Gcc => {
-                Box::new(LegacyGccRateController::new(cfg.gcc_legacy))
-            }
+            CongestionAlgorithm::Gcc => Box::new(LegacyGccRateController::new(cfg.gcc_legacy)),
         };
         Self {
             algo,
@@ -81,10 +75,9 @@ impl CongestionRouter {
             .controller
             .on_observation(owd_ms, loss_x1000, rtt, sent_bytes, now);
 
-        if self
-            .last_emitted_telemetry_at
-            .map_or(true, |t| now.saturating_duration_since(t) >= Duration::from_secs(1))
-        {
+        if self.last_emitted_telemetry_at.map_or(true, |t| {
+            now.saturating_duration_since(t) >= Duration::from_secs(1)
+        }) {
             let snap = self.controller.snapshot();
             tracing::info!(
                 algorithm = snap.algorithm,
@@ -195,18 +188,14 @@ mod tests {
 
     #[test]
     fn network_classifier_wireless_when_stddev_above_5ms() {
-        let samples: Vec<f64> = (0..100)
-            .map(|i| 30.0 + (i % 7) as f64 * 3.0)
-            .collect();
+        let samples: Vec<f64> = (0..100).map(|i| 30.0 + (i % 7) as f64 * 3.0).collect();
         let class = classify_network(&samples);
         assert_eq!(class, NetworkClass::Wireless);
     }
 
     #[test]
     fn network_classifier_unknown_with_moderate_jitter() {
-        let samples: Vec<f64> = (0..100)
-            .map(|i| 20.0 + (i % 5) as f64 * 0.8)
-            .collect();
+        let samples: Vec<f64> = (0..100).map(|i| 20.0 + (i % 5) as f64 * 0.8).collect();
         let class = classify_network(&samples);
         assert_eq!(class, NetworkClass::Unknown);
     }

@@ -383,7 +383,11 @@ pub fn content_hash_file(path: &Path) -> anyhow::Result<(String, [u8; 32], u64)>
 }
 
 /// Write to `target.qubox-partial`, fsync, verify blake3, atomic rename.
-pub fn atomic_apply_file(target: &Path, data: &[u8], expected_blake3: &[u8; 32]) -> anyhow::Result<()> {
+pub fn atomic_apply_file(
+    target: &Path,
+    data: &[u8],
+    expected_blake3: &[u8; 32],
+) -> anyhow::Result<()> {
     let actual = blake3::hash(data);
     if actual.as_bytes() != expected_blake3 {
         anyhow::bail!("blake3 mismatch on atomic apply for {}", target.display());
@@ -427,10 +431,7 @@ pub fn partial_path(target: &Path) -> PathBuf {
 
 /// Conflict quarantine path: `{stem}.conflict.{peer}.{utc}.{ext}`
 pub fn conflict_path(local: &Path, peer_id: &str, utc_unix: u64) -> PathBuf {
-    let stem = local
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("file");
+    let stem = local.file_stem().and_then(|s| s.to_str()).unwrap_or("file");
     let ext = local
         .extension()
         .and_then(|s| s.to_str())

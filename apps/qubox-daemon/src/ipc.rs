@@ -185,7 +185,6 @@ pub enum IpcRequest {
     },
 }
 
-
 /// Response variants sent from the daemon to the client.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum IpcResponse {
@@ -729,13 +728,16 @@ async fn dispatch_request(
             );
             send_response(stream, corr_id, &resp).await
         }
-        IpcRequest::KickSession {
-            session_id,
-            reason,
-        } => {
+        IpcRequest::KickSession { session_id, reason } => {
             let resp = run_client_cli_share_or_kick(
                 signaling_url,
-                &["kick-session", "--session", &session_id, "--reason", &reason],
+                &[
+                    "kick-session",
+                    "--session",
+                    &session_id,
+                    "--reason",
+                    &reason,
+                ],
                 false,
             );
             send_response(stream, corr_id, &resp).await
@@ -817,7 +819,9 @@ async fn dispatch_request(
             }
             // Never allow auto-approve via managed host start (production gate).
             if config.auto_approve_pairing {
-                tracing::warn!("StartHost ignored auto_approve_pairing=true (unsafe on managed paths)");
+                tracing::warn!(
+                    "StartHost ignored auto_approve_pairing=true (unsafe on managed paths)"
+                );
             }
             let sub_config = SubprocessConfig {
                 bin_path,
@@ -1479,9 +1483,7 @@ async fn dispatch_request(
             };
             let resp = (|| -> Result<IpcResponse, String> {
                 let path = std::path::Path::new(&local_path);
-                let ignores = state
-                    .get_global_ignores()
-                    .map_err(|e| format!("db: {e}"))?;
+                let ignores = state.get_global_ignores().map_err(|e| format!("db: {e}"))?;
                 if should_ignore_path(path, &ignores) {
                     return Ok(IpcResponse::Unit);
                 }
@@ -1536,9 +1538,7 @@ async fn dispatch_request(
                     queued_at_unix: now_unix(),
                     last_error: None,
                 };
-                state
-                    .put_outbox_job(&job)
-                    .map_err(|e| format!("db: {e}"))?;
+                state.put_outbox_job(&job).map_err(|e| format!("db: {e}"))?;
                 let _ = event_tx.send(IpcEvent::SyncJobUpdated { job: job.clone() });
                 Ok(IpcResponse::SyncJob { job })
             })();

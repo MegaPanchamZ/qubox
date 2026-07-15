@@ -11,9 +11,7 @@ use std::time::{Duration, Instant};
 
 use crate::error::CaptureError;
 use crate::traits::CaptureSession;
-use crate::types::{
-    CapturedFrame, ColorSpaceId, DisplayId, PixelFormat, Point, Rect, Size,
-};
+use crate::types::{CapturedFrame, ColorSpaceId, DisplayId, PixelFormat, Point, Rect, Size};
 
 /// Capture source for an FFmpeg rawvideo pipe.
 #[derive(Debug, Clone)]
@@ -88,9 +86,7 @@ impl FfmpegRawSource {
             "-nostdin".into(),
         ];
         match self {
-            Self::X11 {
-                display, x, y, ..
-            } => {
+            Self::X11 { display, x, y, .. } => {
                 args.extend([
                     "-f".into(),
                     "x11grab".into(),

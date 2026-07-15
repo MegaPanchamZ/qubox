@@ -35,8 +35,8 @@ use qubox_platform::describe_peer;
 use qubox_proto::{
     AudioStreamParams, ClientMessage, ControlMsg, InputMouseButton, MicStreamConfig,
     PairingRequest, PeerDescriptor, PeerRole, RelaySignal, RemoteInputEvent, ServerMessage,
-    SessionPermissions, SessionPlan, SessionSignal, SignedHello, StartSessionRequest, TransportKind, VideoCodec,
-    VideoStreamParams,
+    SessionPermissions, SessionPlan, SessionSignal, SignedHello, StartSessionRequest,
+    TransportKind, VideoCodec, VideoStreamParams,
 };
 use qubox_transport::{
     connect_to_native_quic, decode_ticket_b64, NativeQuicAudioReceiver, NativeQuicClientSession,
@@ -50,11 +50,7 @@ use uuid::Uuid;
 
 #[derive(Debug, Parser)]
 struct Args {
-    #[arg(
-        long,
-        env = "QUBOX_SERVER",
-        default_value = "ws://127.0.0.1:7000/ws"
-    )]
+    #[arg(long, env = "QUBOX_SERVER", default_value = "ws://127.0.0.1:7000/ws")]
     server: String,
 
     /// Managed accounts API base (signup/enroll). Set this to your cloud
@@ -247,13 +243,19 @@ enum Command {
 #[derive(Debug, Clone, Subcommand)]
 enum CliSyncAction {
     ListIgnores,
-    AddIgnore { pattern: String },
-    RemoveIgnore { pattern: String },
+    AddIgnore {
+        pattern: String,
+    },
+    RemoveIgnore {
+        pattern: String,
+    },
     SetIgnores {
         #[arg(long = "pattern", required = true)]
         patterns: Vec<String>,
     },
-    ApplyPreset { name: String },
+    ApplyPreset {
+        name: String,
+    },
     ListRules,
     ListJobs,
     ListConflicts,
@@ -362,9 +364,8 @@ fn spawn_chosen_decoder(
             let (hw_tx, hw_rx) =
                 qubox_client_cli::decoder_hw::decoded_channel(cfg.decoded_queue_depth);
             std::thread::spawn(move || bridge_decoded_to_minifb(hw_rx, decoded_tx));
-            let inner = qubox_client_cli::decoder_hw::RunningHwFrameDecoder::spawn(
-                cfg, encoded_rx, hw_tx,
-            )?;
+            let inner =
+                qubox_client_cli::decoder_hw::RunningHwFrameDecoder::spawn(cfg, encoded_rx, hw_tx)?;
             tracing::info!(
                 use_hw = use_hw,
                 "spawn_chosen_decoder: in-process ffmpeg-next decoder active (P0-3)"
@@ -706,11 +707,7 @@ async fn main() -> anyhow::Result<()> {
         return Ok(());
     }
 
-    if let Command::CloudEnroll {
-        code,
-        display_name,
-    } = &args.command
-    {
+    if let Command::CloudEnroll { code, display_name } = &args.command {
         return run_cloud_enroll(
             &args.accounts_url,
             code,
@@ -1084,10 +1081,7 @@ async fn main() -> anyhow::Result<()> {
         Command::RedeemShareLink { code, client_label } => {
             send_json(
                 &mut writer,
-                &ClientMessage::RedeemShareLink {
-                    code,
-                    client_label,
-                },
+                &ClientMessage::RedeemShareLink { code, client_label },
             )
             .await?;
             while let Some(frame) = reader.next().await {
@@ -1280,7 +1274,10 @@ async fn run_cli_sync(action: CliSyncAction) -> anyhow::Result<()> {
         }
         IpcResponse::SyncConflicts { conflicts } => {
             for c in conflicts {
-                println!("{} local={} remote={}", c.conflict_id, c.local_path, c.remote_path);
+                println!(
+                    "{} local={} remote={}",
+                    c.conflict_id, c.local_path, c.remote_path
+                );
             }
         }
         IpcResponse::SyncJob { job } => println!("queued {}", job.job_id),
@@ -2575,8 +2572,7 @@ fn setup_pen_capture(
     let mut capture: Box<dyn PenCapture + Send> =
         Box::new(qubox_pen::linux::LibinputCapture::default());
     #[cfg(not(target_os = "linux"))]
-    let mut capture: Box<dyn PenCapture + Send> =
-        Box::new(qubox_pen::platform::StubCapture::new());
+    let mut capture: Box<dyn PenCapture + Send> = Box::new(qubox_pen::platform::StubCapture::new());
 
     let devices = capture.enumerate_devices()?;
     let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));

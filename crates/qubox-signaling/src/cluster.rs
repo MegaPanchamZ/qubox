@@ -163,7 +163,11 @@ impl ClusterBus {
         Ok(out)
     }
 
-    pub async fn put_session(&self, session_id: Uuid, session: &RemoteSession) -> anyhow::Result<()> {
+    pub async fn put_session(
+        &self,
+        session_id: Uuid,
+        session: &RemoteSession,
+    ) -> anyhow::Result<()> {
         let mut conn = self.conn.clone();
         let json = serde_json::to_string(session)?;
         let _: () = conn

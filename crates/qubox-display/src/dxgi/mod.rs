@@ -192,8 +192,8 @@ use windows::Win32::Foundation::{HMODULE, HWND};
 use windows::Win32::Graphics::Direct3D::{D3D_DRIVER_TYPE_HARDWARE, D3D_FEATURE_LEVEL_11_0};
 use windows::Win32::Graphics::Direct3D11::{
     D3D11CreateDevice, ID3D11Device, ID3D11DeviceContext, ID3D11Texture2D, D3D11_CPU_ACCESS_READ,
-    D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_MAPPED_SUBRESOURCE, D3D11_MAP_READ,
-    D3D11_SDK_VERSION, D3D11_TEXTURE2D_DESC, D3D11_USAGE_STAGING,
+    D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_MAPPED_SUBRESOURCE, D3D11_MAP_READ, D3D11_SDK_VERSION,
+    D3D11_TEXTURE2D_DESC, D3D11_USAGE_STAGING,
 };
 use windows::Win32::Graphics::Dxgi::Common::{
     DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_MODE_ROTATION_IDENTITY, DXGI_SAMPLE_DESC,
@@ -334,11 +334,7 @@ pub struct DxgiDuplicationSession {
 pub type DxgiCaptureSession = DxgiDuplicationSession;
 
 impl DxgiDuplicationSession {
-    pub fn open(
-        display_id: DisplayId,
-        info: &DisplayInfo,
-        fps: u32,
-    ) -> Result<Self, CaptureError> {
+    pub fn open(display_id: DisplayId, info: &DisplayInfo, fps: u32) -> Result<Self, CaptureError> {
         let (device, context) = init_d3d11_device()?;
         let duplication = create_duplication_interface(&device, display_id.0)?;
         let staging = create_staging_texture(&device, info.size.width, info.size.height)?;
@@ -382,7 +378,8 @@ impl DxgiDuplicationSession {
                     return Err(CaptureError::Other(format!("AcquireNextFrame: {e}")));
                 }
             }
-            let resource = resource.ok_or_else(|| CaptureError::Other("null frame resource".into()))?;
+            let resource =
+                resource.ok_or_else(|| CaptureError::Other("null frame resource".into()))?;
             let texture: ID3D11Texture2D = resource
                 .cast()
                 .map_err(|e| CaptureError::Other(format!("texture cast: {e}")))?;

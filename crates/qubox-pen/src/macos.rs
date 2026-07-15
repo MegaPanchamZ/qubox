@@ -69,10 +69,7 @@ impl PenCapture for NseventCapture {
         }
     }
 
-    fn start(
-        &mut self,
-        event_tx: Sender<PenEvent>,
-    ) -> Result<Receiver<PenEvent>, PenCaptureError> {
+    fn start(&mut self, event_tx: Sender<PenEvent>) -> Result<Receiver<PenEvent>, PenCaptureError> {
         #[cfg(all(target_os = "macos", feature = "nsevent"))]
         {
             // Real implementation spawns a thread with MainThreadMarker

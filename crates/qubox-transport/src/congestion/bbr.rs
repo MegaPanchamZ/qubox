@@ -131,8 +131,8 @@ impl RateController for BbrV3RateController {
         }
 
         let pace_bps = (self.max_bw_bps as f64 * pacing_gain) as u64;
-        self.target_bitrate_bps = (pace_bps as u32)
-            .clamp(self.cfg.min_bitrate_bps, self.cfg.max_bitrate_bps);
+        self.target_bitrate_bps =
+            (pace_bps as u32).clamp(self.cfg.min_bitrate_bps, self.cfg.max_bitrate_bps);
 
         self.target_bitrate_bps
     }
@@ -192,7 +192,10 @@ mod tests {
             }
             last = bps;
         }
-        assert!(stable >= 100, "BBR v3 should have stable periods; got {stable}");
+        assert!(
+            stable >= 100,
+            "BBR v3 should have stable periods; got {stable}"
+        );
     }
 
     #[test]

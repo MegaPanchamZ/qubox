@@ -32,9 +32,9 @@ use tokio::sync::{mpsc, RwLock};
 use tracing::{debug, info, warn};
 use uuid::Uuid;
 
+pub mod cluster;
 #[cfg(feature = "webtransport")]
 pub mod webtransport;
-pub mod cluster;
 
 /// Environment variable that holds the server secret used to sign
 /// `SessionCredential` HMACs and gate TURN issuance. When absent the
@@ -134,8 +134,7 @@ struct TurnRelayEntry {
 
 impl Default for SignalingState {
     fn default() -> Self {
-        let allow_unsigned =
-            !env_bool(REQUIRE_SIGNED_HELLO_ENV).unwrap_or(false);
+        let allow_unsigned = !env_bool(REQUIRE_SIGNED_HELLO_ENV).unwrap_or(false);
         Self {
             peers: Arc::new(RwLock::new(HashMap::new())),
             pending_pairings: Arc::new(RwLock::new(HashMap::new())),
@@ -253,7 +252,11 @@ impl PairingStore {
         self.persist(&snapshot)
     }
 
-    async fn remove_pairing(&self, host_peer_id: Uuid, client_peer_id: Uuid) -> anyhow::Result<bool> {
+    async fn remove_pairing(
+        &self,
+        host_peer_id: Uuid,
+        client_peer_id: Uuid,
+    ) -> anyhow::Result<bool> {
         let (snapshot, removed) = {
             let mut state = self.state.write().await;
             let before = state.pairings.len();
@@ -528,11 +531,7 @@ impl SignalingState {
     }
 
     async fn peer_tenant(&self, peer_id: Uuid) -> Option<Uuid> {
-        self.peers
-            .read()
-            .await
-            .get(&peer_id)
-            .map(|p| p.tenant_id)
+        self.peers.read().await.get(&peer_id).map(|p| p.tenant_id)
     }
 
     async fn unregister(&self, peer_id: Uuid) -> Option<PeerDescriptor> {
@@ -540,10 +539,7 @@ impl SignalingState {
         if let Some(ref peer) = removed {
             if let Some(bus) = &self.cluster {
                 let was_host = peer.descriptor.role == PeerRole::Host;
-                if let Err(e) = bus
-                    .unregister_peer(peer_id, peer.tenant_id, was_host)
-                    .await
-                {
+                if let Err(e) = bus.unregister_peer(peer_id, peer.tenant_id, was_host).await {
                     warn!(?e, %peer_id, "cluster unregister_peer failed");
                 }
             }
@@ -798,11 +794,7 @@ impl SignalingState {
         Ok(Some(grant))
     }
 
-    async fn is_paired_cluster(
-        &self,
-        host_peer_id: Uuid,
-        client_peer_id: Uuid,
-    ) -> bool {
+    async fn is_paired_cluster(&self, host_peer_id: Uuid, client_peer_id: Uuid) -> bool {
         if self
             .pairing_store
             .is_paired(host_peer_id, client_peer_id)
@@ -811,7 +803,10 @@ impl SignalingState {
             return true;
         }
         if let Some(bus) = &self.cluster {
-            return bus.is_paired(host_peer_id, client_peer_id).await.unwrap_or(false);
+            return bus
+                .is_paired(host_peer_id, client_peer_id)
+                .await
+                .unwrap_or(false);
         }
         false
     }
@@ -894,8 +889,7 @@ impl SignalingState {
 
         let client_peer_id = client.peer_id;
         let issued_unix_millis = unix_millis_after(Duration::ZERO);
-        let expires_unix_millis =
-            issued_unix_millis.saturating_add(SESSION_TOKEN_TTL_MILLIS);
+        let expires_unix_millis = issued_unix_millis.saturating_add(SESSION_TOKEN_TTL_MILLIS);
         let host_credential = SessionCredential::issue(
             &self.server_secret,
             request.session_id,
@@ -965,7 +959,6 @@ impl SignalingState {
             sync_only,
         })
     }
-
 
     async fn revoke_pairing(
         &self,
@@ -1038,7 +1031,11 @@ impl SignalingState {
         if host.role != PeerRole::Host {
             bail!("only hosts can create share links");
         }
-        let ttl = if ttl_secs == 0 { 900 } else { ttl_secs.min(86_400) };
+        let ttl = if ttl_secs == 0 {
+            900
+        } else {
+            ttl_secs.min(86_400)
+        };
         let now = unix_millis_after(Duration::ZERO);
         let expires = now.saturating_add(ttl.saturating_mul(1000));
         // 8 hex chars from random
@@ -1401,7 +1398,9 @@ async fn validate_get_relay_bearer(
     Ok(())
 }
 
-fn bearer_token(headers: &axum::http::HeaderMap) -> Result<Option<String>, (StatusCode, Json<serde_json::Value>)> {
+fn bearer_token(
+    headers: &axum::http::HeaderMap,
+) -> Result<Option<String>, (StatusCode, Json<serde_json::Value>)> {
     Ok(headers
         .get(header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
@@ -1517,12 +1516,7 @@ async fn handle_socket(socket: WebSocket, state: SignalingState) {
                 let tenant_id = Uuid::nil();
 
                 match state
-                    .register(
-                        descriptor.clone(),
-                        None,
-                        tenant_id,
-                        outbound_tx.clone(),
-                    )
+                    .register(descriptor.clone(), None, tenant_id, outbound_tx.clone())
                     .await
                 {
                     Ok(()) => {
@@ -1638,10 +1632,7 @@ async fn handle_socket(socket: WebSocket, state: SignalingState) {
                 )));
             }
             (Some(peer), ClientMessage::ListHosts) => {
-                let tenant = state
-                    .peer_tenant(peer.peer_id)
-                    .await
-                    .unwrap_or(Uuid::nil());
+                let tenant = state.peer_tenant(peer.peer_id).await.unwrap_or(Uuid::nil());
                 let _ = outbound_tx.send(ServerMessage::Hosts {
                     hosts: state.list_hosts(tenant).await,
                 });
@@ -1700,10 +1691,13 @@ async fn handle_socket(socket: WebSocket, state: SignalingState) {
                 }
             }
 
-            (Some(peer), ClientMessage::RevokePairing {
-                host_peer_id,
-                client_peer_id,
-            }) => {
+            (
+                Some(peer),
+                ClientMessage::RevokePairing {
+                    host_peer_id,
+                    client_peer_id,
+                },
+            ) => {
                 if let Err(error) = state
                     .revoke_pairing(peer.clone(), host_peer_id, client_peer_id)
                     .await
@@ -1732,10 +1726,13 @@ async fn handle_socket(socket: WebSocket, state: SignalingState) {
                         .await;
                 }
             }
-            (Some(peer), ClientMessage::CreateShareLink {
-                ttl_secs,
-                permissions,
-            }) => match state
+            (
+                Some(peer),
+                ClientMessage::CreateShareLink {
+                    ttl_secs,
+                    permissions,
+                },
+            ) => match state
                 .create_share_link(peer.clone(), ttl_secs, permissions)
                 .await
             {
@@ -1779,15 +1776,11 @@ async fn handle_socket(socket: WebSocket, state: SignalingState) {
                         .await;
                 }
             }
-
         }
     }
 
     if let Some(peer) = registered_peer {
-        let tenant = state
-            .peer_tenant(peer.peer_id)
-            .await
-            .unwrap_or(Uuid::nil());
+        let tenant = state.peer_tenant(peer.peer_id).await.unwrap_or(Uuid::nil());
         state.unregister(peer.peer_id).await;
         state.remove_sessions_for(peer.peer_id).await;
         state.broadcast_presence(peer, tenant, false).await;
@@ -1930,7 +1923,10 @@ mod tests {
         state: &SignalingState,
         role: PeerRole,
         public_key: [u8; 32],
-    ) -> (PeerDescriptor, tokio::sync::mpsc::UnboundedSender<ServerMessage>) {
+    ) -> (
+        PeerDescriptor,
+        tokio::sync::mpsc::UnboundedSender<ServerMessage>,
+    ) {
         let key = generate_signing_key();
         let _ = key;
         let _ = public_key;
@@ -2093,7 +2089,8 @@ mod tests {
         assert_eq!(plan.client_credential.host_pubkey, host_pk);
         assert_eq!(plan.client_credential.client_pubkey, client_pk);
         assert!(
-            plan.client_credential.verify(state.server_secret(), unix_millis_after(Duration::ZERO)),
+            plan.client_credential
+                .verify(state.server_secret(), unix_millis_after(Duration::ZERO)),
             "issued credential must verify under the server secret"
         );
     }
@@ -2231,9 +2228,9 @@ mod tests {
                     requested_transport: Some(TransportKind::WebRtc),
                     preferred_codec: Some(VideoCodec::H264),
                     video: None,
-            permissions: Default::default(),
-            sync_only: false,
-        },
+                    permissions: Default::default(),
+                    sync_only: false,
+                },
             )
             .await
             .unwrap();
@@ -2312,9 +2309,9 @@ mod tests {
                     requested_transport: Some(TransportKind::WebRtc),
                     preferred_codec: Some(VideoCodec::H264),
                     video: None,
-            permissions: Default::default(),
-            sync_only: false,
-        },
+                    permissions: Default::default(),
+                    sync_only: false,
+                },
             )
             .await
             .unwrap();
@@ -2485,8 +2482,14 @@ mod tests {
             .header("authorization", format!("Bearer {bearer}"))
             .body(axum::body::Body::empty())
             .unwrap();
-        let res = tower::ServiceExt::oneshot(state.router(), req).await.unwrap();
-        assert_eq!(res.status(), 200, "GET should return the entry published by POST");
+        let res = tower::ServiceExt::oneshot(state.router(), req)
+            .await
+            .unwrap();
+        assert_eq!(
+            res.status(),
+            200,
+            "GET should return the entry published by POST"
+        );
         let json: serde_json::Value = axum::body::to_bytes(res.into_body(), 4096)
             .await
             .map(|b| serde_json::from_slice(&b).unwrap_or(serde_json::Value::Null))
@@ -2502,7 +2505,8 @@ mod tests {
         let state = SignalingState::default();
         let host_key = generate_signing_key();
         let host_pk = host_key.verifying_key().to_bytes();
-        let (host_descriptor, host_tx) = register_signed_peer(&state, PeerRole::Host, host_pk).await;
+        let (host_descriptor, host_tx) =
+            register_signed_peer(&state, PeerRole::Host, host_pk).await;
 
         let issued_unix_millis = unix_millis_after(Duration::ZERO);
         let expires_unix_millis = issued_unix_millis + 60_000;
@@ -2532,17 +2536,26 @@ mod tests {
         let res = tower::ServiceExt::oneshot(state.clone().router(), req)
             .await
             .unwrap();
-        assert_eq!(res.status(), 200, "POST with valid HMAC credential should succeed");
+        assert_eq!(
+            res.status(),
+            200,
+            "POST with valid HMAC credential should succeed"
+        );
 
         // GET requires a credential whose cred chain names the target peer's
         // pubkey. The credential above does (host_pk), so it satisfies GET.
         let req = axum::http::Request::builder()
             .method("GET")
-            .uri(format!("/v1/turn/relay-address/{}", host_descriptor.peer_id))
+            .uri(format!(
+                "/v1/turn/relay-address/{}",
+                host_descriptor.peer_id
+            ))
             .header("authorization", format!("Bearer {bearer}"))
             .body(axum::body::Body::empty())
             .unwrap();
-        let res = tower::ServiceExt::oneshot(state.router(), req).await.unwrap();
+        let res = tower::ServiceExt::oneshot(state.router(), req)
+            .await
+            .unwrap();
         assert_eq!(res.status(), 200);
         drop(host_tx);
     }
@@ -2584,14 +2597,13 @@ mod tests {
             .header("authorization", format!("Bearer {bearer}"))
             .body(axum::body::Body::empty())
             .unwrap();
-        let res = tower::ServiceExt::oneshot(state.router(), req).await.unwrap();
+        let res = tower::ServiceExt::oneshot(state.router(), req)
+            .await
+            .unwrap();
         assert_eq!(res.status(), 404);
     }
 
-    fn make_valid_hmac_credential(
-        secret: &[u8],
-        expires_unix_millis: u64,
-    ) -> SessionCredential {
+    fn make_valid_hmac_credential(secret: &[u8], expires_unix_millis: u64) -> SessionCredential {
         let session_id = Uuid::new_v4();
         let host_key = generate_signing_key();
         let client_key = generate_signing_key();
@@ -2688,7 +2700,9 @@ mod tests {
             .header("authorization", format!("Bearer {bearer}"))
             .body(axum::body::Body::from(body))
             .unwrap();
-        let res = tower::ServiceExt::oneshot(state.router(), req).await.unwrap();
+        let res = tower::ServiceExt::oneshot(state.router(), req)
+            .await
+            .unwrap();
         assert_eq!(
             res.status(),
             StatusCode::FORBIDDEN,
@@ -2706,8 +2720,10 @@ mod tests {
         let state = SignalingState::default();
         // peer_id never connects → peer_pubkey() returns None.
         let unauthenticated_peer_id = Uuid::new_v4();
-        let credential =
-            make_valid_hmac_credential(state.server_secret(), unix_millis_after(Duration::ZERO) + 60_000);
+        let credential = make_valid_hmac_credential(
+            state.server_secret(),
+            unix_millis_after(Duration::ZERO) + 60_000,
+        );
         let bearer = encode_credential(&credential);
         let body = serde_json::to_string(&PublishRelayRequest {
             peer_id: unauthenticated_peer_id,
@@ -2721,7 +2737,9 @@ mod tests {
             .header("authorization", format!("Bearer {bearer}"))
             .body(axum::body::Body::from(body))
             .unwrap();
-        let res = tower::ServiceExt::oneshot(state.router(), req).await.unwrap();
+        let res = tower::ServiceExt::oneshot(state.router(), req)
+            .await
+            .unwrap();
         assert_eq!(
             res.status(),
             StatusCode::FORBIDDEN,
@@ -2744,7 +2762,9 @@ mod tests {
             .uri(format!("/v1/turn/relay-address/{peer_id}"))
             .body(axum::body::Body::empty())
             .unwrap();
-        let res = tower::ServiceExt::oneshot(state.router(), req).await.unwrap();
+        let res = tower::ServiceExt::oneshot(state.router(), req)
+            .await
+            .unwrap();
         assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
     }
 
@@ -2775,11 +2795,16 @@ mod tests {
         let bearer = encode_credential(&credential);
         let req = axum::http::Request::builder()
             .method("GET")
-            .uri(format!("/v1/turn/relay-address/{}", target_descriptor.peer_id))
+            .uri(format!(
+                "/v1/turn/relay-address/{}",
+                target_descriptor.peer_id
+            ))
             .header("authorization", format!("Bearer {bearer}"))
             .body(axum::body::Body::empty())
             .unwrap();
-        let res = tower::ServiceExt::oneshot(state.router(), req).await.unwrap();
+        let res = tower::ServiceExt::oneshot(state.router(), req)
+            .await
+            .unwrap();
         assert_eq!(res.status(), StatusCode::FORBIDDEN);
     }
 
@@ -2799,7 +2824,9 @@ mod tests {
             .header("authorization", format!("Bearer {peer_id}"))
             .body(axum::body::Body::empty())
             .unwrap();
-        let res = tower::ServiceExt::oneshot(state.router(), req).await.unwrap();
+        let res = tower::ServiceExt::oneshot(state.router(), req)
+            .await
+            .unwrap();
         assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
     }
 
@@ -2828,8 +2855,7 @@ mod tests {
             .unwrap();
         let res = tower::ServiceExt::oneshot(app, req).await.unwrap();
         assert!(
-            res.status() == StatusCode::UNAUTHORIZED
-                || res.status() == StatusCode::FORBIDDEN,
+            res.status() == StatusCode::UNAUTHORIZED || res.status() == StatusCode::FORBIDDEN,
             "expired credential must be rejected, got {}",
             res.status()
         );
@@ -2884,7 +2910,11 @@ mod tests {
             .body(axum::body::Body::from(body))
             .unwrap();
         let res = tower::ServiceExt::oneshot(app, req).await.unwrap();
-        assert_eq!(res.status(), 200, "legacy UUID bearer must still be accepted");
+        assert_eq!(
+            res.status(),
+            200,
+            "legacy UUID bearer must still be accepted"
+        );
     }
 
     /// A bearer with non-zero pubkeys but a wrong HMAC must be rejected
@@ -2942,5 +2972,4 @@ mod tests {
         assert!(reloaded.contains(&grant));
         let _ = std::fs::remove_dir_all(dir);
     }
-
 }

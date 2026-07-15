@@ -20,13 +20,13 @@ use std::env;
 
 pub mod coordinates;
 pub mod error;
-pub mod soft_capture;
 pub mod ffmpeg_raw;
+pub mod soft_capture;
 pub mod traits;
 pub mod types;
 
+pub use ffmpeg_raw::{resolve_pipewire_node, FfmpegRawCaptureSession, FfmpegRawSource};
 pub use soft_capture::{soft_capture_enabled, SoftCaptureSession};
-pub use ffmpeg_raw::{FfmpegRawCaptureSession, FfmpegRawSource, resolve_pipewire_node};
 
 #[cfg(all(target_os = "linux", feature = "x11"))]
 pub mod x11;

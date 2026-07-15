@@ -130,10 +130,7 @@ mod tests {
         // Small window — should be past deadline immediately
         // (last_event_time was set on first push).
         std::thread::sleep(Duration::from_millis(1));
-        assert_eq!(
-            c.should_flush(false),
-            Some(FlushReason::Deadline)
-        );
+        assert_eq!(c.should_flush(false), Some(FlushReason::Deadline));
         let batch = c.flush();
         assert_eq!(batch, vec![10, 20]);
     }

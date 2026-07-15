@@ -128,10 +128,7 @@ impl DeviceIdentity {
 
     /// Decrypt the private key using the environmental KEK. The
     /// returned `UnlockedIdentity` zeroizes its private key on drop.
-    pub fn unlock(
-        &self,
-        identity_path: Option<&Path>,
-    ) -> anyhow::Result<UnlockedIdentity> {
+    pub fn unlock(&self, identity_path: Option<&Path>) -> anyhow::Result<UnlockedIdentity> {
         let mut kek = derive_kek(identity_path)?;
         let private = decrypt_envelope(&kek, &self.encrypted_private_key, &self.public_key)?;
         kek.zeroize();
@@ -156,9 +153,7 @@ impl DeviceIdentity {
     ) -> anyhow::Result<()> {
         let sk = SigningKey::from_bytes(private_key);
         if sk.verifying_key().to_bytes() != self.public_key {
-            anyhow::bail!(
-                "private key does not match identity.public_key; refusing to seal"
-            );
+            anyhow::bail!("private key does not match identity.public_key; refusing to seal");
         }
         self.encrypted_private_key = encrypt_envelope(kek, salt, private_key, &self.public_key)?;
         Ok(())
@@ -270,8 +265,7 @@ fn read_envelope_salt(path: &Path) -> anyhow::Result<Vec<u8>> {
                 path.display()
             )
         })?;
-    hex::decode(salt_hex)
-        .with_context(|| format!("invalid salt hex in {}", path.display()))
+    hex::decode(salt_hex).with_context(|| format!("invalid salt hex in {}", path.display()))
 }
 
 #[cfg(unix)]
@@ -624,7 +618,10 @@ fn pick_kek_and_salt_for_first_run(path: &Path) -> anyhow::Result<KekAndSalt> {
         return Ok(KekAndSalt { kek, salt });
     }
     let kek = ensure_master_key(&master_key_path(path))?;
-    Ok(KekAndSalt { kek, salt: [0_u8; 16] })
+    Ok(KekAndSalt {
+        kek,
+        salt: [0_u8; 16],
+    })
 }
 
 fn tighten_files(path: &Path) -> anyhow::Result<()> {
@@ -715,8 +712,8 @@ fn decrypt_envelope(
             AT_REST_AEAD_TAG
         );
     }
-    let nonce_bytes = hex::decode(&envelope.nonce_hex)
-        .map_err(|e| anyhow!("invalid nonce hex: {e}"))?;
+    let nonce_bytes =
+        hex::decode(&envelope.nonce_hex).map_err(|e| anyhow!("invalid nonce hex: {e}"))?;
     if nonce_bytes.len() != 12 {
         anyhow::bail!("envelope nonce must be 12 bytes, got {}", nonce_bytes.len());
     }
@@ -754,11 +751,7 @@ mod tests {
     use ed25519_dalek::{Signer, Verifier};
 
     fn unique_dir(suffix: &str) -> PathBuf {
-        let dir = env::temp_dir().join(format!(
-            "qubox-identity-{}-{}",
-            suffix,
-            Uuid::new_v4()
-        ));
+        let dir = env::temp_dir().join(format!("qubox-identity-{}-{}", suffix, Uuid::new_v4()));
         fs::create_dir_all(&dir).unwrap();
         dir
     }
@@ -956,8 +949,7 @@ mod tests {
             unsafe {
                 env::set_var(IDENTITY_PASSPHRASE_ENV, "correct horse battery staple");
             }
-            let (first, _) =
-                load_or_create_identity(Some(path.clone()), Some("p".into())).unwrap();
+            let (first, _) = load_or_create_identity(Some(path.clone()), Some("p".into())).unwrap();
             let first_pk = first.public_key;
 
             let (second, _) =
