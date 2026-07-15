@@ -1,0 +1,147 @@
+name: Mirror to private (qubox-cloud)
+
+permissions:
+  contents: read
+
+# Cross-repo mirror: when something lands on the public AGPL repo main,
+# open a PR against the private `qubox-cloud` repo so the proprietary
+# control plane can pick up the same open-source sources.
+#
+# Required secret in this repo: PRIVATE_REPO_TOKEN — fine-grained PAT
+# (or classic PAT) with `contents: write` on MegaPanchamZ/qubox-cloud.
+#
+# Required repo variable: PRIVATE_REPO (defaults to MegaPanchamZ/qubox-cloud).
+#
+# Tags (vX.Y.Z) are mirrored as well: a release on this repo triggers
+# a corresponding release on the private repo, which then runs its
+# own release.yml + deploy-signaling-server.yml.
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "crates/**"
+      - "apps/qubox-signaling-server/**"
+      - "apps/qubox-host-agent/**"
+      - "apps/qubox-client-cli/**"
+      - "apps/qubox-client-gui/**"
+      - "apps/qubox-daemon/**"
+      - "clients/**"
+      - "ops/self-host/**"
+      - "ops/signing/**"
+      - "ops/local/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      ref_filter:
+        description: "Override git ref to mirror (e.g. a particular tag). Leave blank to use HEAD."
+        required: false
+        type: string
+      target_branch:
+        description: "Branch in the private repo to PR against"
+        required: false
+        type: string
+        default: main
+
+concurrency:
+  group: mirror-to-private
+  cancel-in-progress: false  # Don't interrupt in-flight mirrors
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    env:
+      TARGET_REPO: ${{ vars.PRIVATE_REPO || 'MegaPanchamZ/qubox-cloud' }}
+      TARGET_BRANCH: ${{ inputs.target_branch || 'main' }}
+    steps:
+      - name: Validate secrets
+        env:
+          TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
+        run: |
+          if [[ -z "${TOKEN:-}" ]]; then
+            echo "FATAL: PRIVATE_REPO_TOKEN secret is not set on this repo." >&2
+            echo "Add a fine-grained PAT with 'contents: write' on $TARGET_REPO." >&2
+            exit 1
+          fi
+
+      - name: Resolve ref + commit
+        id: resolve
+        env:
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          REF_OVERRIDE: ${{ inputs.ref_filter }}
+        run: |
+          if [[ -n "$REF_OVERRIDE" ]]; then
+            echo "ref=$REF_OVERRIDE" >> "$GITHUB_OUTPUT"
+          elif [[ "$EVENT" == "push" ]]; then
+            case "$REF" in
+              refs/tags/*) echo "ref=${REF#refs/tags/}" >> "$GITHUB_OUTPUT" ;;
+              refs/heads/*) echo "ref=${REF#refs/heads/}" >> "$GITHUB_OUTPUT" ;;
+              *) echo "Unsupported ref $REF" >&2; exit 2 ;;
+            esac
+            echo "commit=$GITHUB_SHA" >> "$GITHUB_OUTPUT"
+          else
+            echo "ref=main" >> "$GITHUB_OUTPUT"
+            echo "commit=$GITHUB_SHA" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout (shallow, public)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.resolve.outputs.ref }}
+          fetch-depth: 1
+
+      - name: Mirror branch push
+        if: steps.resolve.outputs.ref == 'main'
+        env:
+          TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
+        run: |
+          set -euo pipefail
+          echo "[mirror] syncing $GITHUB_SHA → $TARGET_REPO@$TARGET_BRANCH"
+          git push "https://x-access-token:${TOKEN}@github.com/${TARGET_REPO}.git" \
+                  "$GITHUB_SHA:refs/heads/$TARGET_BRANCH"
+          echo "[mirror] branch updated"
+
+      - name: Mirror tag push
+        if: startsWith(steps.resolve.outputs.ref, 'v')
+        env:
+          TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
+        run: |
+          set -euo pipefail
+          local_ref="$GITHUB_SHA"
+          local_tag="${{ steps.resolve.outputs.ref }}"
+          echo "[mirror] syncing tag $local_tag ($local_ref) → $TARGET_REPO"
+
+          # Push the commit + tag. We use --force because tag rewrites
+          # are rare and we want the mirror to converge.
+          git push "https://x-access-token:${TOKEN}@github.com/${TARGET_REPO}.git" \
+                  "$local_ref:refs/tags/$local_tag"
+          echo "[mirror] tag pushed"
+
+      - name: Verify push
+        if: always()
+        env:
+          TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
+        run: |
+          set -euo pipefail
+          echo "[mirror] verifying…"
+          resp=$(curl -fsSL \
+            -H "Authorization: Bearer ${TOKEN}" \
+            "https://api.github.com/repos/${TARGET_REPO}/commits/${TARGET_BRANCH}")
+          head_sha=$(echo "$resp" | jq -r '.sha // empty')
+          if [[ -z "$head_sha" ]]; then
+            echo "[mirror] WARN: could not read head; not fatal."
+            exit 0
+          fi
+          echo "[mirror] target HEAD = $head_sha"
+          if [[ "$head_sha" == "$GITHUB_SHA" ]]; then
+            echo "[mirror] OK: private $TARGET_BRANCH == public $GITHUB_SHA"
+          else
+            echo "[mirror] NOTE: private $TARGET_BRANCH is now $head_sha (expected $GITHUB_SHA)"
+            echo "[mirror] this is normal when the private repo has prior commits."
+          fi
