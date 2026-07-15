@@ -59,15 +59,14 @@ jobs:
       TARGET_REPO: ${{ vars.PRIVATE_REPO || 'MegaPanchamZ/qubox-cloud' }}
       TARGET_BRANCH: ${{ inputs.target_branch || 'main' }}
     steps:
-      - name: Validate secrets
-        env:
-          TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
+      - name: Skip if secrets not configured
+        if: ${{ secrets.PRIVATE_REPO_TOKEN == '' }}
         run: |
-          if [[ -z "${TOKEN:-}" ]]; then
-            echo "FATAL: PRIVATE_REPO_TOKEN secret is not set on this repo." >&2
-            echo "Add a fine-grained PAT with 'contents: write' on $TARGET_REPO." >&2
-            exit 1
-          fi
+          echo "::notice::PRIVATE_REPO_TOKEN secret is not set on this repo."
+          echo "::notice::Skipping mirror-to-private workflow."
+          echo "::notice::Add a fine-grained PAT with 'contents: write' on $TARGET_REPO to enable."
+          echo "::notice::See docs/SELF_HOSTING.md (private repo: docs/operations/cicd-setup.md)."
+          exit 0
 
       - name: Resolve ref + commit
         id: resolve
@@ -97,7 +96,7 @@ jobs:
           fetch-depth: 1
 
       - name: Mirror branch push
-        if: steps.resolve.outputs.ref == 'main'
+        if: ${{ secrets.PRIVATE_REPO_TOKEN != '' && steps.resolve.outputs.ref == 'main' }}
         env:
           TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
         run: |
@@ -108,7 +107,7 @@ jobs:
           echo "[mirror] branch updated"
 
       - name: Mirror tag push
-        if: startsWith(steps.resolve.outputs.ref, 'v')
+        if: ${{ secrets.PRIVATE_REPO_TOKEN != '' && startsWith(steps.resolve.outputs.ref, 'v') }}
         env:
           TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
         run: |

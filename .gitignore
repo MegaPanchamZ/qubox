@@ -1,5 +1,11 @@
 # Build artifacts
 /target/
+/dist/
+/scratch/
+
+# Pre-built release artifacts (built by release.yml per tag)
+dist/windows-x86_64/*.exe
+dist/windows-x86_64/*.msi
 
 # Editor / IDE
 .vscode/
@@ -56,6 +62,9 @@ credentials-*.json
 apps/qubox-client-gui/dist/
 apps/qubox-client-gui/node_modules/
 apps/qubox-daemon/dist/qubox-*
+
+# Internal VM/lab scratch (was ops/vm-lab/, now removed)
+.scratch/
 
 # Pre-built release artifacts (built by release.yml per tag)
 dist/windows-x86_64/*.exe
