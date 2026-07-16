@@ -168,7 +168,10 @@ mod tests {
     #[test]
     fn detect_backend_on_linux_x11_works() {
         // Only test if DISPLAY is a non-empty usable value
-        if std::env::var("DISPLAY").map(|d| !d.is_empty()).unwrap_or(false) {
+        if std::env::var("DISPLAY")
+            .map(|d| !d.is_empty())
+            .unwrap_or(false)
+        {
             let backend = detect_backend().expect("detect_backend should succeed on X11");
             let displays = backend.enumerate_displays();
             assert!(
