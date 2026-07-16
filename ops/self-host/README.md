@@ -3,7 +3,7 @@
 ## 3-step start
 
 ```bash
-cd /path/to/better-parsec
+cd "$(git rev-parse --show-toplevel)"
 export QUBOX_SIGNALING_SECRET=$(openssl rand -hex 32)
 export QUBOX_TURN_SECRET=$(openssl rand -hex 16)
 docker compose -f ops/self-host/docker-compose.yml up -d --build

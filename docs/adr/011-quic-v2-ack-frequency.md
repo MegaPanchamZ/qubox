@@ -720,7 +720,7 @@ runtime can tune without a rebuild.
 
 ### §12. Verification commands
 
-Run these from the workspace root (`/mnt/DevDrive/development/better-parsec`).
+Run these from the workspace root (the cloned `qubox`/`qubox-cloud` tree).
 
 ```bash
 # 1. Confirm the workspace builds with the bumped versions.
