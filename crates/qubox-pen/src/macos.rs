@@ -29,6 +29,7 @@ use crate::traits::{PenCapture, PenDeviceInfo, PenEvent};
 /// Must run on the main thread (`MainThreadMarker::new()`). Spawns a
 /// dedicated OS thread that calls `NSEvent::nextEventMatchingMask` in
 /// a polling loop.
+#[derive(Debug)]
 pub struct NseventCapture;
 
 impl NseventCapture {
