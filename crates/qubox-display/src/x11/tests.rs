@@ -12,9 +12,15 @@ use crate::types::{
 
 /// Check if an X11 display is available for testing.
 fn x11_available() -> bool {
-    std::env::var("DISPLAY")
-        .map(|d| !d.is_empty())
-        .unwrap_or(false)
+    // Empty string counts as unset (CI sets DISPLAY="" to force skip).
+    let Ok(d) = std::env::var("DISPLAY") else {
+        return false;
+    };
+    if d.is_empty() {
+        return false;
+    }
+    // Probe connectivity so a dead Xvfb does not panic unit tests.
+    super::X11RandrBackend::new().is_ok()
 }
 
 /// Skip message helper for display-less environments.

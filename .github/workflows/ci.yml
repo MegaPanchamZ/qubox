@@ -91,27 +91,14 @@ jobs:
           -D clippy::correctness -D clippy::suspicious -D clippy::perf
           -D unused-imports -D unused-variables
 
-      - name: Start Xvfb :99 (Linux only)
-        if: runner.os == 'Linux'
-        id: xvfb
-        continue-on-error: true
-        run: |
-          # Xvfb is more reliable than Xephyr on shared GitHub runners.
-          nohup Xvfb :99 -screen 0 1024x768x24 > /tmp/xvfb.log 2>&1 < /dev/null &
-          disown
-          sleep 2
-          DISPLAY=:99 xdpyinfo >/dev/null
-          echo "Xvfb :99 started"
-
       - name: Test (Linux — full workspace)
         if: runner.os == 'Linux'
-        run: |
-          if [ "${{ steps.xvfb.outcome }}" = "success" ]; then
-            export DISPLAY=:99
-          else
-            unset DISPLAY || true
-          fi
-          cargo test --workspace --all-targets --exclude qubox-client-gui
+        # No DISPLAY here: X11 unit tests skip cleanly. Dedicated e2e job owns Xephyr/Xvfb.
+        env:
+          DISPLAY: ""
+        run: >
+          cargo test --workspace --all-targets
+          --exclude qubox-client-gui
 
       - name: Test (macOS / Windows — pure-Rust crates)
         if: runner.os != 'Linux'
