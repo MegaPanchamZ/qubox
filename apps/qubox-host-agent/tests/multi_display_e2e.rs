@@ -25,12 +25,12 @@ fn require_e2e() -> bool {
 
 #[test]
 fn multi_display_e2e_skipped_without_xephyr() {
-    if !xephyr_99_available() {
-        if require_e2e() {
-            panic!("QUBOX_REQUIRE_E2E=1 but DISPLAY is not :99 (start Xephyr)");
-        }
-        eprintln!("SKIPPED: multi_display_e2e (Xephyr :99 not available)");
+    if !require_e2e() {
+        eprintln!("SKIPPED: multi_display_e2e (set QUBOX_REQUIRE_E2E=1 to run)");
         return;
+    }
+    if !xephyr_99_available() {
+        panic!("QUBOX_REQUIRE_E2E=1 but DISPLAY is not :99 (start Xephyr/Xvfb)");
     }
     eprintln!("Xephyr :99 detected");
 }

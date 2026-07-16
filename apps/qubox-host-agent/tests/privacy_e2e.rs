@@ -32,14 +32,14 @@ fn require_e2e() -> bool {
 
 #[test]
 fn privacy_blank_overlay_e2e() {
-    if !xephyr_99_available() {
-        if require_e2e() {
-            panic!("QUBOX_REQUIRE_E2E=1 but DISPLAY is not :99 (start Xephyr)");
-        }
-        eprintln!("SKIPPED: privacy_blank_overlay_e2e (Xephyr :99 not available)");
+    if !require_e2e() {
+        eprintln!("SKIPPED: privacy_blank_overlay_e2e (set QUBOX_REQUIRE_E2E=1 to run)");
         return;
     }
-    eprintln!("Xephyr :99 detected; starting privacy e2e test");
+    if !xephyr_99_available() {
+        panic!("QUBOX_REQUIRE_E2E=1 but DISPLAY is not :99 (start Xephyr/Xvfb)");
+    }
+    eprintln!("DISPLAY :99 + QUBOX_REQUIRE_E2E; starting privacy e2e test");
 
     // ── Start signaling server ──
     // Use the workspace signaling-server binary (build it first).

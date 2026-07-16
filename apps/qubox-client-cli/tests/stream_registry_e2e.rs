@@ -56,14 +56,15 @@ fn which_or_build(name: &str) -> String {
 
 #[test]
 fn stream_registry_tile_list_e2e() {
-    if !xephyr_99_available() {
-        if require_e2e() {
-            panic!("QUBOX_REQUIRE_E2E=1 but DISPLAY is not :99 (start Xephyr)");
-        }
-        eprintln!("SKIPPED: stream_registry_tile_list_e2e (Xephyr :99 not available)");
+    // Only run in the dedicated e2e job (needs built bins + real display).
+    if !require_e2e() {
+        eprintln!("SKIPPED: stream_registry_tile_list_e2e (set QUBOX_REQUIRE_E2E=1 to run)");
         return;
     }
-    eprintln!("Xephyr :99 detected; starting stream registry e2e test");
+    if !xephyr_99_available() {
+        panic!("QUBOX_REQUIRE_E2E=1 but DISPLAY is not :99 (start Xephyr/Xvfb)");
+    }
+    eprintln!("DISPLAY :99 + QUBOX_REQUIRE_E2E; starting stream registry e2e test");
 
     // ── Start signaling server ──
     let _ = std::process::Command::new("pkill")
