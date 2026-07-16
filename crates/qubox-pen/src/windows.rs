@@ -75,6 +75,7 @@ impl crate::traits::PenInjector for WinTabInjector {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::traits::{PenCapture, PenInjector};
 
     #[test]
     fn wm_pointer_capture_new_succeeds() {

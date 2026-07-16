@@ -325,6 +325,10 @@ impl UpdateChecker {
 
         // Write restart sentinel
         if let Some(data_dir) = self.data_dir() {
+            std::fs::create_dir_all(&data_dir).map_err(|e| UpdateError::Io {
+                path: data_dir.clone(),
+                source: e,
+            })?;
             let sentinel = data_dir.join(RESTART_SENTINEL);
             std::fs::write(&sentinel, self.current_version.as_bytes()).map_err(|e| {
                 UpdateError::Io {

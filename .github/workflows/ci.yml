@@ -102,10 +102,22 @@ jobs:
           DISPLAY=:99 xdpyinfo >/dev/null
           echo "Xephyr :99 started"
 
-      - name: Test (skip client-gui)
+      - name: Test (Linux — full workspace)
+        if: runner.os == 'Linux'
         env:
-          DISPLAY: ${{ runner.os == 'Linux' && steps.xephyr.outcome == 'success' && ':99' || '' }}
-        run: cargo test --workspace --all-targets --exclude client-gui
+          DISPLAY: ${{ steps.xephyr.outcome == 'success' && ':99' || '' }}
+        run: >
+          cargo test --workspace --all-targets
+          --exclude qubox-client-gui
+
+      - name: Test (macOS / Windows — pure-Rust crates)
+        if: runner.os != 'Linux'
+        run: >
+          cargo test --all-targets
+          -p qubox-proto -p qubox-signaling -p qubox-signaling-server
+          -p qubox-transport -p qubox-sync -p qubox-identity
+          -p qubox-clipboard -p qubox-pen -p qubox-platform
+          -p qubox-daemon -p qubox-rl-policy
 
       - name: GUI vitest (Linux)
         if: runner.os == 'Linux'
