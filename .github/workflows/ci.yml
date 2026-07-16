@@ -54,31 +54,44 @@ jobs:
             libavcodec-dev libavformat-dev libavutil-dev libswscale-dev \
             libpulse-dev libdbus-1-dev xserver-xephyr \
             libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev \
-            librsvg2-dev patchelf
+            librsvg2-dev patchelf libsystemd-dev
 
       - name: Install macOS system deps (homebrew)
         if: runner.os == 'macOS'
         run: |
           brew install ffmpeg
 
-      - name: Check formatting
-        run: cargo fmt --all -- --check
-
-      - name: Clippy
-        # Deny correctness / suspicious / perf. Style-only nits stay warnings so
-        # the core gate stays green while the codebase is still being cleaned up.
-        run: >
-          cargo clippy --workspace --all-targets --
-          -D clippy::correctness
-          -D clippy::suspicious
-          -D clippy::perf
-          -D unused-imports
-          -D unused-variables
-
       - name: Install Windows dependencies
         if: runner.os == 'Windows'
         run: |
-          choco install ffmpeg
+          choco install ffmpeg cmake -y
+          # audiopus_sys needs a system opus; vcpkg/choco may lag — skip mic on win if missing
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Clippy (Linux)
+        if: runner.os == 'Linux'
+        run: >
+          cargo clippy --workspace --all-targets --features systemd --
+          -D clippy::correctness -D clippy::suspicious -D clippy::perf
+          -D unused-imports -D unused-variables
+
+      - name: Clippy (macOS)
+        if: runner.os == 'macOS'
+        run: >
+          cargo clippy --workspace --all-targets --
+          -D clippy::correctness -D clippy::suspicious -D clippy::perf
+          -D unused-imports -D unused-variables
+
+      - name: Clippy (Windows)
+        if: runner.os == 'Windows'
+        # Skip mic/opus native build on Windows CI (needs system Opus).
+        run: >
+          cargo clippy --workspace --all-targets
+          --exclude qubox-mic --exclude qubox-host-agent --exclude qubox-client-gui --
+          -D clippy::correctness -D clippy::suspicious -D clippy::perf
+          -D unused-imports -D unused-variables
 
       - name: Start Xephyr :99 (Linux only)
         if: runner.os == 'Linux'
