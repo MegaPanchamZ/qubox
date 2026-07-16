@@ -263,8 +263,6 @@ fn run_pipeline_loop(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     #[test]
     fn opus_encode_decode_round_trip_is_lossless_within_one_sample() {
         let mut encoder = opus::Encoder::new(48_000, opus::Channels::Mono, opus::Application::Voip)

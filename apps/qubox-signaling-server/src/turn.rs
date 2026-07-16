@@ -8,7 +8,7 @@
 //! (C4 in `docs/critical-architectural-review.md`).
 
 use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::{
     extract::Extension,
@@ -36,6 +36,7 @@ pub struct TurnConfig {
 #[derive(Debug, Clone)]
 pub struct TurnServerConfig {
     pub url: String,
+    #[allow(dead_code)]
     pub weight: u32,
     pub region: String,
 }

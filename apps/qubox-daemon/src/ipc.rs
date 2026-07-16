@@ -709,6 +709,7 @@ async fn handle_connection(
 
 // ── Request dispatch ───────────────────────────────────────────────────
 
+#[allow(clippy::too_many_arguments)]
 async fn dispatch_request(
     req: IpcRequest,
     corr_id: u64,
@@ -2314,9 +2315,11 @@ mod tests {
         tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
 
         let mut client = IpcClient::connect(&cfg).await.unwrap();
-        let mut rule = qubox_sync::SyncRule::default();
-        rule.paths = vec!["/tmp/saves".into()];
-        rule.process_names = vec!["game.exe".into()];
+        let rule = qubox_sync::SyncRule {
+            paths: vec!["/tmp/saves".into()],
+            process_names: vec!["game.exe".into()],
+            ..Default::default()
+        };
         let _: IpcResponse = client
             .call(&IpcRequest::SyncAddRule { rule: rule.clone() })
             .await

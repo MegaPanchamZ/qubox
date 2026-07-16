@@ -4,7 +4,9 @@
 //! view (red fullscreen overlay).
 
 use minifb::Window;
-use qubox_display::{Point, Rect, Size};
+use qubox_display::Rect;
+#[cfg(test)]
+use qubox_display::{Point, Size};
 
 /// Thickness of the red border in pixels.
 const BORDER_THICKNESS: u32 = 4;

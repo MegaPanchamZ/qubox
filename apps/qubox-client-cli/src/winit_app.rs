@@ -32,7 +32,7 @@ use anyhow::Result;
 use winit::{
     event::{Event, WindowEvent},
     event_loop::{EventLoop, EventLoopWindowTarget},
-    window::{Window, WindowId},
+    window::Window,
 };
 
 use crate::winit_user_event::WinitUserEvent;

@@ -17,7 +17,7 @@ pub fn notify_ready() -> io::Result<()> {
     #[cfg(all(unix, feature = "systemd"))]
     {
         let entries = [("READY", "1")];
-        let _ = systemd::daemon::notify(false, entries.iter()).map_err(|e| io::Error::other(e))?;
+        let _ = systemd::daemon::notify(false, entries.iter()).map_err(io::Error::other)?;
     }
     Ok(())
 }
@@ -30,7 +30,7 @@ pub fn notify_stopping() -> io::Result<()> {
     #[cfg(all(unix, feature = "systemd"))]
     {
         let entries = [("STOPPING", "1")];
-        let _ = systemd::daemon::notify(false, entries.iter()).map_err(|e| io::Error::other(e))?;
+        let _ = systemd::daemon::notify(false, entries.iter()).map_err(io::Error::other)?;
     }
     Ok(())
 }
@@ -43,7 +43,7 @@ pub fn watchdog_ping() -> io::Result<()> {
     #[cfg(all(unix, feature = "systemd"))]
     {
         let entries = [("WATCHDOG", "1")];
-        let _ = systemd::daemon::notify(false, entries.iter()).map_err(|e| io::Error::other(e))?;
+        let _ = systemd::daemon::notify(false, entries.iter()).map_err(io::Error::other)?;
     }
     Ok(())
 }

@@ -84,6 +84,4 @@ fn handle_connection_blocking(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-}
+mod tests {}

@@ -340,7 +340,6 @@ pub async fn accept_filesync_uni(conn: &Connection) -> anyhow::Result<Option<Rec
         }
     };
     let mut magic = [0u8; 2];
-    use tokio::io::AsyncReadExt as _;
     recv.read_exact(&mut magic).await?;
     if magic[0] != STREAM_MAGIC {
         anyhow::bail!("non-muxed stream on FileSync accept");

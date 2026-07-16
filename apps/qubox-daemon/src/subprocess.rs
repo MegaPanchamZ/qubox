@@ -461,15 +461,14 @@ mod tests {
         for _ in 0..10 {
             tokio::time::sleep(Duration::from_millis(500)).await;
             while let Ok(ev) = rx.try_recv() {
-                match ev {
-                    IpcEvent::SubprocessEvent { event, .. } => match event {
+                if let IpcEvent::SubprocessEvent { event, .. } = ev {
+                    match event {
                         SubprocessEvent::Spawned { .. } => saw_spawned = true,
                         SubprocessEvent::Exited { .. } => {}
                         SubprocessEvent::Restarting { .. } => saw_restarting = true,
                         SubprocessEvent::GiveUp { .. } => saw_giveup = true,
                         SubprocessEvent::Stopped => {}
-                    },
-                    _ => {}
+                    }
                 }
             }
             if saw_giveup {
@@ -603,10 +602,8 @@ mod tests {
             .unwrap();
         let arc = Arc::clone(&proc);
         tokio::spawn(async move { arc.run_to_completion().await });
-        // Allow time for stderr to be read.
+        // Allow time for stderr to be read; panic if the pipe task crashes.
         tokio::time::sleep(Duration::from_millis(500)).await;
-        // If the stderr streaming task didn't crash, we're good.
-        // (Tracing capture would need a subscriber test harness.)
-        assert!(true, "stderr piping did not panic");
+        drop(proc);
     }
 }

@@ -165,7 +165,7 @@ mod tests {
         (0..dh)
             .flat_map(|y| {
                 (0..dw).map(move |x| {
-                    if ((x / tile_w) + (y / tile_w)) % 2 == 0 {
+                    if ((x / tile_w) + (y / tile_w)).is_multiple_of(2) {
                         200u8
                     } else {
                         40u8

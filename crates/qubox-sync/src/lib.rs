@@ -478,7 +478,7 @@ pub fn plan_transfers(
             },
         }
     }
-    for (id, _) in local {
+    for id in local.keys() {
         if !seen.contains(id) {
             actions.push(TransferAction::Push(id.clone()));
         }

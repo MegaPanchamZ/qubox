@@ -190,8 +190,8 @@ impl StateDb {
         let txn = self.db.begin_read()?;
         let table = txn.open_table(PAIRINGS)?;
         let mut out = Vec::new();
-        let mut iter = table.iter()?;
-        while let Some(result) = iter.next() {
+        let iter = table.iter()?;
+        for result in iter {
             let (_key, value) = result?;
             out.push(bincode::deserialize(value.value())?);
         }
@@ -230,8 +230,8 @@ impl StateDb {
         let txn = self.db.begin_read()?;
         let table = txn.open_table(SETTINGS)?;
         let mut out = Vec::new();
-        let mut iter = table.iter()?;
-        while let Some(result) = iter.next() {
+        let iter = table.iter()?;
+        for result in iter {
             let (k, v) = result?;
             out.push((k.value().to_string(), v.value().to_string()));
         }
@@ -366,8 +366,8 @@ impl StateDb {
         let txn = self.db.begin_read()?;
         let table = txn.open_table(UPDATE_HISTORY)?;
         let mut out = Vec::new();
-        let mut iter = table.iter()?;
-        while let Some(result) = iter.next() {
+        let iter = table.iter()?;
+        for result in iter {
             let (_key, value) = result?;
             out.push(bincode::deserialize(value.value())?);
         }
@@ -392,8 +392,8 @@ impl StateDb {
         let txn = self.db.begin_read()?;
         let table = txn.open_table(SESSION_HISTORY)?;
         let mut out = Vec::new();
-        let mut iter = table.iter()?;
-        while let Some(result) = iter.next() {
+        let iter = table.iter()?;
+        for result in iter {
             let (_key, value) = result?;
             out.push(bincode::deserialize(value.value())?);
         }
@@ -426,8 +426,8 @@ impl StateDb {
         let txn = self.db.begin_read()?;
         let table = txn.open_table(SYNC_RULES)?;
         let mut out = Vec::new();
-        let mut iter = table.iter()?;
-        while let Some(result) = iter.next() {
+        let iter = table.iter()?;
+        for result in iter {
             let (_k, v) = result?;
             out.push(bincode::deserialize(v.value())?);
         }
@@ -477,8 +477,8 @@ impl StateDb {
         let txn = self.db.begin_read()?;
         let table = txn.open_table(TRACKED_FILES)?;
         let mut out = Vec::new();
-        let mut iter = table.iter()?;
-        while let Some(result) = iter.next() {
+        let iter = table.iter()?;
+        for result in iter {
             let (_k, v) = result?;
             out.push(bincode::deserialize(v.value())?);
         }
@@ -509,8 +509,8 @@ impl StateDb {
         let txn = self.db.begin_read()?;
         let table = txn.open_table(SYNC_OUTBOX)?;
         let mut out = Vec::new();
-        let mut iter = table.iter()?;
-        while let Some(result) = iter.next() {
+        let iter = table.iter()?;
+        for result in iter {
             let (_k, v) = result?;
             out.push(bincode::deserialize(v.value())?);
         }
@@ -550,8 +550,8 @@ impl StateDb {
         let txn = self.db.begin_read()?;
         let table = txn.open_table(SYNC_CONFLICTS)?;
         let mut out = Vec::new();
-        let mut iter = table.iter()?;
-        while let Some(result) = iter.next() {
+        let iter = table.iter()?;
+        for result in iter {
             let (_k, v) = result?;
             out.push(bincode::deserialize(v.value())?);
         }

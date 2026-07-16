@@ -33,7 +33,9 @@ pub fn pack_st2086(
     buf
 }
 
-pub fn unpack_st2086(buf: &[u8; 24]) -> Option<([(u16, u16); 3], (u16, u16), u32, u32)> {
+type St2086Unpacked = ([(u16, u16); 3], (u16, u16), u32, u32);
+
+pub fn unpack_st2086(buf: &[u8; 24]) -> Option<St2086Unpacked> {
     let rx = u16::from_be_bytes([buf[0], buf[1]]);
     let ry = u16::from_be_bytes([buf[2], buf[3]]);
     let gx = u16::from_be_bytes([buf[4], buf[5]]);

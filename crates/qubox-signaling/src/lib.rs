@@ -120,7 +120,9 @@ impl EnrollmentPolicy {
 #[derive(Debug, Clone)]
 struct ShareLinkEntry {
     host_peer_id: Uuid,
+    #[allow(dead_code)]
     host_label: String,
+    #[allow(dead_code)]
     permissions: SessionPermissions,
     expires_unix_ms: u64,
 }
@@ -188,11 +190,16 @@ struct PendingPairing {
 struct ActiveSession {
     host_peer_id: Uuid,
     client_peer_id: Uuid,
+    #[allow(dead_code)]
     transport: TransportKind,
+    #[allow(dead_code)]
     codec: VideoCodec,
+    #[allow(dead_code)]
     host_credential: SessionCredential,
+    #[allow(dead_code)]
     client_credential: SessionCredential,
     expires_unix_millis: u64,
+    #[allow(dead_code)]
     permissions: SessionPermissions,
 }
 
@@ -272,6 +279,7 @@ impl PairingStore {
         Ok(removed)
     }
 
+    #[allow(dead_code)]
     async fn list_pairings(&self) -> Vec<PairingGrant> {
         self.state.read().await.pairings.clone()
     }
@@ -907,7 +915,7 @@ impl SignalingState {
 
         self.send_to(
             request.target_host_id,
-            ServerMessage::SessionRequested(SessionRequested {
+            ServerMessage::SessionRequested(Box::new(SessionRequested {
                 session_id: request.session_id,
                 client,
                 transport,
@@ -918,7 +926,7 @@ impl SignalingState {
                 video,
                 permissions: permissions.clone(),
                 sync_only,
-            }),
+            })),
         )
         .await?;
 
@@ -1927,12 +1935,9 @@ mod tests {
         PeerDescriptor,
         tokio::sync::mpsc::UnboundedSender<ServerMessage>,
     ) {
-        let key = generate_signing_key();
-        let _ = key;
-        let _ = public_key;
+        let _key = generate_signing_key();
         let descriptor = descriptor(role, Uuid::new_v4());
         let (tx, _rx) = mpsc::unbounded_channel::<ServerMessage>();
-        let pk = generate_signing_key().verifying_key().to_bytes();
         // The caller-supplied public_key is what we'll register so the
         // credential/peer binding test gets a deterministic match.
         let pk = public_key;
@@ -2100,7 +2105,7 @@ mod tests {
         let state = SignalingState::default();
         let host = descriptor(PeerRole::Host, Uuid::new_v4());
         let client = descriptor(PeerRole::Client, Uuid::new_v4());
-        let (host_tx, mut host_rx) = mpsc::unbounded_channel();
+        let (host_tx, _host_rx) = mpsc::unbounded_channel();
         let (client_tx, _client_rx) = mpsc::unbounded_channel();
 
         state

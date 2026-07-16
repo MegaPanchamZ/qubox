@@ -254,7 +254,7 @@ mod tests {
     fn applier_ignores_other_control_msgs() {
         let applier = ClipboardApplier::new();
         let mut last_seq = 0_u64;
-        let result = applier
+        applier
             .apply(&ControlMsg::MicStop, &mut last_seq)
             .expect("non-clipboard messages are no-ops");
         assert_eq!(last_seq, 0);

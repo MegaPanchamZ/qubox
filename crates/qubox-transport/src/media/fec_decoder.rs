@@ -9,7 +9,7 @@
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 
-use super::rs_fec::{ReedSolomonFec, ReedSolomonFecError};
+use super::rs_fec::ReedSolomonFec;
 
 /// Block timeout. Matches the jitter buffer target_delay upper bound.
 pub const FEC_BLOCK_TIMEOUT: Duration = Duration::from_millis(200);

@@ -140,8 +140,8 @@ fn main() {
                         par[d - data.len()] = None;
                     }
                 }
-                let prev_data = data.clone();
-                let prev_par = par.clone();
+                let _prev_data = data.clone();
+                let _prev_par = par.clone();
                 let n = rs.reconstruct(&mut data, &mut par).unwrap_or(0);
                 recovered += n;
                 // Assemble original-size frame from recovered data shards.

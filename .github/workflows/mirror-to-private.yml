@@ -4,17 +4,14 @@ permissions:
   contents: read
 
 # Cross-repo mirror: when something lands on the public AGPL repo main,
-# open a PR against the private `qubox-cloud` repo so the proprietary
-# control plane can pick up the same open-source sources.
+# push the same commit into the private `qubox-cloud` repo.
 #
-# Required secret in this repo: PRIVATE_REPO_TOKEN — fine-grained PAT
-# (or classic PAT) with `contents: write` on MegaPanchamZ/qubox-cloud.
+# Required secret: PRIVATE_REPO_TOKEN — fine-grained PAT with
+# `contents: write` on MegaPanchamZ/qubox-cloud.
+# Optional var: PRIVATE_REPO (default MegaPanchamZ/qubox-cloud).
 #
-# Required repo variable: PRIVATE_REPO (defaults to MegaPanchamZ/qubox-cloud).
-#
-# Tags (vX.Y.Z) are mirrored as well: a release on this repo triggers
-# a corresponding release on the private repo, which then runs its
-# own release.yml + deploy-signaling-server.yml.
+# When the secret is missing the job exits green with a notice so forks
+# and fresh clones do not see a red X.
 
 on:
   push:
@@ -43,14 +40,14 @@ on:
         required: false
         type: string
       target_branch:
-        description: "Branch in the private repo to PR against"
+        description: "Branch in the private repo to update"
         required: false
         type: string
         default: main
 
 concurrency:
   group: mirror-to-private
-  cancel-in-progress: false  # Don't interrupt in-flight mirrors
+  cancel-in-progress: false
 
 jobs:
   mirror:
@@ -58,17 +55,21 @@ jobs:
     env:
       TARGET_REPO: ${{ vars.PRIVATE_REPO || 'MegaPanchamZ/qubox-cloud' }}
       TARGET_BRANCH: ${{ inputs.target_branch || 'main' }}
+      TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
     steps:
-      - name: Skip if secrets not configured
-        if: ${{ secrets.PRIVATE_REPO_TOKEN == '' }}
+      - name: Check secret configured
+        id: gate
         run: |
-          echo "::notice::PRIVATE_REPO_TOKEN secret is not set on this repo."
-          echo "::notice::Skipping mirror-to-private workflow."
-          echo "::notice::Add a fine-grained PAT with 'contents: write' on $TARGET_REPO to enable."
-          echo "::notice::See docs/SELF_HOSTING.md (private repo: docs/operations/cicd-setup.md)."
-          exit 0
+          if [[ -z "${TOKEN:-}" ]]; then
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::PRIVATE_REPO_TOKEN not set — skipping mirror."
+            echo "::notice::Add a fine-grained PAT with contents:write on $TARGET_REPO to enable."
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Resolve ref + commit
+        if: steps.gate.outputs.configured == 'true'
         id: resolve
         env:
           EVENT: ${{ github.event_name }}
@@ -90,15 +91,14 @@ jobs:
           fi
 
       - name: Checkout (shallow, public)
+        if: steps.gate.outputs.configured == 'true'
         uses: actions/checkout@v4
         with:
           ref: ${{ steps.resolve.outputs.ref }}
           fetch-depth: 1
 
       - name: Mirror branch push
-        if: ${{ secrets.PRIVATE_REPO_TOKEN != '' && steps.resolve.outputs.ref == 'main' }}
-        env:
-          TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
+        if: steps.gate.outputs.configured == 'true' && steps.resolve.outputs.ref == 'main'
         run: |
           set -euo pipefail
           echo "[mirror] syncing $GITHUB_SHA → $TARGET_REPO@$TARGET_BRANCH"
@@ -107,25 +107,18 @@ jobs:
           echo "[mirror] branch updated"
 
       - name: Mirror tag push
-        if: ${{ secrets.PRIVATE_REPO_TOKEN != '' && startsWith(steps.resolve.outputs.ref, 'v') }}
-        env:
-          TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
+        if: steps.gate.outputs.configured == 'true' && startsWith(steps.resolve.outputs.ref, 'v')
         run: |
           set -euo pipefail
           local_ref="$GITHUB_SHA"
           local_tag="${{ steps.resolve.outputs.ref }}"
           echo "[mirror] syncing tag $local_tag ($local_ref) → $TARGET_REPO"
-
-          # Push the commit + tag. We use --force because tag rewrites
-          # are rare and we want the mirror to converge.
           git push "https://x-access-token:${TOKEN}@github.com/${TARGET_REPO}.git" \
                   "$local_ref:refs/tags/$local_tag"
           echo "[mirror] tag pushed"
 
       - name: Verify push
-        if: always()
-        env:
-          TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
+        if: steps.gate.outputs.configured == 'true'
         run: |
           set -euo pipefail
           echo "[mirror] verifying…"

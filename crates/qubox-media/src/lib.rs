@@ -615,8 +615,8 @@ impl H264AnnexBStreamFramer {
 /// - H.264: NAL type 9 (AUD)
 /// - H.265: NAL type 35 (AUD)
 /// - AV1: OBU type 1 (OBU_SEQUENCE_HEADER) is rare in practice; the encoder
-///        bitstream is not annex-B in the same way and is currently treated as
-///        a single frame per call.
+///   bitstream is not annex-B in the same way and is currently treated as
+///   a single frame per call.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AnnexBStreamFramer {
     codec: VideoCodec,
@@ -2815,9 +2815,9 @@ mod tests {
     #[test]
     #[serial]
     fn preferred_linux_capture_prefers_pipewire_when_available_without_x11_hint() {
-        let orig_display = env::var_os("DISPLAY");
-        let orig_wayland = env::var_os("WAYLAND_DISPLAY");
-        let orig_xdg = env::var_os("XDG_SESSION_TYPE");
+        let _orig_display = env::var_os("DISPLAY");
+        let _orig_wayland = env::var_os("WAYLAND_DISPLAY");
+        let _orig_xdg = env::var_os("XDG_SESSION_TYPE");
 
         env::remove_var("DISPLAY");
         env::set_var("WAYLAND_DISPLAY", "wayland-0");

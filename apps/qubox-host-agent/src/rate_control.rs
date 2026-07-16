@@ -228,7 +228,7 @@ impl GccRateController {
         self.target_bitrate_bps
     }
 
-    fn classify(&self, owd_ms: f64) -> OveruseState {
+    fn classify(&self, _owd_ms: f64) -> OveruseState {
         // Use the EWMA gradient instead of the raw delta. The legacy
         // code computed `(owd_ms - prev_owd_ms)` where both values
         // could spike on a single frame; the EWMA already smooths

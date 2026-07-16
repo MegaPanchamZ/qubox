@@ -93,10 +93,7 @@ impl<C: PenCapture> PenCoalescer<C> {
                     }
                 }
             };
-            let event = match recv {
-                Ok(event) => event,
-                Err(error) => return Err(error),
-            };
+            let event = recv?;
             let now = Instant::now();
             if now.duration_since(window_started) >= self.cfg.window {
                 self.forward_or_drop(event);

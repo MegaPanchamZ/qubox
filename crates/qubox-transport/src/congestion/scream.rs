@@ -1,7 +1,7 @@
 use std::time::{Duration, Instant};
 
 use super::telemetry::CongestionTelemetry;
-use super::trait_def::{L1Metric, RateController};
+use super::trait_def::RateController;
 
 #[derive(Debug, Clone, Copy)]
 pub struct ScreamConfig {

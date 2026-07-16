@@ -885,7 +885,7 @@ async fn handle_server_message(
             );
 
             if requested.transport == TransportKind::NativeQuic {
-                tokio::spawn(run_native_quic_session(requested, runtime));
+                tokio::spawn(run_native_quic_session(*requested, runtime));
             }
         }
         ServerMessage::Signal(signal) => {

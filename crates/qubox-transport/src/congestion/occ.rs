@@ -86,7 +86,7 @@ impl RateController for OccRateController {
         _owd_ms: f64,
         loss_x1000: u16,
         _rtt: Duration,
-        sent_bytes: u64,
+        _sent_bytes: u64,
         now: Instant,
     ) -> u32 {
         if self.l1.is_some() {

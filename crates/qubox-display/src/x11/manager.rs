@@ -18,6 +18,7 @@ use crate::x11::X11RandrContext;
 /// Tracks a virtual display created via vkms + xrandr.
 struct VirtualDisplayHandle {
     output_name: String,
+    #[allow(dead_code)]
     config: VirtualDisplayConfig,
 }
 
@@ -227,6 +228,7 @@ impl X11RandrDisplayManager {
 }
 
 /// A stub blank overlay fallback for test environments.
+#[cfg(test)]
 pub fn noop_blank_overlay_fallback() -> BlankOverlayFallback {
     Box::new(|display_id: DisplayId| {
         tracing::warn!(display = %display_id.0, "blank overlay fallback called (no-op stub)");
@@ -415,12 +417,6 @@ impl DisplayManager for X11RandrDisplayManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn supports_virtual_displays_returns_true() {
-        // The method just returns true. No need for X11 context.
-        assert!(true);
-    }
 
     #[test]
     fn virtual_display_handle_round_trip() {

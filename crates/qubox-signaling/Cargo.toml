@@ -20,6 +20,8 @@ tokio.workspace = true
 tracing.workspace = true
 uuid.workspace = true
 redis = { version = "0.27", features = ["tokio-comp", "connection-manager"] }
+# redis 0.27 connection-manager uses arc_swap but does not always re-export it
+arc-swap = "1"
 
 # WebTransport browser client (ADR-017)
 qubox-webtransport = { path = "../qubox-webtransport", optional = true }

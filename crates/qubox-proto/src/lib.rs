@@ -1225,7 +1225,7 @@ pub enum ServerMessage {
         reason: String,
     },
     SessionPlanned(SessionPlan),
-    SessionRequested(SessionRequested),
+    SessionRequested(Box<SessionRequested>),
     Signal(RelaySignal),
     Presence(PresenceEvent),
     HeartbeatAck,

@@ -551,7 +551,7 @@ mod tests {
             "expected >1 block of parity, got {}",
             enc.parity.len()
         );
-        let n_data = enc.data.len();
+        let _n_data = enc.data.len();
         let n_par = enc.parity.len();
         let mut data: Vec<Option<Vec<u8>>> = enc.data.into_iter().map(Some).collect();
         let mut par: Vec<Option<Vec<u8>>> = enc.parity.into_iter().map(Some).collect();

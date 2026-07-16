@@ -4,7 +4,6 @@ use super::bbr::{BbrV3Config, BbrV3RateController};
 use super::legacy::{GccConfig, LegacyGccRateController};
 use super::occ::{OccConfig, OccRateController};
 use super::scream::{ScreamConfig, ScreamRateController};
-use super::telemetry::CongestionTelemetry;
 use super::trait_def::{CongestionAlgorithm, L1Metric, NetworkClass, RateController};
 
 pub struct RouterConfig {

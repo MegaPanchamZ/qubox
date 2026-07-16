@@ -9,6 +9,7 @@
 //! - `qubox:hosts:{tenant_id}` — SET of host peer ids
 //! - `qubox:session:{session_id}` — JSON session (TTL)
 //! - `qubox:pair:{host}:{client}` — "1" when paired
+//!
 //! Channels:
 //! - `qubox:inst:{instance_id}` — deliver envelope to a specific instance
 
