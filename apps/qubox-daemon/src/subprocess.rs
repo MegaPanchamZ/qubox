@@ -402,7 +402,7 @@ mod tests {
             bin_path: if cfg!(windows) {
                 "cmd".into()
             } else {
-                "/bin/true".into()
+                "true".into()
             },
             args: if cfg!(windows) {
                 vec!["/c".into(), "exit".into(), "0".into()]
@@ -436,7 +436,7 @@ mod tests {
             bin_path: if cfg!(windows) {
                 "cmd".into()
             } else {
-                "/bin/false".into()
+                "false".into()
             },
             args: if cfg!(windows) {
                 vec!["/c".into(), "exit".into(), "1".into()]
@@ -488,7 +488,7 @@ mod tests {
             bin_path: if cfg!(windows) {
                 "cmd".into()
             } else {
-                "/bin/false".into()
+                "false".into()
             },
             args: if cfg!(windows) {
                 vec!["/c".into(), "exit".into(), "1".into()]
@@ -533,7 +533,7 @@ mod tests {
             bin_path: if cfg!(windows) {
                 "cmd".into()
             } else {
-                "/bin/sleep".into()
+                "sleep".into()
             },
             args: if cfg!(windows) {
                 vec![

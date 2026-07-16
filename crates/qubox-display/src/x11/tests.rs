@@ -12,7 +12,9 @@ use crate::types::{
 
 /// Check if an X11 display is available for testing.
 fn x11_available() -> bool {
-    std::env::var_os("DISPLAY").is_some()
+    std::env::var("DISPLAY")
+        .map(|d| !d.is_empty())
+        .unwrap_or(false)
 }
 
 /// Skip message helper for display-less environments.
