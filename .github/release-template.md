@@ -14,7 +14,7 @@ See [apps/daemon/README.md](apps/daemon/README.md) for per-platform install inst
 sudo dpkg -i quboxd_*.deb
 
 # RPM (Fedora/RHEL)
-sudo rpm -i qubaixd-*.rpm
+sudo rpm -i quboxd-*.rpm
 
 # AppImage (any distro)
 chmod +x Qubox-*-x86_64.AppImage
