@@ -2507,7 +2507,7 @@ mod tests {
         assert!(signaling_url_is_local("ws://192.168.1.10:7000/ws"));
         assert!(signaling_url_is_local("ws://10.0.0.5/ws"));
         assert!(signaling_url_is_local("wss://host.local/ws"));
-        assert!(!signaling_url_is_local("ws://13.239.73.205:7000/ws"));
+        assert!(!signaling_url_is_local("wss://signal.qubox.app/ws"));
         assert!(!signaling_url_is_local("wss://signal.example.com/ws"));
     }
 

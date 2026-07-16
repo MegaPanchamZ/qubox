@@ -38,7 +38,7 @@ assignees: []
 
 ## Logs / screenshots
 
-<!-- Paste `RUST_LOG=debug qubaix-client-cli ...` output between the
+<!-- Paste `RUST_LOG=debug qubox-client-cli ...` output between the
      triple backticks below. Remove any secrets before pasting. -->
 
 ```text

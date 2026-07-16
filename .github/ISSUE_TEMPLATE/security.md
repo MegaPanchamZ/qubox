@@ -7,7 +7,7 @@ assignees: []
 ---
 
 > **Do not file public security issues here.** Send email to
-> **security@qubaix.com** instead (PGP key on request).
+> **security@qubox.app** instead (PGP key on request).
 >
 > Use this template only for low-severity reports where you have
 > already assessed the impact as not exploitable and want a public
@@ -34,7 +34,7 @@ assignees: []
 
 ## Disclosure plan
 
-- [ ] I have already reported this privately to security@qubaix.com
+- [ ] I have already reported this privately to security@qubox.app
 - [ ] I am waiting for the embargo to lift before discussing here
 - [ ] I want to discuss publicly right now (low severity only)
 - [ ] CVE requested (we will file on your behalf)

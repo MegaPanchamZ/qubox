@@ -11,7 +11,7 @@ See [apps/daemon/README.md](apps/daemon/README.md) for per-platform install inst
 ### Linux
 ```bash
 # DEB (Debian/Ubuntu)
-sudo dpkg -i qubaixd_*.deb
+sudo dpkg -i quboxd_*.deb
 
 # RPM (Fedora/RHEL)
 sudo rpm -i qubaixd-*.rpm

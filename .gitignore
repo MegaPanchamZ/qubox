@@ -85,4 +85,4 @@ scratch/.vagrant/
 # Generated coverage / docs
 *.lcov
 /coverage/
-/docs/_build/
+/docs/_build//research/
