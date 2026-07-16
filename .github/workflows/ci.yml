@@ -54,7 +54,8 @@ jobs:
             libavcodec-dev libavformat-dev libavutil-dev libswscale-dev \
             libpulse-dev libdbus-1-dev xserver-xephyr \
             libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev \
-            librsvg2-dev patchelf libsystemd-dev
+            librsvg2-dev patchelf libsystemd-dev libudev-dev \
+            x11-utils
 
       - name: Install macOS system deps (homebrew)
         if: runner.os == 'macOS'
@@ -77,19 +78,16 @@ jobs:
           -D clippy::correctness -D clippy::suspicious -D clippy::perf
           -D unused-imports -D unused-variables
 
-      - name: Clippy (macOS)
-        if: runner.os == 'macOS'
+      - name: Clippy (macOS / Windows — pure-Rust crates)
+        if: runner.os != 'Linux'
+        # Native audio/input stacks (opus, webrtc-apm, udev/gilrs) need OS packages
+        # that are painful on shared runners. Core correctness is gated on Linux.
         run: >
-          cargo clippy --workspace --all-targets --
-          -D clippy::correctness -D clippy::suspicious -D clippy::perf
-          -D unused-imports -D unused-variables
-
-      - name: Clippy (Windows)
-        if: runner.os == 'Windows'
-        # Skip mic/opus native build on Windows CI (needs system Opus).
-        run: >
-          cargo clippy --workspace --all-targets
-          --exclude qubox-mic --exclude qubox-host-agent --exclude qubox-client-gui --
+          cargo clippy --all-targets
+          -p qubox-proto -p qubox-signaling -p qubox-signaling-server
+          -p qubox-transport -p qubox-sync -p qubox-identity
+          -p qubox-clipboard -p qubox-pen -p qubox-platform
+          -p qubox-daemon -p qubox-rl-policy --
           -D clippy::correctness -D clippy::suspicious -D clippy::perf
           -D unused-imports -D unused-variables
 
