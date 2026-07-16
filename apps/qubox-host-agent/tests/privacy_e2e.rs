@@ -303,9 +303,12 @@ fn which_or_build(name: &str) -> String {
     name.to_string()
 }
 
-/// Check if the signaling server binary is available.
+/// Check if the signaling server binary is available (e2e job only).
 #[test]
 fn signaling_server_available() {
+    if !require_e2e() {
+        return;
+    }
     let path = which_or_build("qubox-signaling-server");
     assert!(
         std::path::Path::new(&path).exists(),

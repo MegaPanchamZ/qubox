@@ -24,7 +24,7 @@ This is what works today:
 
 ```bash
 # 0. one-time
-cd /mnt/DevDrive/development/better-parsec
+cd "$(git rev-parse --show-toplevel)"
 cargo build --release -p qubox-host-agent -p qubox-client-cli -p qubox-signaling-server
 
 # 1. start signaling (terminal A)
@@ -66,7 +66,7 @@ Once `windows-sys` / opus cross-compile is unblocked upstream:
 
 ```bash
 # 0. one-time
-cd /mnt/DevDrive/development/better-parsec/scratch
+cd "$(git rev-parse --show-toplevel)/scratch"
 vagrant up
 vagrant winrm --command "powershell -ExecutionPolicy Bypass -File C:\Users\vagrant\setup-vm-build.ps1"
 # (wait ~15 min for VS Build Tools + LLVM + Rust MSVC)
