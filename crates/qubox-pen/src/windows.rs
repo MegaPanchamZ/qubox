@@ -43,8 +43,6 @@ impl PenCapture for WmPointerCapture {
         &mut self,
         _event_tx: Sender<PenEvent>,
     ) -> Result<Receiver<PenEvent>, PenCaptureError> {
-        let (tx, rx) = crossbeam_channel::bounded(1);
-        drop(tx);
         Err(PenCaptureError::Backend(
             "Windows WM_POINTER capture pending v2 (ADR-010 §4.3)".to_string(),
         ))
