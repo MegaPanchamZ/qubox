@@ -22,8 +22,7 @@ written in Rust; the desktop client is a Tauri (TypeScript + Rust) app.
 
 > **Managed cloud:** if you'd rather not self-host, the [Qubox Cloud](https://qubox.app)
 > service runs the same open-source clients against hosted signaling, TURN, and
-> accounts. The cloud is a separate, proprietary codebase that talks to the
-> same wire protocols as the open source stack.
+> accounts. The cloud uses the same wire protocols as this open source stack.
 
 ---
 
