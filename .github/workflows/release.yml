@@ -52,14 +52,12 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # host triple is detected at runtime (macos-latest is arm64)
           - os: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
             artifact: release-linux
           - os: macos-latest
-            target: x86_64-apple-darwin
             artifact: release-macos
           - os: windows-latest
-            target: x86_64-pc-windows-msvc
             artifact: release-windows
     steps:
       - uses: actions/checkout@v4
@@ -110,12 +108,17 @@ jobs:
           $env:PATH = "C:\vcpkg;$env:PATH"
           vcpkg integrate install
           vcpkg install opus:x64-windows-static-md
+          # audiopus_sys appends /lib to LIBOPUS_LIB_DIR — pass the *prefix*, not .../lib
+          $opusPrefix = "C:\vcpkg\installed\x64-windows-static-md"
+          if (-not (Test-Path "$opusPrefix\lib\opus.lib")) {
+            $opusPrefix = "C:\vcpkg\packages\opus_x64-windows-static-md"
+          }
+          Write-Host "opus prefix: $opusPrefix"
+          Get-ChildItem "$opusPrefix\lib" | Select-Object Name
           echo "VCPKG_ROOT=C:\vcpkg" >> $env:GITHUB_ENV
-          echo "PKG_CONFIG_PATH=C:\vcpkg\installed\x64-windows-static-md\lib\pkgconfig" >> $env:GITHUB_ENV
-          $env:PKG_CONFIG_PATH = "C:\vcpkg\installed\x64-windows-static-md\lib\pkgconfig"
-          pkg-config --modversion opus
-          echo "LIBOPUS_LIB_DIR=C:\vcpkg\packages\opus_x64-windows-static-md\lib" >> $env:GITHUB_ENV
-          echo "LIBOPUS_INCLUDE_DIR=C:\vcpkg\packages\opus_x64-windows-static-md\include" >> $env:GITHUB_ENV
+          echo "LIBOPUS_LIB_DIR=$opusPrefix" >> $env:GITHUB_ENV
+          echo "OPUS_LIB_DIR=$opusPrefix" >> $env:GITHUB_ENV
+          echo "LIBOPUS_STATIC=1" >> $env:GITHUB_ENV
 
       - name: Install Node.js
         uses: actions/setup-node@v4
@@ -140,8 +143,7 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $env:LIBOPUS_LIB_DIR = $env:LIBOPUS_LIB_DIR
-          $env:LIBOPUS_INCLUDE_DIR = $env:LIBOPUS_INCLUDE_DIR
+          Write-Host "LIBOPUS_LIB_DIR=$env:LIBOPUS_LIB_DIR"
           # daemon: no systemd; host/client: no mic-apm (default features off)
           cargo build --release --no-default-features -p qubox-daemon -p qubox-host-agent -p qubox-client-cli -p qubox-signaling-server
 
@@ -149,7 +151,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          TARGET="${{ matrix.target }}"
+          # Match the host triple Tauri expects (not a hardcoded matrix value —
+          # macos-latest is aarch64, not x86_64).
+          TARGET="$(rustc -vV | sed -n 's/^host: //p')"
+          echo "host triple: $TARGET"
           DEST="apps/qubox-client-gui/src-tauri/binaries"
           mkdir -p "$DEST"
           if [[ "${{ runner.os }}" == "Windows" ]]; then
@@ -166,6 +171,7 @@ jobs:
               exit 1
             fi
             cp "$src" "$dst"
+            chmod +x "$dst" || true
             echo "staged $dst"
           done
           ls -la "$DEST"
@@ -175,6 +181,11 @@ jobs:
       - name: Build client-gui (Tauri)
         working-directory: apps/qubox-client-gui
         shell: bash
+        env:
+          # audiopus_sys may be pulled into the Tauri graph on Windows
+          LIBOPUS_LIB_DIR: ${{ env.LIBOPUS_LIB_DIR }}
+          OPUS_LIB_DIR: ${{ env.OPUS_LIB_DIR }}
+          LIBOPUS_STATIC: "1"
         run: |
           set -euo pipefail
           npm ci
