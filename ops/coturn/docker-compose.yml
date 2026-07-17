@@ -1,0 +1,47 @@
+# Staging: coturn + signaling (legacy path). Prefer ops/self-host/docker-compose.yml.
+#
+#   docker compose -f ops/coturn/docker-compose.yml up -d --build
+
+services:
+  coturn:
+    build:
+      context: ../../
+      dockerfile: ops/coturn/Dockerfile
+    image: qubox/coturn:latest
+    container_name: bp-coturn
+    restart: unless-stopped
+    ports:
+      - "3478:3478/udp"
+      - "3478:3478/tcp"
+      - "5349:5349/udp"
+      - "5349:5349/tcp"
+    healthcheck:
+      test: ["CMD", "turnutils_stunclient", "-p", "3478", "localhost"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  signaling-server:
+    build:
+      context: ../../
+      dockerfile: apps/qubox-signaling-server/Dockerfile
+    image: qubox/signaling-server:latest
+    container_name: bp-signaling
+    restart: unless-stopped
+    ports:
+      - "7000:7000/tcp"
+    environment:
+      QUBOX_TURN_SECRET: ${QUBOX_TURN_SECRET:-dev_shared_secret_change_me}
+      QUBOX_TURN_URLS: turn:coturn:3478
+      QUBOX_SIGNALING_SECRET: ${QUBOX_SIGNALING_SECRET:-dev_signaling_secret_change_me}
+      QUBOX_PAIRING_STORE: /data/pairings.json
+      RUST_LOG: info
+    volumes:
+      - signaling-data:/data
+    depends_on:
+      coturn:
+        condition: service_healthy
+
+volumes:
+  signaling-data:

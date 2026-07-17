@@ -1,4 +1,4 @@
-# Security hardening (desktop production)
+# Security hardening (desktop + self-host production)
 
 Threat model: paired peers over authenticated signaling + native QUIC.
 Attackers: network MITM, malicious peer after pair compromise, local
@@ -10,8 +10,8 @@ unprivileged process, path-injection via FileSync.
 |---------|------------|
 | Signaling identity | Ed25519 device identity; `SignedHello` required by default |
 | Session auth | HMAC-bound `SessionCredential`; short TTL |
-| Managed auto-approve | Forbidden on public servers (`refuse_auto_approve_on_public_server`) |
-| TLS | Managed path defaults to `wss://` (Caddy); see `ops/managed` |
+| Auto-approve | Forbidden on non-loopback binds (`refuse_auto_approve_on_public_server`) |
+| TLS | Self-host: Caddy profile in `ops/self-host` (`wss://`); never expose raw `:7000` on the public internet |
 | TURN | Credentials bound to session; short-term credentials |
 | FileSync path | `validate_relative_path` + `resolve_safe_target` (no `..`, abs, null, control) |
 | FileSync integrity | blake3 over body; reject on mismatch; atomic rename from `.qubox-partial` |
@@ -23,14 +23,15 @@ unprivileged process, path-injection via FileSync.
 | Updates | TUF repo under `ops/tuf` (when published) |
 | Privacy | Blank-overlay / vkms flags; GUI prefs applied on host start |
 
-## Operational controls
+## Operational controls (self-host)
 
 1. **Do not** run host-agent with `--auto-approve-pairing` on internet-facing servers.
-2. Prefer managed compose with TLS termination; rotate certs per `docs/operations/signaling-tls-cert-rotation.md`.
+2. Prefer `ops/self-host` with the **TLS profile** (Caddy); rotate certs per `docs/operations/signaling-tls-cert-rotation.md` when present.
 3. Restrict FileSync destination (`QUBOX_FILESYNC_DIR`) to a dedicated directory; do not point at `$HOME`.
 4. Keep pairing approvals human-gated; revoke via CLI/GUI when devices are lost.
 5. Run TURN soak before production cutover: `docs/operations/turn-soak.md`.
 6. Sign installers when shipping outside lab: `ops/signing/README.md` + `ops/tuf`.
+7. Treat Open enrollment as **LAN-trust**: anyone who can reach the signaling WS can list hosts until pairing is required—front with TLS, rate limits, and network ACLs for public exposure.
 
 ## Residual risk (accepted for 1.0 desktop)
 

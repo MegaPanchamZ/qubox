@@ -3,7 +3,7 @@
 **Status:** Accepted  
 **Date:** 2026-07-15  
 **Authors:** Qubox  
-**Depends on:** ADR-005 (daemon), ADR-006 (delegation), ADR-008 (clipboard/mic), ADR-021 (dual-mode), transport `StreamPurpose` mux  
+**Depends on:** ADR-005 (daemon), ADR-006 (delegation), ADR-008 (clipboard/mic), ADR-021 (control-plane boundary), transport `StreamPurpose` mux  
 **Supersedes:** none (new capability)
 
 ## 1. Context and problem
@@ -27,7 +27,7 @@ We already have:
 | Identity | Ed25519 `DeviceIdentity` / `SignedHello`; ChaCha20-Poly1305 only for **private key at rest** |
 | Daemon | Per-user agent; Unix socket / Named Pipe IPC; **redb** state (not sled/SQLite) |
 | Clipboard | `ControlMsg::ClipboardChanged` on control streams (ADR-008) — small payloads only |
-| Dual-mode | Self-host signaling stays thin; managed cloud **must not decrypt media** (ADR-021) |
+| Control-plane boundary | Self-host signaling stays thin; any hosted edge **must not decrypt media** (ADR-021) |
 
 `docs/architecture.md` Input plane already lists “Clipboard and optional file
 handoff” as future work. This ADR makes that concrete.
@@ -292,7 +292,7 @@ Events: `SyncJobUpdated`, `SyncConflict`, `SyncLockChanged`.
 
 - Real differentiator vs pure remote desktop: **safe** hybrid offline file
   continuity for paired devices.
-- Aligns with existing per-user daemon, redb, QUIC mux, dual-mode constraints.
+- Aligns with existing per-user daemon, redb, QUIC mux, and ADR-021 media rules.
 - Avoids cloud storage cost and E2EE policy breakage.
 
 ### Negative / risks
@@ -355,5 +355,5 @@ Events: `SyncJobUpdated`, `SyncConflict`, `SyncLockChanged`.
 - `apps/qubox-daemon/src/state.rs` — redb tables
 - `research/decisions/ADR-005-daemon-and-turn-architecture.md` — per-user daemon
 - `research/decisions/ADR-008-clipboard-mic-sync.md` — control-stream small data
-- `research/decisions/ADR-021-dual-mode-control-plane.md` — no cloud media decrypt
+- `docs/adr/021-dual-mode-control-plane.md` — no cloud/relay media decrypt
 - `docs/architecture.md` — input plane file handoff

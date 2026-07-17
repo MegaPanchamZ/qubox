@@ -87,11 +87,12 @@ A native window opens streaming the host's display. See
 (network exposure, TLS, TURN, troubleshooting).
 
 > **Default security posture:** the open-source signaling server runs in
-> *Open* enrollment mode — anyone who can reach `:7000/ws` can list hosts.
-> This is the right default for trusted LANs. For internet exposure, set
-> `QUBOX_REQUIRE_ENROLLMENT=1` and run a managed accounts API (out of
-> scope for this repo, but the wire format is documented in
-> `apps/qubox-signaling-server/src/enrollment.rs`).
+> *Open* mode — anyone who can reach `:7000/ws` can list hosts. That is the
+> right default for trusted LANs. For internet exposure, use the TLS profile
+> in `ops/self-host`, require host-side pairing approval (never
+> `--auto-approve-pairing` on public hosts), and network ACLs / rate limits.
+> Multi-tenant accounts enrollment is a **Qubox Cloud** product concern, not
+> part of this self-host stack (see `docs/adr/021-dual-mode-control-plane.md`).
 
 ---
 
@@ -181,9 +182,10 @@ service, you must publish your modifications under the same license. This
 keeps the open core genuinely open. If you want to ship a non-AGPL build
 or a hosted fork, please contact us about a commercial license.
 
-> **Qubox Cloud** (<https://qubox.app>) is a hosted service built on top of
-> this codebase. The service's closed components (account API, billing,
-> TUF channel) are in a separate, private repository and are *not* AGPL.
+> **Qubox Cloud** (<https://qubox.app>) is a hosted service that speaks the
+> same peer wire protocols. Accounts, friends/access policy, billing, and
+> managed edge live in a **separate private repository** and are *not* AGPL.
+> This public tree is the complete **self-host** product path.
 
 ---
 

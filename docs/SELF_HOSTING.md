@@ -1,10 +1,12 @@
 # Self-Hosting Qubox
 
 This guide covers the **self-host** path: a single host running the signaling
-server, coturn, and an optional Caddy TLS proxy. For internet-facing
-deployments, plan for firewall rules, signed-hello enforcement, and a
-managed accounts API in front of signaling (out of scope for this repo;
-the wire contract is documented in `apps/qubox-signaling-server/src/enrollment.rs`).
+server, coturn, and an optional Caddy TLS proxy. This repository is
+**self-host only** — there is no accounts / multi-tenant product here.
+
+> **Qubox Cloud** (hosted accounts, friends, managed edge) is a separate
+> commercial product: <https://qubox.app>. It speaks the same peer wire
+> protocols; its control plane is not in this tree.
 
 > **Quickest path:** the bundled Docker stack. Continue below.
 
@@ -94,7 +96,8 @@ QUBOX_IDENTITY_PATH=$HOME/.qubox/client-id.json \
     list-hosts
 ```
 
-To get a Tauri GUI, see `apps/qubox-client-gui/`.
+To get a Tauri GUI, see `apps/qubox-client-gui/`. Point the client at **your**
+signaling URL (LAN or `wss://your.domain/ws`) — there is no required cloud default.
 
 ## 6. Pairing
 
@@ -120,9 +123,9 @@ container (mounted as a Docker volume). On the host filesystem this is
 
 ## 8. Hardening for internet exposure
 
-Open-source self-host runs in **Open enrollment** mode (any caller that
-reaches `:7000/ws` can list hosts). That's fine for LANs; for public
-exposure, take **all** of these steps:
+Open-source self-host runs in **Open** mode: any caller that reaches
+`:7000/ws` can list hosts. That's fine for LANs; for public exposure, take
+**all** of these steps:
 
 1. **Front signaling with Caddy** (TLS profile) — never expose 7000 directly.
 2. **Require signed `Hello`** — already on by default; verify with
@@ -134,10 +137,9 @@ exposure, take **all** of these steps:
    `ops/coturn/turnserver.conf` private; rotate periodically.
 5. **Rate limiting** — front signaling with Caddy's `rate_limit` directive
    or an upstream WAF (Cloudflare, etc.).
-6. **Optional: managed enrollment** — set `QUBOX_REQUIRE_ENROLLMENT=1`
-   and run an accounts API in front of signaling. The wire contract is
-   documented; an open-source reference implementation is not in scope for
-   this repo.
+6. **Network ACLs** — restrict who can reach WSS/TURN (VPN, firewall, or
+   trusted reverse proxy). Multi-tenant “accounts enrollment” is **not**
+   part of this repo; for that product surface see Qubox Cloud.
 7. **TUF auto-update** — see `docs/tuf.md` for the trust model and
    the publish flow.
 
@@ -146,7 +148,7 @@ exposure, take **all** of these steps:
 | Symptom | Likely cause | Fix |
 |---------|--------------|-----|
 | Viewers see "no hosts" | signaling not reachable | check `:7000/ws` and `--server` arg |
-| Pairing hangs | host agent not running, or `QUBOX_REQUIRE_SIGNED_HELLO` mismatch | restart host agent; align env |
+| Pairing hangs | host agent not running, or signed-hello mismatch | restart host agent; align env |
 | Stream stutters | no TURN; NAT symmetric | check `turnutils_stunclient`; verify UDP 3478 reachable |
 | TURN auth fails | shared secret mismatch | set `QUBOX_TURN_SECRET` consistently across signaling + coturn |
 | Browser client can't connect | missing TLS | run with `--profile tls` |
@@ -161,5 +163,6 @@ exposure, take **all** of these steps:
 - `docs/operations/turn-soak.md` — load tests
 - `docs/tuf.md` — auto-update model
 - `docs/platforms.md` — OS support matrix
+- `docs/adr/021-dual-mode-control-plane.md` — OSS vs cloud product boundary
 
 For questions, open an issue or email **dev@qubox.app**.

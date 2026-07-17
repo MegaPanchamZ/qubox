@@ -1,6 +1,6 @@
 # TURN soak matrix (production gate)
 
-Validate relay under NAT before declaring managed/self-host production ready.
+Validate relay under NAT before declaring self-host (or any hosted edge) production ready.
 
 ## Topology matrix
 
