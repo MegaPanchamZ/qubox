@@ -655,11 +655,15 @@ pub struct StartSessionRequest {
     /// Granular video stream preferences. When set, supersedes `preferred_codec`.
     pub video: Option<VideoStreamPreferences>,
     /// Session capability mask (defaults: all allowed).
+    /// On managed Cloud, signaling overwrites this from accounts authorize.
     #[serde(default)]
     pub permissions: SessionPermissions,
     /// ADR-022 Phase C: open QUIC for FileSync only (no video/audio media).
     #[serde(default)]
     pub sync_only: bool,
+    /// After owner approves a pending consent, client retries with this id.
+    #[serde(default)]
+    pub consent_id: Option<Uuid>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -1244,6 +1248,15 @@ pub enum ServerMessage {
         host_peer_id: Uuid,
         client_peer_id: Uuid,
     },
+    /// Managed Cloud: session needs owner approval (dashboard / host UI).
+    SessionConsentPending {
+        consent_id: Uuid,
+        client_peer_id: Uuid,
+        host_peer_id: Uuid,
+        expires_at_unix_ms: u64,
+        #[serde(default)]
+        client_label: String,
+    },
 }
 
 /// Events emitted by the daemon to subscribed clients.
@@ -1560,7 +1573,8 @@ mod tests {
                 bit_depth: 8,
                 max_framerate: None,
                 target_framerate: None,
-            }),
+            consent_id: None,
+        }),
             permissions: SessionPermissions::default(),
             sync_only: false,
         };

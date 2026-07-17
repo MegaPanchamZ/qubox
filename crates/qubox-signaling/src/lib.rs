@@ -74,6 +74,8 @@ pub struct SignalingState {
     share_links: Arc<RwLock<HashMap<String, ShareLinkEntry>>>,
     /// Optional device→tenant lookup (Open = self-host; Enforced via trait).
     enrollment: EnrollmentPolicy,
+    /// Optional session authorize hook (Cloud friends/grants). None = Open self-host.
+    session_authorizer: Option<Arc<dyn SessionAuthorizer>>,
     /// Optional Redis cluster bus for multi-instance deployments.
     cluster: Option<Arc<cluster::ClusterBus>>,
 }
@@ -108,6 +110,42 @@ pub trait DeviceEnrollmentLookup: Send + Sync + 'static {
         public_key: [u8; 32],
     ) -> std::pin::Pin<
         Box<dyn std::future::Future<Output = Result<Option<EnrolledDevice>, String>> + Send + '_>,
+    >;
+}
+
+/// Input for external session authorization (Cloud accounts).
+#[derive(Debug, Clone)]
+pub struct SessionAuthzRequest {
+    pub client_device_id: Uuid,
+    pub host_device_id: Uuid,
+    pub consent_id: Option<Uuid>,
+    pub share_link_redemption: bool,
+}
+
+/// Result of external session authorization — only OSS wire types, no friends graph.
+#[derive(Debug, Clone)]
+pub enum SessionAuthzDecision {
+    Allow {
+        permissions: SessionPermissions,
+        /// When true, insert a pair grant if missing (Cloud "anytime" friends).
+        auto_pair: bool,
+    },
+    Pending {
+        consent_id: Uuid,
+        expires_at_unix_ms: u64,
+    },
+    Deny {
+        reason: String,
+    },
+}
+
+/// Async session authorize (Cloud friends/grants/consent). Self-host leaves this unset.
+pub trait SessionAuthorizer: Send + Sync + 'static {
+    fn authorize(
+        &self,
+        req: SessionAuthzRequest,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<SessionAuthzDecision, String>> + Send + '_>,
     >;
 }
 
@@ -148,6 +186,7 @@ impl Default for SignalingState {
             allow_unsigned_hello: allow_unsigned,
             share_links: Arc::new(RwLock::new(HashMap::new())),
             enrollment: EnrollmentPolicy::Open,
+            session_authorizer: None,
             cluster: None,
         }
     }
@@ -366,6 +405,7 @@ impl SignalingState {
             allow_unsigned_hello,
             share_links: Arc::new(RwLock::new(HashMap::new())),
             enrollment: EnrollmentPolicy::Open,
+            session_authorizer: None,
             cluster: None,
         })
     }
@@ -378,6 +418,16 @@ impl SignalingState {
 
     pub fn enrollment(&self) -> &EnrollmentPolicy {
         &self.enrollment
+    }
+
+    /// Attach session authorizer (Cloud accounts friends/grants). Stock server leaves None.
+    pub fn with_session_authorizer(mut self, authorizer: Arc<dyn SessionAuthorizer>) -> Self {
+        self.session_authorizer = Some(authorizer);
+        self
+    }
+
+    pub fn has_session_authorizer(&self) -> bool {
+        self.session_authorizer.is_some()
     }
 
     /// Enable Redis multi-instance coordination.
@@ -780,6 +830,36 @@ impl SignalingState {
             return Ok(None);
         }
 
+        // Cloud: gate pair grant on accounts friends/grants (Deny only).
+        if let Some(authz) = &self.session_authorizer {
+            match authz
+                .authorize(SessionAuthzRequest {
+                    client_device_id: pending.client.device_id,
+                    host_device_id: host.device_id,
+            consent_id: None,
+                    share_link_redemption: false,
+                })
+                .await
+            {
+                Ok(SessionAuthzDecision::Deny { reason }) => {
+                    let _ = self
+                        .send_to(
+                            pending.client.peer_id,
+                            ServerMessage::PairingRejected {
+                                request_id: decision.request_id,
+                                reason: reason.clone(),
+                            },
+                        )
+                        .await;
+                    bail!("pairing denied by policy: {reason}");
+                }
+                Ok(SessionAuthzDecision::Pending { .. }) | Ok(SessionAuthzDecision::Allow { .. }) => {
+                    // Pending still allows pair so session can re-authorize after consent.
+                }
+                Err(e) => bail!("session authorize failed: {e}"),
+            }
+        }
+
         let grant = PairingGrant {
             host_peer_id: pending.host_peer_id,
             client_peer_id: pending.client.peer_id,
@@ -862,10 +942,76 @@ impl SignalingState {
             }
         };
 
-        if !self
+        // Cloud authorize: overwrite permissions; auto-pair anytime friends; gate deny/pending.
+        let mut permissions = request.permissions.clone();
+        let mut policy_auto_pair = false;
+        if let Some(authz) = &self.session_authorizer {
+            match authz
+                .authorize(SessionAuthzRequest {
+                    client_device_id: client.device_id,
+                    host_device_id: host_descriptor.device_id,
+                    consent_id: request.consent_id,
+                    share_link_redemption: false,
+                })
+                .await
+            {
+                Ok(SessionAuthzDecision::Allow {
+                    permissions: p,
+                    auto_pair,
+                }) => {
+                    permissions = p;
+                    policy_auto_pair = auto_pair;
+                }
+                Ok(SessionAuthzDecision::Pending {
+                    consent_id,
+                    expires_at_unix_ms,
+                }) => {
+                    let _ = self
+                        .send_to(
+                            request.target_host_id,
+                            ServerMessage::SessionConsentPending {
+                                consent_id,
+                                client_peer_id: client.peer_id,
+                                host_peer_id: request.target_host_id,
+                                expires_at_unix_ms,
+                                client_label: client.device_name.clone(),
+                            },
+                        )
+                        .await;
+                    bail!(
+                        "session needs owner consent (consent_id={consent_id}); approve in dashboard then retry"
+                    );
+                }
+                Ok(SessionAuthzDecision::Deny { reason }) => {
+                    bail!("session denied by policy: {reason}");
+                }
+                Err(e) => bail!("session authorize failed: {e}"),
+            }
+        }
+
+        let mut paired = self
             .is_paired_cluster(request.target_host_id, client.peer_id)
-            .await
-        {
+            .await;
+        if !paired && policy_auto_pair {
+            let grant = PairingGrant {
+                host_peer_id: request.target_host_id,
+                client_peer_id: client.peer_id,
+            };
+            self.pairing_store.add_pairing(grant.clone()).await?;
+            if let Some(bus) = &self.cluster {
+                let _ = bus
+                    .put_pairing(grant.host_peer_id, grant.client_peer_id)
+                    .await;
+            }
+            let _ = self
+                .send_to(
+                    client.peer_id,
+                    ServerMessage::PairingEstablished(grant.clone()),
+                )
+                .await;
+            paired = true;
+        }
+        if !paired {
             bail!(
                 "client {} is not paired with host {}",
                 client.peer_id,
@@ -909,7 +1055,6 @@ impl SignalingState {
         let client_credential = host_credential.clone();
         let ice_servers = (*self.ice_servers).clone();
 
-        let permissions = request.permissions.clone();
         let sync_only = request.sync_only;
         let video = request.video;
 
@@ -2059,7 +2204,8 @@ mod tests {
             video: None,
             permissions: Default::default(),
             sync_only: false,
-        };
+            consent_id: None,
+            };
 
         assert!(state
             .start_session(client.clone(), request.clone())
@@ -2115,7 +2261,8 @@ mod tests {
                     video: None,
                     permissions: Default::default(),
                     sync_only: false,
-                },
+            consent_id: None,
+        },
             )
             .await
             .unwrap();
@@ -2183,7 +2330,8 @@ mod tests {
                     video: None,
                     permissions: Default::default(),
                     sync_only: false,
-                },
+            consent_id: None,
+        },
             )
             .await
             .is_err());
@@ -2264,7 +2412,8 @@ mod tests {
                     video: None,
                     permissions: Default::default(),
                     sync_only: false,
-                },
+            consent_id: None,
+        },
             )
             .await
             .unwrap();
@@ -2345,7 +2494,8 @@ mod tests {
                     video: None,
                     permissions: Default::default(),
                     sync_only: false,
-                },
+            consent_id: None,
+        },
             )
             .await
             .unwrap();

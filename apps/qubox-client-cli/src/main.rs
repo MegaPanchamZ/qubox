@@ -812,7 +812,8 @@ async fn main() -> anyhow::Result<()> {
                                     | ServerMessage::SessionRequested(_)
                                     | ServerMessage::ShareLinkCreated { .. }
                                     | ServerMessage::SessionKicked { .. }
-                                    | ServerMessage::PairingRevoked { .. } => {}
+                                    | ServerMessage::PairingRevoked { .. }
+                    | ServerMessage::SessionConsentPending { .. } => {}
                                 }
                             }
                             Some(Ok(Message::Close(_))) | None => break,
@@ -875,7 +876,8 @@ async fn main() -> anyhow::Result<()> {
                             | ServerMessage::Signal(_)
                             | ServerMessage::ShareLinkCreated { .. }
                             | ServerMessage::SessionKicked { .. }
-                            | ServerMessage::PairingRevoked { .. } => {}
+                            | ServerMessage::PairingRevoked { .. }
+                    | ServerMessage::SessionConsentPending { .. } => {}
                         }
                     }
                     Message::Close(_) => break,
@@ -927,6 +929,7 @@ async fn main() -> anyhow::Result<()> {
                 video: None,
                 permissions: Default::default(),
                 sync_only,
+            consent_id: None,
             };
 
             send_json(&mut writer, &ClientMessage::StartSession(request)).await?;
@@ -990,7 +993,8 @@ async fn main() -> anyhow::Result<()> {
                             | ServerMessage::Signal(_)
                             | ServerMessage::ShareLinkCreated { .. }
                             | ServerMessage::SessionKicked { .. }
-                            | ServerMessage::PairingRevoked { .. } => {}
+                            | ServerMessage::PairingRevoked { .. }
+                    | ServerMessage::SessionConsentPending { .. } => {}
                         }
                     }
                     Message::Close(_) => break,
@@ -1398,7 +1402,8 @@ where
                     | ServerMessage::Signal(_)
                     | ServerMessage::ShareLinkCreated { .. }
                     | ServerMessage::SessionKicked { .. }
-                    | ServerMessage::PairingRevoked { .. } => {}
+                    | ServerMessage::PairingRevoked { .. }
+                    | ServerMessage::SessionConsentPending { .. } => {}
                 }
             }
             Message::Close(_) => {
@@ -1585,7 +1590,8 @@ async fn wait_for_native_quic_ticket(
                             | ServerMessage::Signal(_)
                             | ServerMessage::ShareLinkCreated { .. }
                             | ServerMessage::SessionKicked { .. }
-                            | ServerMessage::PairingRevoked { .. } => {}
+                            | ServerMessage::PairingRevoked { .. }
+                    | ServerMessage::SessionConsentPending { .. } => {}
                         }
                     }
                     Message::Close(_) => anyhow::bail!("signaling connection closed while waiting for native QUIC ticket"),

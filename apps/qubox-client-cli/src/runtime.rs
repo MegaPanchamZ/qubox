@@ -130,7 +130,8 @@ pub async fn start_session(
         video: None,
         permissions: Default::default(),
         sync_only: false,
-    };
+            consent_id: None,
+            };
 
     send_json(&mut writer, &ClientMessage::StartSession(request)).await?;
 
@@ -180,7 +181,8 @@ pub async fn start_session(
                     | ServerMessage::Signal(_)
                     | ServerMessage::ShareLinkCreated { .. }
                     | ServerMessage::SessionKicked { .. }
-                    | ServerMessage::PairingRevoked { .. } => {}
+                    | ServerMessage::PairingRevoked { .. }
+                    | ServerMessage::SessionConsentPending { .. } => {}
                 }
             }
             Message::Close(_) => {
@@ -477,7 +479,8 @@ where
                     | ServerMessage::Signal(_)
                     | ServerMessage::ShareLinkCreated { .. }
                     | ServerMessage::SessionKicked { .. }
-                    | ServerMessage::PairingRevoked { .. } => {}
+                    | ServerMessage::PairingRevoked { .. }
+                    | ServerMessage::SessionConsentPending { .. } => {}
                 }
             }
             Message::Close(_) => {
@@ -595,7 +598,8 @@ async fn wait_for_native_quic_ticket(
                             | ServerMessage::Signal(_)
                             | ServerMessage::ShareLinkCreated { .. }
                             | ServerMessage::SessionKicked { .. }
-                            | ServerMessage::PairingRevoked { .. } => {}
+                            | ServerMessage::PairingRevoked { .. }
+                    | ServerMessage::SessionConsentPending { .. } => {}
                         }
                     }
                     Message::Close(_) => anyhow::bail!("signaling connection closed while waiting for native QUIC ticket"),

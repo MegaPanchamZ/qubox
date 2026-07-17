@@ -918,6 +918,21 @@ async fn handle_server_message(
         ServerMessage::SessionKicked { session_id, reason } => {
             tracing::warn!(%session_id, %reason, "session kicked");
         }
+        ServerMessage::SessionConsentPending {
+            consent_id,
+            client_peer_id,
+            host_peer_id: _,
+            expires_at_unix_ms,
+            client_label,
+        } => {
+            tracing::info!(
+                %consent_id,
+                %client_peer_id,
+                expires_at_unix_ms,
+                %client_label,
+                "session consent pending — approve in dashboard or wait for host UX"
+            );
+        }
         ServerMessage::PairingRevoked {
             host_peer_id,
             client_peer_id,
