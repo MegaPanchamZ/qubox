@@ -1180,39 +1180,68 @@ async fn healthz() -> &'static str {
     "ok"
 }
 
-async fn status_handler(State(state): State<SignalingState>) -> Json<serde_json::Value> {
-    let peers = state.peers.read().await;
-    let mut hosts = 0usize;
-    let mut clients = 0usize;
-    let mut signed = 0usize;
-    for p in peers.values() {
-        if p.public_key.is_some() {
-            signed += 1;
+async fn status_handler(
+    State(state): State<SignalingState>,
+    headers: axum::http::HeaderMap,
+) -> Json<serde_json::Value> {
+    let admin_token = std::env::var("QUBOX_ADMIN_TOKEN").ok();
+    let is_admin = if let Some(ref token) = admin_token {
+        if let Some(auth_header) = headers.get(axum::http::header::AUTHORIZATION) {
+            if let Ok(auth_str) = auth_header.to_str() {
+                let check_token = auth_str.strip_prefix("Bearer ").unwrap_or(auth_str);
+                !check_token.is_empty() && check_token == token
+            } else {
+                false
+            }
+        } else {
+            false
         }
-        match p.descriptor.role {
-            PeerRole::Host => hosts += 1,
-            PeerRole::Client => clients += 1,
+    } else {
+        false
+    };
+
+    if is_admin {
+        let peers = state.peers.read().await;
+        let mut hosts = 0usize;
+        let mut clients = 0usize;
+        let mut signed = 0usize;
+        for p in peers.values() {
+            if p.public_key.is_some() {
+                signed += 1;
+            }
+            match p.descriptor.role {
+                PeerRole::Host => hosts += 1,
+                PeerRole::Client => clients += 1,
+            }
         }
+        let peer_count = peers.len();
+        drop(peers);
+        let sessions = state.sessions.read().await.len();
+        let share_links = state.share_links.read().await.len();
+        Json(serde_json::json!({
+            "service": "signaling",
+            "ok": true,
+            "enrollment_managed": state.enrollment().is_managed(),
+            "cluster": state.cluster_enabled(),
+            "ice_servers": state.ice_server_count(),
+            "allow_unsigned_hello": state.allows_unsigned_hello(),
+            "peers": peer_count,
+            "hosts": hosts,
+            "clients": clients,
+            "signed_peers": signed,
+            "active_sessions": sessions,
+            "share_links": share_links,
+            "ts_unix_ms": unix_millis_after(Duration::ZERO),
+        }))
+    } else {
+        Json(serde_json::json!({
+            "service": "signaling",
+            "ok": true,
+            "enrollment_managed": state.enrollment().is_managed(),
+            "cluster": state.cluster_enabled(),
+            "ts_unix_ms": unix_millis_after(Duration::ZERO),
+        }))
     }
-    let peer_count = peers.len();
-    drop(peers);
-    let sessions = state.sessions.read().await.len();
-    let share_links = state.share_links.read().await.len();
-    Json(serde_json::json!({
-        "service": "signaling",
-        "ok": true,
-        "enrollment_managed": state.enrollment().is_managed(),
-        "cluster": state.cluster_enabled(),
-        "ice_servers": state.ice_server_count(),
-        "allow_unsigned_hello": state.allows_unsigned_hello(),
-        "peers": peer_count,
-        "hosts": hosts,
-        "clients": clients,
-        "signed_peers": signed,
-        "active_sessions": sessions,
-        "share_links": share_links,
-        "ts_unix_ms": unix_millis_after(Duration::ZERO),
-    }))
 }
 
 async fn ws_handler(websocket: WebSocketUpgrade, State(state): State<SignalingState>) -> Response {
