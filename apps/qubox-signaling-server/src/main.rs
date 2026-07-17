@@ -10,7 +10,6 @@ use rand_core::{OsRng, RngCore};
 use tracing_subscriber::EnvFilter;
 use uuid::Uuid;
 
-mod enrollment;
 mod turn;
 
 #[derive(Debug, Parser)]
@@ -106,13 +105,14 @@ async fn main() -> anyhow::Result<()> {
         );
     }
 
+    // Open enrollment only (self-host). Managed accounts lookup lives in the
+    // private Qubox Cloud wrapper binary, not this AGPL server.
     let mut state = SignalingState::with_options_and_secret_and_policy(
         args.pairing_store,
         ice,
         signaling_secret,
         args.allow_unsigned_hello,
-    )?
-    .with_enrollment(enrollment::policy_from_env());
+    )?;
 
     if !args.redis_url.is_empty() {
         let instance_id = if args.instance_id.is_empty() {

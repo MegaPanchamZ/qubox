@@ -72,7 +72,7 @@ pub struct SignalingState {
     allow_unsigned_hello: bool,
     /// Short-lived share codes → host + permissions.
     share_links: Arc<RwLock<HashMap<String, ShareLinkEntry>>>,
-    /// Managed SaaS: require enrolled devices and isolate by tenant.
+    /// Optional device→tenant lookup (Open = self-host; Enforced via trait).
     enrollment: EnrollmentPolicy,
     /// Optional Redis cluster bus for multi-instance deployments.
     cluster: Option<Arc<cluster::ClusterBus>>,
@@ -81,18 +81,18 @@ pub struct SignalingState {
 /// How the server resolves tenant membership for connecting peers.
 #[derive(Clone, Default)]
 pub enum EnrollmentPolicy {
-    /// Self-host / tests: any peer joins the nil tenant; no DB check.
+    /// Self-host / tests: any peer joins the nil tenant; no external check.
     #[default]
     Open,
-    /// Managed: every SignedHello must resolve via `lookup` to a
-    /// non-revoked enrolled device. Presence/hosts/pairing are
-    /// scoped to that device's tenant.
+    /// Every SignedHello must resolve via `lookup` to a non-revoked
+    /// enrolled device. Presence/hosts/pairing are scoped to that
+    /// device's tenant. Integrators supply `lookup` (e.g. private Cloud).
     Managed {
         lookup: Arc<dyn DeviceEnrollmentLookup>,
     },
 }
 
-/// Result of looking up a device in the accounts control plane.
+/// Result of looking up a device in an external enrollment store.
 #[derive(Debug, Clone)]
 pub struct EnrolledDevice {
     pub tenant_id: Uuid,
@@ -100,7 +100,7 @@ pub struct EnrolledDevice {
     pub revoked: bool,
 }
 
-/// Async lookup used by managed signaling (typically HTTP → accounts API).
+/// Async device enrollment lookup (implemented outside the stock Open binary).
 pub trait DeviceEnrollmentLookup: Send + Sync + 'static {
     fn lookup(
         &self,
@@ -370,7 +370,7 @@ impl SignalingState {
         })
     }
 
-    /// Attach managed enrollment policy (device → tenant lookup).
+    /// Attach enrollment policy (device → tenant lookup). Stock server stays Open.
     pub fn with_enrollment(mut self, enrollment: EnrollmentPolicy) -> Self {
         self.enrollment = enrollment;
         self
