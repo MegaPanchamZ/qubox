@@ -183,9 +183,7 @@ keeps the open core genuinely open. If you want to ship a non-AGPL build
 or a hosted fork, please contact us about a commercial license.
 
 > **Qubox Cloud** (<https://qubox.app>) is a hosted service that speaks the
-> same peer wire protocols. Accounts, friends/access policy, billing, and
-> managed edge live in a **separate private repository** and are *not* AGPL.
-> This public tree is the complete **self-host** product path.
+> same peer wire protocols.
 
 ---
 
