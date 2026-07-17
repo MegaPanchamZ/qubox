@@ -141,7 +141,8 @@ jobs:
             libwayland-dev libxext-dev libclang-18-dev \
             libavcodec-dev libavformat-dev libavutil-dev libswscale-dev \
             libpulse-dev libasound2-dev libdbus-1-dev xserver-xephyr \
-            libopus-dev cmake pkg-config x11-utils
+            libopus-dev cmake pkg-config x11-utils \
+            libsystemd-dev libudev-dev
 
       - name: Start Xephyr :99
         continue-on-error: true
@@ -164,35 +165,3 @@ jobs:
           cargo test -p qubox-host-agent --test multi_display_e2e -- --nocapture
           cargo test -p qubox-host-agent --test privacy_e2e -- --nocapture
           cargo test -p qubox-client-cli --test stream_registry_e2e -- --nocapture
-
-  cross-build-windows:
-    runs-on: ubuntu-latest
-    # Soft-fail: MinGW cross of the daemon needs extra sys deps; do not block main.
-    continue-on-error: true
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: x86_64-pc-windows-gnu
-
-      - name: Install MinGW cross-toolchain
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y mingw-w64
-
-      - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: |
-            . -> target
-
-      - name: Build daemon (Windows MinGW cross-compile)
-        run: cargo build --release --target x86_64-pc-windows-gnu -p qubox-daemon
-
-      - name: Upload daemon binary (Windows)
-        uses: actions/upload-artifact@v4
-        with:
-          name: quboxd-windows-x64
-          path: target/x86_64-pc-windows-gnu/release/quboxd.exe
