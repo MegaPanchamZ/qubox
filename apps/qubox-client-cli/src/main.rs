@@ -53,9 +53,8 @@ struct Args {
     #[arg(long, env = "QUBOX_SERVER", default_value = "ws://127.0.0.1:7000/ws")]
     server: String,
 
-    /// Managed accounts API base (signup/enroll). Set this to your cloud
-    /// provider's URL when using a hosted service, or leave empty for
-    /// pure self-host.
+    /// Managed accounts API base (signup/enroll). Required for `cloud-enroll`
+    /// (e.g. https://signal.qubox.app). Leave empty for pure self-host.
     #[arg(long, env = "QUBOX_ACCOUNTS_URL", default_value = "")]
     accounts_url: String,
 
@@ -1158,7 +1157,19 @@ async fn run_cloud_enroll(
     device_id: uuid::Uuid,
     public_key: &[u8; 32],
 ) -> anyhow::Result<()> {
-    let base = accounts_url.trim_end_matches('/');
+    let base = accounts_url.trim().trim_end_matches('/');
+    if base.is_empty() {
+        anyhow::bail!(
+            "cloud-enroll needs an accounts API URL.\n\
+             Qubox Cloud:  qubox-client-cli --accounts-url https://signal.qubox.app cloud-enroll --code {code}\n\
+             Or:           export QUBOX_ACCOUNTS_URL=https://signal.qubox.app"
+        );
+    }
+    if base.contains("127.0.0.1") || base.contains("localhost") {
+        eprintln!(
+            "warning: accounts URL is local ({base}); for Qubox Cloud use https://signal.qubox.app"
+        );
+    }
     let url = format!("{base}/v1/public/enroll");
     let body = serde_json::json!({
         "code": code,
