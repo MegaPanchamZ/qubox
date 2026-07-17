@@ -5,6 +5,11 @@ on:
     tags:
       - "v*"
   workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag (e.g. v0.1.0). Must already exist or will be created from main tip after build."
+        required: true
+        type: string
 
 concurrency:
   group: release-${{ github.ref }}
@@ -26,8 +31,19 @@ jobs:
     steps:
       - id: set-ref
         run: |
-          echo "ref=${{ github.ref }}" >> "$GITHUB_OUTPUT"
-          echo "tag=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            echo "ref=${{ github.ref }}" >> "$GITHUB_OUTPUT"
+            echo "tag=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+          else
+            # workflow_dispatch from a branch: use latest tag tip or fail if no tag input
+            TAG="${{ github.event.inputs.tag }}"
+            if [[ -z "$TAG" ]]; then
+              echo "::error::Push a v* tag or pass workflow_dispatch input tag=vX.Y.Z"
+              exit 1
+            fi
+            echo "ref=refs/tags/$TAG" >> "$GITHUB_OUTPUT"
+            echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          fi
 
   build:
     name: Build (${{ matrix.os }})
@@ -145,22 +161,38 @@ jobs:
           npm ci
           npx tauri build
 
-      - name: Collect artifacts
+      - name: Collect artifacts (Unix)
+        if: runner.os != 'Windows'
         run: |
           mkdir -p dist
           for bin in qubox-daemon qubox-host-agent qubox-client-cli qubox-signaling-server; do
             [ -f "target/release/$bin" ] && cp "target/release/$bin" "dist/$bin" && echo "copied $bin"
-            [ -f "target/release/$bin.exe" ] && cp "target/release/$bin.exe" "dist/$bin.exe" && echo "copied $bin.exe"
           done
           if [ -d "apps/qubox-client-gui/src-tauri/target/release/bundle" ]; then
             cp -r apps/qubox-client-gui/src-tauri/target/release/bundle/* dist/ 2>/dev/null || true
           fi
           find target/release -maxdepth 1 -name '*.deb' -exec cp {} dist/ \; 2>/dev/null || true
           find target/release -maxdepth 1 -name '*.rpm' -exec cp {} dist/ \; 2>/dev/null || true
+          (cd dist && sha256sum * > SHA256SUMS)
 
-      - name: Generate SHA256SUMS
-        working-directory: dist
-        run: sha256sum * > SHA256SUMS
+      - name: Collect artifacts (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          $bins = @('qubox-daemon.exe','qubox-host-agent.exe','qubox-client-cli.exe','qubox-signaling-server.exe')
+          foreach ($b in $bins) {
+            $src = "target/release/$b"
+            if (Test-Path $src) {
+              Copy-Item $src "dist/$b"
+              Write-Host "copied $b"
+            }
+          }
+          Get-ChildItem dist -File | ForEach-Object {
+            $h = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower()
+            "$h  $($_.Name)"
+          } | Set-Content -Encoding ascii dist/SHA256SUMS
+          Get-Content dist/SHA256SUMS
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -168,6 +200,7 @@ jobs:
           name: ${{ matrix.artifact }}
           path: dist/
           retention-days: 5
+          if-no-files-found: error
 
   sbom:
     needs: [build]

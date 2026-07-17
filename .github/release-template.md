@@ -21,8 +21,25 @@ chmod +x Qubox-*-x86_64.AppImage
 ./Qubox-*-x86_64.AppImage
 ```
 
-### Windows
-Run `QuboxDaemon-*-x64.msi` as Administrator.
+### Windows (x64)
+
+Download from this release:
+
+| Binary | Role |
+|--------|------|
+| `qubox-host-agent.exe` | Host (machine you control) |
+| `qubox-client-cli.exe` | Client CLI (connect / enroll) |
+| `qubox-signaling-server.exe` | Optional self-host signaling |
+| `qubox-daemon.exe` | Optional background daemon |
+
+**Qubox Cloud enroll (PowerShell):**
+
+```powershell
+$env:QUBOX_ACCOUNTS_URL = "https://signal.qubox.app"
+$env:QUBOX_SERVER = "wss://signal.qubox.app/ws"
+.\qubox-client-cli.exe cloud-enroll --code YOUR_CODE
+.\qubox-host-agent.exe --name $env:COMPUTERNAME
+```
 
 ### macOS
 ```bash
