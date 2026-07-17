@@ -92,9 +92,9 @@ fn privacy_blank_overlay_e2e() {
     let host_identity_path = tmp_dir.join("host_identity.json");
     let client_identity_path = tmp_dir.join("client_identity.json");
 
-    let host_bin = which_or_build("host-agent");
+    let host_bin = which_or_build("qubox-host-agent");
     let client_bin = which_or_build("qubox-client-cli");
-    eprintln!("host-agent binary: {host_bin}");
+    eprintln!("qubox-host-agent binary: {host_bin}");
     eprintln!("qubox-client-cli binary: {client_bin}");
 
     // Create client identity (host-agent generates identity on startup automatically)
@@ -280,7 +280,7 @@ fn which_or_build(name: &str) -> String {
     if let Ok(path) = std::env::var("PATH") {
         for dir in path.split(':') {
             let candidate = format!("{dir}/{name}");
-            if std::path::Path::new(&candidate).exists() {
+            if std::path::Path::new(&candidate).is_file() {
                 return candidate;
             }
         }
@@ -288,10 +288,17 @@ fn which_or_build(name: &str) -> String {
     // Walk up from the test binary's directory looking for the named binary
     if let Ok(exe) = std::env::current_exe() {
         let mut dir = exe.parent().unwrap().to_path_buf();
-        for _ in 0..3 {
+        for _ in 0..5 {
             let candidate = dir.join(name);
-            if candidate.exists() {
+            if candidate.is_file() {
                 return candidate.to_string_lossy().to_string();
+            }
+            // Also try CARGO_TARGET_DIR / debug|release
+            for profile in ["debug", "release"] {
+                let alt = dir.join(profile).join(name);
+                if alt.is_file() {
+                    return alt.to_string_lossy().to_string();
+                }
             }
             if let Some(parent) = dir.parent() {
                 dir = parent.to_path_buf();
@@ -300,7 +307,22 @@ fn which_or_build(name: &str) -> String {
             }
         }
     }
-    name.to_string()
+    if let Ok(manifest) = std::env::var("CARGO_MANIFEST_DIR") {
+        let root = std::path::Path::new(&manifest)
+            .ancestors()
+            .nth(2)
+            .unwrap_or(std::path::Path::new(&manifest));
+        for profile in ["debug", "release"] {
+            let candidate = root.join("target").join(profile).join(name);
+            if candidate.is_file() {
+                return candidate.to_string_lossy().to_string();
+            }
+        }
+    }
+    panic!(
+        "binary `{name}` not found in PATH or target/{{debug,release}}. \
+         Build with: cargo build -p {name}"
+    );
 }
 
 /// Check if the signaling server binary is available (e2e job only).

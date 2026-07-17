@@ -32,17 +32,23 @@ fn which_or_build(name: &str) -> String {
     if let Ok(path) = std::env::var("PATH") {
         for dir in path.split(':') {
             let candidate = format!("{dir}/{name}");
-            if std::path::Path::new(&candidate).exists() {
+            if std::path::Path::new(&candidate).is_file() {
                 return candidate;
             }
         }
     }
     if let Ok(exe) = std::env::current_exe() {
         let mut dir = exe.parent().unwrap().to_path_buf();
-        for _ in 0..3 {
+        for _ in 0..5 {
             let candidate = dir.join(name);
-            if candidate.exists() {
+            if candidate.is_file() {
                 return candidate.to_string_lossy().to_string();
+            }
+            for profile in ["debug", "release"] {
+                let alt = dir.join(profile).join(name);
+                if alt.is_file() {
+                    return alt.to_string_lossy().to_string();
+                }
             }
             if let Some(parent) = dir.parent() {
                 dir = parent.to_path_buf();
@@ -51,7 +57,22 @@ fn which_or_build(name: &str) -> String {
             }
         }
     }
-    name.to_string()
+    if let Ok(manifest) = std::env::var("CARGO_MANIFEST_DIR") {
+        let root = std::path::Path::new(&manifest)
+            .ancestors()
+            .nth(2)
+            .unwrap_or(std::path::Path::new(&manifest));
+        for profile in ["debug", "release"] {
+            let candidate = root.join("target").join(profile).join(name);
+            if candidate.is_file() {
+                return candidate.to_string_lossy().to_string();
+            }
+        }
+    }
+    panic!(
+        "binary `{name}` not found in PATH or target/{{debug,release}}. \
+         Build with: cargo build -p {name}"
+    );
 }
 
 #[test]
