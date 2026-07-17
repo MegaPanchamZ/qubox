@@ -11,7 +11,8 @@ qubox-display = { path = "../../crates/qubox-display" }
 qubox-identity = { path = "../../crates/qubox-identity" }
 qubox-media = { path = "../../crates/qubox-media" }
 qubox-rl-policy = { path = "../../crates/qubox-rl-policy", optional = true }
-qubox-mic = { path = "../../crates/qubox-mic" }
+# WebRTC APM (echo cancel) needs autotools on Windows — enable only off-Windows.
+qubox-mic = { path = "../../crates/qubox-mic", default-features = false }
 qubox-pen = { path = "../../crates/qubox-pen" }
 qubox-platform = { path = "../../crates/qubox-platform" }
 qubox-proto = { path = "../../crates/qubox-proto" }
@@ -42,6 +43,9 @@ notify-debouncer-mini = { version = "0.5", optional = true }
 uinput = "0.1"
 
 [features]
+default = ["mic-apm"]
+# Echo cancel / AGC via webrtc-audio-processing (not default on Windows CI).
+mic-apm = ["qubox-mic/webrtc-apm"]
 rl-abr = ["qubox-rl-policy"]
 file-sync = ["dep:sysinfo", "dep:notify", "dep:notify-debouncer-mini"]
 

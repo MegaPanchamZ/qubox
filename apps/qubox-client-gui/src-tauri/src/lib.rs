@@ -131,34 +131,55 @@ struct SessionRegistry {
     sessions: HashMap<String, SessionHandle>,
 }
 
-/// Resolves the path of the `qubox-client-cli` binary. In `cargo run` /
-/// `cargo build` we get the exact path via `CARGO_BIN_EXE_qubox-client-cli`.
-/// In production (installed) we fall back to a `which`-style lookup
-/// resolved by the OS.
-fn resolve_qubox_client_cli_path() -> PathBuf {
-    if let Some(path) = option_env!("CARGO_BIN_EXE_qubox-client-cli") {
-        return PathBuf::from(path);
+/// Resolves a bundled sidecar binary (client-cli / daemon / host-agent).
+/// Order: compile-time cargo bin → env override → next to this exe
+/// (Tauri externalBin) → PATH.
+fn resolve_sidecar_path(name: &str, env_key: &str) -> PathBuf {
+    // Only client-cli has a compile-time cargo path today.
+    if name == "qubox-client-cli" {
+        if let Some(path) = option_env!("CARGO_BIN_EXE_qubox-client-cli") {
+            return PathBuf::from(path);
+        }
     }
 
-    if let Ok(path) = std::env::var("QUBOX_CLIENT_CLI") {
-        return PathBuf::from(path);
+    if let Ok(path) = std::env::var(env_key) {
+        if !path.is_empty() {
+            return PathBuf::from(path);
+        }
     }
 
-    if let Ok(path) = which_qubox_client_cli() {
+    let file_name = if cfg!(windows) {
+        format!("{name}.exe")
+    } else {
+        name.to_string()
+    };
+
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(parent) = exe.parent() {
+            let candidate = parent.join(&file_name);
+            if candidate.is_file() {
+                return candidate;
+            }
+        }
+    }
+
+    if let Ok(path) = which_binary(&file_name) {
         return path;
     }
 
-    PathBuf::from("qubox-client-cli")
+    PathBuf::from(file_name)
 }
 
-/// Minimal `which`-style helper: probe `PATH` for a binary called
-/// `qubox-client-cli`. Cross-platform.
-fn which_qubox_client_cli() -> Result<PathBuf, ()> {
-    let name = if cfg!(windows) {
-        "qubox-client-cli.exe"
-    } else {
-        "qubox-client-cli"
-    };
+fn resolve_qubox_client_cli_path() -> PathBuf {
+    resolve_sidecar_path("qubox-client-cli", "QUBOX_CLIENT_CLI")
+}
+
+fn resolve_qubox_daemon_path() -> PathBuf {
+    resolve_sidecar_path("qubox-daemon", "QUBOX_DAEMON")
+}
+
+/// Minimal `which`-style helper: probe `PATH` for `name`.
+fn which_binary(name: &str) -> Result<PathBuf, ()> {
     let path_var = std::env::var_os("PATH").ok_or(())?;
     for dir in std::env::split_paths(&path_var) {
         let candidate = dir.join(name);
@@ -167,6 +188,50 @@ fn which_qubox_client_cli() -> Result<PathBuf, ()> {
         }
     }
     Err(())
+}
+
+/// If the daemon is not running, spawn the bundled `qubox-daemon` and wait
+/// briefly for the IPC socket to accept connections.
+async fn ensure_daemon() -> Result<IpcClient, String> {
+    if let Ok(client) = try_connect_daemon().await {
+        return Ok(client);
+    }
+
+    let daemon = resolve_qubox_daemon_path();
+    let config = build_daemon_config();
+    let socket = config.socket_path.clone();
+
+    let mut command = tokio::process::Command::new(&daemon);
+    command
+        .arg("run")
+        .arg("--socket-path")
+        .arg(&socket)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+
+    command
+        .spawn()
+        .map_err(|error| format!("failed to spawn {}: {error}", daemon.display()))?;
+
+    for _ in 0..40 {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        if let Ok(client) = try_connect_daemon().await {
+            return Ok(client);
+        }
+    }
+
+    Err(format!(
+        "daemon not reachable after spawning {} (socket {})",
+        daemon.display(),
+        socket.display()
+    ))
 }
 
 // ── Tauri commands ──────────────────────────────────────────────────
@@ -1204,11 +1269,16 @@ fn build_daemon_config() -> qubox_daemon::DaemonConfig {
     config
 }
 
-async fn connect_daemon() -> Result<IpcClient, String> {
+async fn try_connect_daemon() -> Result<IpcClient, String> {
     let config = build_daemon_config();
     IpcClient::connect(&config)
         .await
         .map_err(|error| format!("daemon connect failed: {error}"))
+}
+
+/// Connect to the local daemon, auto-starting the bundled sidecar if needed.
+async fn connect_daemon() -> Result<IpcClient, String> {
+    ensure_daemon().await
 }
 
 // ── Optional: read IPcEvent stream and forward to React ─────────────
@@ -1219,12 +1289,9 @@ async fn connect_daemon() -> Result<IpcClient, String> {
 /// silently exits if it cannot reconnect after a short window.
 fn spawn_daemon_bridge(app: AppHandle) {
     tauri::async_runtime::spawn(async move {
-        let config = build_daemon_config();
-        let mut client = match IpcClient::connect(&config).await {
+        let mut client = match ensure_daemon().await {
             Ok(client) => client,
-            Err(_) => {
-                return;
-            }
+            Err(_) => return,
         };
         let events: Vec<IpcEvent> = match client.subscribe().await {
             Ok(events) => events,

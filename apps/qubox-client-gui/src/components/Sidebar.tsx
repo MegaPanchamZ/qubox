@@ -15,12 +15,12 @@ type SidebarProps = {
 };
 
 const ITEMS: { id: View; label: string; icon: string }[] = [
-  { id: "hosts", label: "Hosts", icon: "◉" },
-  { id: "host", label: "Host mode", icon: "▣" },
-  { id: "pairing", label: "Pairing", icon: "◐" },
-  { id: "sessions", label: "Sessions", icon: "▣" },
-  { id: "sync", label: "File Sync", icon: "⇄" },
-  { id: "settings", label: "Settings", icon: "✦" },
+  { id: "hosts", label: "Hosts", icon: "devices" },
+  { id: "host", label: "Host mode", icon: "router" },
+  { id: "pairing", label: "Pairing", icon: "link" },
+  { id: "sessions", label: "Sessions", icon: "play_circle" },
+  { id: "sync", label: "File Sync", icon: "swap_horiz" },
+  { id: "settings", label: "Settings", icon: "settings" },
 ];
 
 export function Sidebar({
@@ -33,7 +33,7 @@ export function Sidebar({
   return (
     <aside className="rail">
       <div className="rail__brand">
-        <span className="rail__glyph">BP</span>
+        <span className="rail__logo-text">QUBOX</span>
       </div>
       <nav className="rail__nav">
         {ITEMS.map((item) => {
@@ -53,7 +53,7 @@ export function Sidebar({
               onClick={() => onChange(item.id)}
               type="button"
             >
-              <span className="rail__icon" aria-hidden="true">
+              <span className="material-symbols-outlined rail__icon" aria-hidden="true">
                 {item.icon}
               </span>
               <span className="rail__label">{item.label}</span>

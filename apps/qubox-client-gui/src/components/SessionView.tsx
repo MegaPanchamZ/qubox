@@ -36,6 +36,9 @@ export function SessionView({ onCancel }: SessionViewProps) {
 
       {sorted.length === 0 ? (
         <div className="empty-state">
+          <span className="material-symbols-outlined" style={{ fontSize: "2.5rem", color: "var(--muted)", marginBottom: "12px" }}>
+            play_disabled
+          </span>
           <p className="empty-state__title">No active sessions</p>
           <p className="empty-state__body">
             Connect to a host from the Hosts tab to start a session.
@@ -83,6 +86,7 @@ function SessionRow({ session, telemetry, stderr, onCancel }: SessionRowProps) {
             onClick={() => onCancel(session.sessionId)}
             type="button"
           >
+            <span className="material-symbols-outlined" style={{ fontSize: "1.1rem" }}>power_settings_new</span>
             Disconnect
           </button>
         </div>

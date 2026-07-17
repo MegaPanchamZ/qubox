@@ -35,7 +35,6 @@ jobs:
             echo "ref=${{ github.ref }}" >> "$GITHUB_OUTPUT"
             echo "tag=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
           else
-            # workflow_dispatch from a branch: use latest tag tip or fail if no tag input
             TAG="${{ github.event.inputs.tag }}"
             if [[ -z "$TAG" ]]; then
               echo "::error::Push a v* tag or pass workflow_dispatch input tag=vX.Y.Z"
@@ -55,15 +54,12 @@ jobs:
         include:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-            binary: qubox-daemon
             artifact: release-linux
           - os: macos-latest
             target: x86_64-apple-darwin
-            binary: qubox-daemon
             artifact: release-macos
           - os: windows-latest
             target: x86_64-pc-windows-msvc
-            binary: qubox-daemon.exe
             artifact: release-windows
     steps:
       - uses: actions/checkout@v4
@@ -118,81 +114,117 @@ jobs:
           echo "PKG_CONFIG_PATH=C:\vcpkg\installed\x64-windows-static-md\lib\pkgconfig" >> $env:GITHUB_ENV
           $env:PKG_CONFIG_PATH = "C:\vcpkg\installed\x64-windows-static-md\lib\pkgconfig"
           pkg-config --modversion opus
+          echo "LIBOPUS_LIB_DIR=C:\vcpkg\packages\opus_x64-windows-static-md\lib" >> $env:GITHUB_ENV
+          echo "LIBOPUS_INCLUDE_DIR=C:\vcpkg\packages\opus_x64-windows-static-md\include" >> $env:GITHUB_ENV
 
       - name: Install Node.js
         uses: actions/setup-node@v4
         with:
           node-version: "22"
 
-      - name: "Build daemon, host-agent, client-cli (Linux)"
+      # ── Sidecar binaries (bundled into Tauri via externalBin) ─────────
+
+      - name: "Build sidecars (Linux)"
         if: runner.os == 'Linux'
         run: cargo build --release -p qubox-daemon -p qubox-host-agent -p qubox-client-cli -p qubox-signaling-server
 
-      - name: "Build daemon (macOS, no systemd)"
+      - name: "Build sidecars (macOS)"
         if: runner.os == 'macOS'
-        run: cargo build --release --no-default-features -p qubox-daemon
-
-      - name: "Build host-agent, client-cli, signaling-server (macOS)"
-        if: runner.os == 'macOS'
-        run: cargo build --release --no-default-features -p qubox-host-agent -p qubox-client-cli -p qubox-signaling-server
-
-      - name: "Build daemon (Windows, no systemd, vcpkg opus) -- optional"
-        if: runner.os == 'Windows'
-        continue-on-error: true
-        shell: pwsh
         run: |
-          $env:LIBOPUS_LIB_DIR = "C:\vcpkg\packages\opus_x64-windows-static-md\lib"
-          $env:LIBOPUS_INCLUDE_DIR = "C:\vcpkg\packages\opus_x64-windows-static-md\include"
+          # daemon: no systemd feature
           cargo build --release --no-default-features -p qubox-daemon
+          # host/client keep default features (mic-apm when available)
+          cargo build --release -p qubox-host-agent -p qubox-client-cli -p qubox-signaling-server
 
-      - name: "Build host-agent, client-cli, signaling-server (Windows, vcpkg opus)"
+      - name: "Build sidecars (Windows — no webrtc APM)"
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $env:LIBOPUS_LIB_DIR = "C:\vcpkg\packages\opus_x64-windows-static-md\lib"
-          $env:LIBOPUS_INCLUDE_DIR = "C:\vcpkg\packages\opus_x64-windows-static-md\include"
-          cargo build --release --no-default-features -p qubox-host-agent -p qubox-client-cli -p qubox-signaling-server
+          $env:LIBOPUS_LIB_DIR = $env:LIBOPUS_LIB_DIR
+          $env:LIBOPUS_INCLUDE_DIR = $env:LIBOPUS_INCLUDE_DIR
+          # daemon: no systemd; host/client: no mic-apm (default features off)
+          cargo build --release --no-default-features -p qubox-daemon -p qubox-host-agent -p qubox-client-cli -p qubox-signaling-server
+
+      - name: Stage Tauri externalBin sidecars
+        shell: bash
+        run: |
+          set -euo pipefail
+          TARGET="${{ matrix.target }}"
+          DEST="apps/qubox-client-gui/src-tauri/binaries"
+          mkdir -p "$DEST"
+          if [[ "${{ runner.os }}" == "Windows" ]]; then
+            EXT=".exe"
+          else
+            EXT=""
+          fi
+          for bin in qubox-daemon qubox-host-agent qubox-client-cli; do
+            src="target/release/${bin}${EXT}"
+            # Tauri externalBin naming: name-TARGETTRIPLE[.exe]
+            dst="${DEST}/${bin}-${TARGET}${EXT}"
+            if [[ ! -f "$src" ]]; then
+              echo "::error::missing sidecar $src"
+              exit 1
+            fi
+            cp "$src" "$dst"
+            echo "staged $dst"
+          done
+          ls -la "$DEST"
+
+      # ── Desktop app (primary product) ────────────────────────────────
 
       - name: Build client-gui (Tauri)
-        if: runner.os != 'Windows'
-        continue-on-error: true
         working-directory: apps/qubox-client-gui
+        shell: bash
         run: |
+          set -euo pipefail
           npm ci
           npx tauri build
+
+      # ── Collect artifacts ────────────────────────────────────────────
 
       - name: Collect artifacts (Unix)
         if: runner.os != 'Windows'
         run: |
+          set -euo pipefail
           mkdir -p dist
-          for bin in qubox-daemon qubox-host-agent qubox-client-cli qubox-signaling-server; do
-            [ -f "target/release/$bin" ] && cp "target/release/$bin" "dist/$bin" && echo "copied $bin"
-          done
+          # Primary: Tauri installers
           if [ -d "apps/qubox-client-gui/src-tauri/target/release/bundle" ]; then
             cp -r apps/qubox-client-gui/src-tauri/target/release/bundle/* dist/ 2>/dev/null || true
           fi
-          find target/release -maxdepth 1 -name '*.deb' -exec cp {} dist/ \; 2>/dev/null || true
-          find target/release -maxdepth 1 -name '*.rpm' -exec cp {} dist/ \; 2>/dev/null || true
-          (cd dist && sha256sum * > SHA256SUMS)
+          # Optional: raw sidecars + self-host signaling for power users
+          mkdir -p dist/bin
+          for bin in qubox-daemon qubox-host-agent qubox-client-cli qubox-signaling-server; do
+            [ -f "target/release/$bin" ] && cp "target/release/$bin" "dist/bin/$bin" && echo "copied $bin"
+          done
+          find dist -type f \( -name '*.deb' -o -name '*.rpm' -o -name '*.AppImage' -o -name '*.dmg' -o -name '*.app' \) -print || true
+          (cd dist && find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS)
+          ls -laR dist | head -80
 
       - name: Collect artifacts (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path dist | Out-Null
+          $bundle = "apps/qubox-client-gui/src-tauri/target/release/bundle"
+          if (Test-Path $bundle) {
+            Copy-Item -Recurse -Force "$bundle\*" dist\
+          }
+          New-Item -ItemType Directory -Force -Path dist\bin | Out-Null
           $bins = @('qubox-daemon.exe','qubox-host-agent.exe','qubox-client-cli.exe','qubox-signaling-server.exe')
           foreach ($b in $bins) {
             $src = "target/release/$b"
             if (Test-Path $src) {
-              Copy-Item $src "dist/$b"
+              Copy-Item $src "dist\bin\$b"
               Write-Host "copied $b"
             }
           }
-          Get-ChildItem dist -File | ForEach-Object {
+          Get-ChildItem -Recurse dist -File | ForEach-Object {
+            $rel = $_.FullName.Substring((Resolve-Path dist).Path.Length + 1)
             $h = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower()
-            "$h  $($_.Name)"
+            "$h  $rel"
           } | Set-Content -Encoding ascii dist/SHA256SUMS
           Get-Content dist/SHA256SUMS
+          Get-ChildItem -Recurse dist | Select-Object FullName
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -248,9 +280,9 @@ jobs:
           name: "Qubox ${{ needs.resolve-ref.outputs.tag }}"
           body_path: .github/release-template.md
           files: |
-            artifacts/release-linux/*
-            artifacts/release-macos/*
-            artifacts/release-windows/*
+            artifacts/release-linux/**
+            artifacts/release-macos/**
+            artifacts/release-windows/**
             artifacts/sbom/*
           generate_release_notes: true
           fail_on_unmatched_files: false

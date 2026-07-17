@@ -16,14 +16,16 @@ serde.workspace = true
 tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "time", "sync"] }
 tracing.workspace = true
 webrtc-audio-processing = { workspace = true, optional = true }
-webrtc-audio-processing-sys = "0.3"
+webrtc-audio-processing-sys = { version = "0.3", optional = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 pipewire = { workspace = true, optional = true }
 libspa = { workspace = true, optional = true }
 
 [features]
-default = ["webrtc-apm"]
-webrtc-apm = ["dep:webrtc-audio-processing"]
+# Default off on Windows (bundled webrtc APM needs autotools/cmake).
+# Enabled by default for non-Windows via dependent crates / CI.
+default = []
+webrtc-apm = ["dep:webrtc-audio-processing", "dep:webrtc-audio-processing-sys"]
 ns-rnnoise = []
 pipewire-virtual-source = ["dep:pipewire", "dep:libspa"]

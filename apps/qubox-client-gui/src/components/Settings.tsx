@@ -109,6 +109,9 @@ export function SettingsView() {
             onClick={() => void save("signaling_server", form.signalingServer)}
             type="button"
           >
+            <span className="material-symbols-outlined" style={{ fontSize: "1.1rem" }}>
+              {savingKey === "signaling_server" ? "sync" : "save"}
+            </span>
             {savingKey === "signaling_server" ? "Saving…" : "Save"}
           </button>
         </label>
@@ -131,6 +134,9 @@ export function SettingsView() {
             onClick={() => void save("bitrate_kbps", form.bitrateKbps)}
             type="button"
           >
+            <span className="material-symbols-outlined" style={{ fontSize: "1.1rem" }}>
+              {savingKey === "bitrate_kbps" ? "sync" : "save"}
+            </span>
             {savingKey === "bitrate_kbps" ? "Saving…" : "Save"}
           </button>
         </label>
@@ -153,6 +159,9 @@ export function SettingsView() {
             onClick={() => void save("fps_cap", form.fpsCap)}
             type="button"
           >
+            <span className="material-symbols-outlined" style={{ fontSize: "1.1rem" }}>
+              {savingKey === "fps_cap" ? "sync" : "save"}
+            </span>
             {savingKey === "fps_cap" ? "Saving…" : "Save"}
           </button>
         </label>
@@ -175,6 +184,9 @@ export function SettingsView() {
             onClick={() => void save("decoder_backend", form.decoderBackend)}
             type="button"
           >
+            <span className="material-symbols-outlined" style={{ fontSize: "1.1rem" }}>
+              {savingKey === "decoder_backend" ? "sync" : "save"}
+            </span>
             {savingKey === "decoder_backend" ? "Saving…" : "Save"}
           </button>
         </label>
@@ -194,6 +206,9 @@ export function SettingsView() {
             onClick={() => void save("mic_enabled", String(form.micEnabled))}
             type="button"
           >
+            <span className="material-symbols-outlined" style={{ fontSize: "1.1rem" }}>
+              {savingKey === "mic_enabled" ? "sync" : "save"}
+            </span>
             {savingKey === "mic_enabled" ? "Saving…" : "Save"}
           </button>
         </label>
@@ -218,6 +233,9 @@ export function SettingsView() {
             onClick={() => void save("clipboard_sync", form.clipboardSync)}
             type="button"
           >
+            <span className="material-symbols-outlined" style={{ fontSize: "1.1rem" }}>
+              {savingKey === "clipboard_sync" ? "sync" : "save"}
+            </span>
             {savingKey === "clipboard_sync" ? "Saving…" : "Save"}
           </button>
         </label>
@@ -237,6 +255,9 @@ export function SettingsView() {
             onClick={() => void save("stats_overlay", String(form.statsOverlay))}
             type="button"
           >
+            <span className="material-symbols-outlined" style={{ fontSize: "1.1rem" }}>
+              {savingKey === "stats_overlay" ? "sync" : "save"}
+            </span>
             {savingKey === "stats_overlay" ? "Saving…" : "Save"}
           </button>
         </label>

@@ -25,7 +25,9 @@ qubox-identity = { path = "../../../crates/qubox-identity" }
 qubox-proto = { path = "../../../crates/qubox-proto" }
 qubox-signaling = { path = "../../../crates/qubox-signaling" }
 qubox-transport = { path = "../../../crates/qubox-transport" }
-qubox-client-cli = { path = "../../qubox-client-cli" }
+# GUI links client-cli as a library (telemetry types / launch helpers).
+# Sidecar binary is bundled separately; skip webrtc APM in the GUI crate graph.
+qubox-client-cli = { path = "../../qubox-client-cli", default-features = false }
 tauri = { version = "2", features = ["tray-icon", "image-png"] }
 tauri-plugin-dialog = "2"
 tauri-plugin-fs = "2"

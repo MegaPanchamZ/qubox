@@ -141,6 +141,7 @@ export function PairingRequests() {
                     onClick={() => void decideHost(r.request_id, false)}
                     type="button"
                   >
+                    <span className="material-symbols-outlined" style={{ fontSize: "1.1rem" }}>close</span>
                     Reject
                   </button>
                   <button
@@ -149,6 +150,7 @@ export function PairingRequests() {
                     onClick={() => void decideHost(r.request_id, true)}
                     type="button"
                   >
+                    <span className="material-symbols-outlined" style={{ fontSize: "1.1rem" }}>check</span>
                     {busy === r.request_id ? "…" : "Approve"}
                   </button>
                 </div>
@@ -181,6 +183,7 @@ export function PairingRequests() {
                     onClick={() => void rejectClient(request)}
                     type="button"
                   >
+                    <span className="material-symbols-outlined" style={{ fontSize: "1.1rem" }}>close</span>
                     Reject
                   </button>
                   <button
@@ -188,6 +191,7 @@ export function PairingRequests() {
                     onClick={() => void acceptClient(request)}
                     type="button"
                   >
+                    <span className="material-symbols-outlined" style={{ fontSize: "1.1rem" }}>check</span>
                     Approve
                   </button>
                 </div>

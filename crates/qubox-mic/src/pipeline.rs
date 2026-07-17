@@ -14,11 +14,14 @@
 use std::sync::Arc;
 
 use qubox_proto::{MicStreamConfig, WireMicHeader, MIC_DATAGRAM_DISCRIMINATOR};
-use webrtc_audio_processing as webrtc_apm;
-use webrtc_audio_processing_sys as ffi;
 
 use crate::reference::ReferenceAudioTap;
 use crate::ring::SpscRing;
+
+#[cfg(feature = "webrtc-apm")]
+use webrtc_audio_processing as webrtc_apm;
+#[cfg(feature = "webrtc-apm")]
+use webrtc_audio_processing_sys as ffi;
 
 /// Thread handle + shutdown signal for a running pipeline.
 pub struct PipelineHandle {
@@ -71,59 +74,73 @@ pub fn spawn_pipeline(
     let channels = 1_u8.max(config.channels).min(2) as u32;
     let frame_samples = (sample_rate / 1_000) * (frame_ms as u32);
 
-    let init_cfg = ffi::InitializationConfig {
-        num_capture_channels: channels as i32,
-        num_render_channels: channels as i32,
-        enable_experimental_agc: config.agc_enabled,
-        enable_intelligibility_enhancer: false,
-    };
-
-    let mut apm = match webrtc_apm::Processor::new(&init_cfg) {
-        Ok(p) => Some(p),
-        Err(error) => {
-            tracing::warn!(
-                ?error,
-                "WebRTC APM build failed; falling back to passthrough"
-            );
-            None
-        }
-    };
-
-    if let Some(p) = apm.as_mut() {
-        let apm_cfg = webrtc_apm::Config {
-            echo_cancellation: if config.aec_enabled {
-                Some(webrtc_apm::EchoCancellation {
-                    suppression_level: webrtc_apm::EchoCancellationSuppressionLevel::High,
-                    enable_extended_filter: false,
-                    enable_delay_agnostic: true,
-                    stream_delay_ms: None,
-                })
-            } else {
-                None
-            },
-            gain_control: if config.agc_enabled {
-                Some(webrtc_apm::GainControl {
-                    mode: webrtc_apm::GainControlMode::AdaptiveDigital,
-                    target_level_dbfs: 3,
-                    compression_gain_db: 9,
-                    enable_limiter: true,
-                })
-            } else {
-                None
-            },
-            noise_suppression: if config.ns_enabled {
-                Some(webrtc_apm::NoiseSuppression {
-                    suppression_level: webrtc_apm::NoiseSuppressionLevel::High,
-                })
-            } else {
-                None
-            },
-            voice_detection: None,
-            enable_transient_suppressor: false,
-            enable_high_pass_filter: true,
+    #[cfg(feature = "webrtc-apm")]
+    let mut apm = {
+        let init_cfg = ffi::InitializationConfig {
+            num_capture_channels: channels as i32,
+            num_render_channels: channels as i32,
+            enable_experimental_agc: config.agc_enabled,
+            enable_intelligibility_enhancer: false,
         };
-        p.set_config(apm_cfg);
-    }
+
+        let mut apm = match webrtc_apm::Processor::new(&init_cfg) {
+            Ok(p) => Some(p),
+            Err(error) => {
+                tracing::warn!(
+                    ?error,
+                    "WebRTC APM build failed; falling back to passthrough"
+                );
+                None
+            }
+        };
+
+        if let Some(p) = apm.as_mut() {
+            let apm_cfg = webrtc_apm::Config {
+                echo_cancellation: if config.aec_enabled {
+                    Some(webrtc_apm::EchoCancellation {
+                        suppression_level: webrtc_apm::EchoCancellationSuppressionLevel::High,
+                        enable_extended_filter: false,
+                        enable_delay_agnostic: true,
+                        stream_delay_ms: None,
+                    })
+                } else {
+                    None
+                },
+                gain_control: if config.agc_enabled {
+                    Some(webrtc_apm::GainControl {
+                        mode: webrtc_apm::GainControlMode::AdaptiveDigital,
+                        target_level_dbfs: 3,
+                        compression_gain_db: 9,
+                        enable_limiter: true,
+                    })
+                } else {
+                    None
+                },
+                noise_suppression: if config.ns_enabled {
+                    Some(webrtc_apm::NoiseSuppression {
+                        suppression_level: webrtc_apm::NoiseSuppressionLevel::High,
+                    })
+                } else {
+                    None
+                },
+                voice_detection: None,
+                enable_transient_suppressor: false,
+                enable_high_pass_filter: true,
+            };
+            p.set_config(apm_cfg);
+        }
+        apm
+    };
+    #[cfg(not(feature = "webrtc-apm"))]
+    let apm = {
+        let _ = channels;
+        if config.aec_enabled || config.agc_enabled {
+            tracing::info!(
+                "WebRTC APM disabled in this build; mic uses RNNoise/Opus only"
+            );
+        }
+        None::<()>
+    };
 
     let encoder =
         match opus::Encoder::new(sample_rate, opus::Channels::Mono, opus::Application::Voip) {
@@ -170,7 +187,8 @@ pub fn spawn_pipeline(
 
 #[allow(clippy::too_many_arguments)]
 fn run_pipeline_loop(
-    mut apm: Option<webrtc_apm::Processor>,
+    #[cfg(feature = "webrtc-apm")] mut apm: Option<webrtc_apm::Processor>,
+    #[cfg(not(feature = "webrtc-apm"))] apm: Option<()>,
     mut encoder: opus::Encoder,
     rnnoise: Option<std::sync::Mutex<Box<nnnoiseless::DenoiseState<'static>>>>,
     capture_ring: Arc<SpscRing>,
@@ -183,10 +201,13 @@ fn run_pipeline_loop(
     shutdown_flag: Arc<std::sync::atomic::AtomicBool>,
 ) {
     let mut capture_buf = vec![0.0_f32; frame_samples as usize];
+    #[cfg(feature = "webrtc-apm")]
     let mut render_buf = vec![0.0_f32; frame_samples as usize];
     let mut opus_buf = vec![0_u8; 4_000];
     let mut sequence: u16 = 0;
     let mut warmup_frames: u32 = 0;
+    #[cfg(not(feature = "webrtc-apm"))]
+    let _ = (apm, reference_tap);
 
     while !shutdown_flag.load(std::sync::atomic::Ordering::Acquire) {
         let n_capture = capture_ring.pop_into(&mut capture_buf);
@@ -195,6 +216,7 @@ fn run_pipeline_loop(
             continue;
         }
 
+        #[cfg(feature = "webrtc-apm")]
         if let Some(p) = apm.as_mut() {
             let n_render = reference_tap.pop_into(&mut render_buf);
             if n_render > 0 {

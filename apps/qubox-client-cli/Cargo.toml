@@ -8,7 +8,7 @@ anyhow.workspace = true
 qubox-clipboard = { path = "../../crates/qubox-clipboard" }
 qubox-display = { path = "../../crates/qubox-display" }
 qubox-identity = { path = "../../crates/qubox-identity" }
-qubox-mic = { path = "../../crates/qubox-mic" }
+qubox-mic = { path = "../../crates/qubox-mic", default-features = false }
 qubox-pen = { path = "../../crates/qubox-pen" }
 qubox-platform = { path = "../../crates/qubox-platform" }
 qubox-proto = { path = "../../crates/qubox-proto" }
@@ -47,5 +47,6 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 ffmpeg-next = { version = "8.1", optional = true }
 
 [features]
-default = []
-hw-decode = ["dep:ffmpeg-next"]  # links libav; real av_hwdevice_ctx_create  
+default = ["mic-apm"]
+mic-apm = ["qubox-mic/webrtc-apm"]
+hw-decode = ["dep:ffmpeg-next"]  # links libav; real av_hwdevice_ctx_create

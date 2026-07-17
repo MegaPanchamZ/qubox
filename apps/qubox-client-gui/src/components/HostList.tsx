@@ -97,13 +97,19 @@ export function HostList({ onStartSession }: HostListProps) {
             onClick={() => void discover()}
             type="button"
           >
+            <span className="material-symbols-outlined" style={{ fontSize: "1.1rem" }}>
+              {discovering ? "sync" : "search"}
+            </span>
             {discovering ? "Scanning…" : "Discover LAN"}
           </button>
         </div>
       </header>
 
       {knownState.kind === "loading" ? (
-        <p className="state">Loading paired hosts…</p>
+        <p className="state">
+          <span className="material-symbols-outlined" style={{ fontSize: "1.1rem" }}>sync</span>
+          Loading paired hosts…
+        </p>
       ) : null}
       {knownState.kind === "error" ? (
         <p className="state state--error">{knownState.message}</p>
@@ -117,6 +123,9 @@ export function HostList({ onStartSession }: HostListProps) {
         <h2 className="section__title">Paired hosts</h2>
         {knownState.kind === "ready" && combined.known.length === 0 ? (
           <div className="empty-state">
+            <span className="material-symbols-outlined" style={{ fontSize: "2.5rem", color: "var(--muted)", marginBottom: "12px" }}>
+              sensors_off
+            </span>
             <p className="empty-state__title">No paired hosts yet</p>
             <p className="empty-state__body">
               Pair a host from the Pairing tab. Existing CLI pairings will show
@@ -150,6 +159,7 @@ export function HostList({ onStartSession }: HostListProps) {
         <h2 className="section__title">Discovered on LAN</h2>
         {combined.discovered.length === 0 ? (
           <p className="state">
+            <span className="material-symbols-outlined" style={{ fontSize: "1.1rem" }}>info</span>
             Run a discovery scan to populate this list. Results are kept until
             the next scan.
           </p>

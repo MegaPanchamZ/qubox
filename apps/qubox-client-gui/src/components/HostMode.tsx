@@ -74,9 +74,11 @@ export function HostModeView() {
       <div className="settings-grid">
         <div className="settings-field settings-field--inline">
           <button className="primary-button" onClick={() => void start()} type="button">
+            <span className="material-symbols-outlined" style={{ fontSize: "1.1rem" }}>play_arrow</span>
             Start host
           </button>
           <button className="secondary-button" onClick={() => void stop()} type="button">
+            <span className="material-symbols-outlined" style={{ fontSize: "1.1rem" }}>stop</span>
             Stop host
           </button>
         </div>

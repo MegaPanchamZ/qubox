@@ -86,3 +86,7 @@ scratch/.vagrant/
 *.lcov
 /coverage/
 /docs/_build//research/
+
+# Tauri externalBin staged sidecars (CI / local placeholders)
+apps/qubox-client-gui/src-tauri/binaries/*
+!apps/qubox-client-gui/src-tauri/binaries/.gitkeep

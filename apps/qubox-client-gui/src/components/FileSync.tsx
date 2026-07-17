@@ -165,6 +165,7 @@ export function FileSyncView() {
           </p>
         </div>
         <button className="secondary-button" onClick={() => void refresh()} type="button">
+          <span className="material-symbols-outlined" style={{ fontSize: "1.1rem" }}>refresh</span>
           Refresh
         </button>
       </header>
@@ -181,9 +182,11 @@ export function FileSyncView() {
           </p>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
             <button className="secondary-button" onClick={() => void applyPreset("default")} type="button">
+              <span className="material-symbols-outlined" style={{ fontSize: "1.1rem" }}>bookmark</span>
               Preset: default
             </button>
             <button className="secondary-button" onClick={() => void applyPreset("git")} type="button">
+              <span className="material-symbols-outlined" style={{ fontSize: "1.1rem" }}>bookmark</span>
               Preset: git
             </button>
             <button
@@ -191,17 +194,20 @@ export function FileSyncView() {
               onClick={() => void applyPreset("emulator-saves")}
               type="button"
             >
+              <span className="material-symbols-outlined" style={{ fontSize: "1.1rem" }}>bookmark</span>
               Preset: emulator-saves
             </button>
             <button className="secondary-button" onClick={() => void applyPreset("dev")} type="button">
+              <span className="material-symbols-outlined" style={{ fontSize: "1.1rem" }}>bookmark</span>
               Preset: dev
             </button>
           </div>
           <ul className="host-list" style={{ marginBottom: 12 }}>
             {ignores.map((p) => (
-              <li key={p} className="host-card" style={{ display: "flex", justifyContent: "space-between" }}>
+              <li key={p} className="host-card" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                 <code>{p}</code>
                 <button className="secondary-button" onClick={() => void removeIgnore(p)} type="button">
+                  <span className="material-symbols-outlined" style={{ fontSize: "1.1rem" }}>delete</span>
                   Remove
                 </button>
               </li>
@@ -215,6 +221,7 @@ export function FileSyncView() {
               value={newIgnore}
             />
             <button className="secondary-button" onClick={() => void addIgnore()} type="button">
+              <span className="material-symbols-outlined" style={{ fontSize: "1.1rem" }}>add</span>
               Add
             </button>
           </div>
@@ -299,6 +306,7 @@ export function FileSyncView() {
             value={ruleProcess}
           />
           <button className="secondary-button" onClick={() => void addRule()} type="button">
+            <span className="material-symbols-outlined" style={{ fontSize: "1.1rem" }}>add</span>
             Add rule
           </button>
         </div>
@@ -318,6 +326,7 @@ export function FileSyncView() {
             value={pushPeer}
           />
           <button className="secondary-button" onClick={() => void pushNow()} type="button">
+            <span className="material-symbols-outlined" style={{ fontSize: "1.1rem" }}>send</span>
             Queue push
           </button>
         </div>

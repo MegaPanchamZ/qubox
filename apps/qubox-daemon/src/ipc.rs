@@ -792,11 +792,7 @@ async fn dispatch_request(
         }
 
         IpcRequest::StartHost { config } => {
-            let current_exe = std::env::current_exe().unwrap_or_default();
-            let bin_path = current_exe
-                .parent()
-                .map(|p| p.join("qubox-host-agent"))
-                .unwrap_or_else(|| PathBuf::from("qubox-host-agent"));
+            let bin_path = resolve_managed_bin("qubox-host-agent");
             let socket_path = config.socket_path.clone();
             let mut args = vec![
                 "--allow-standalone".to_string(),
@@ -909,11 +905,7 @@ async fn dispatch_request(
         },
 
         IpcRequest::StartClient { config } => {
-            let current_exe = std::env::current_exe().unwrap_or_default();
-            let bin_path = current_exe
-                .parent()
-                .map(|p| p.join("qubox-client-cli"))
-                .unwrap_or_else(|| PathBuf::from("qubox-client-cli"));
+            let bin_path = resolve_managed_bin("qubox-client-cli");
             let socket_path = config.socket_path.clone();
             let mut args = vec![
                 "--allow-standalone".to_string(),
@@ -1565,26 +1557,50 @@ async fn dispatch_request(
     }
 }
 
-fn resolve_client_cli_bin() -> PathBuf {
-    if let Ok(p) = std::env::var("QUBOX_CLIENT_CLI") {
-        return PathBuf::from(p);
+/// Resolve a managed sibling binary (host-agent / client-cli).
+/// Order: env override → next to daemon exe → PATH name (OS resolves).
+fn resolve_managed_bin(name: &str) -> PathBuf {
+    let env_key = match name {
+        "qubox-client-cli" => Some("QUBOX_CLIENT_CLI"),
+        "qubox-host-agent" => Some("QUBOX_HOST_AGENT"),
+        _ => None,
+    };
+    if let Some(key) = env_key {
+        if let Ok(p) = std::env::var(key) {
+            if !p.is_empty() {
+                return PathBuf::from(p);
+            }
+        }
     }
+
+    let file_name = if cfg!(windows) {
+        format!("{name}.exe")
+    } else {
+        name.to_string()
+    };
+
     if let Ok(exe) = std::env::current_exe() {
         if let Some(parent) = exe.parent() {
-            let cand = parent.join("qubox-client-cli");
-            if cand.exists() {
+            let cand = parent.join(&file_name);
+            if cand.is_file() {
                 return cand;
             }
-            #[cfg(windows)]
-            {
-                let cand = parent.join("qubox-client-cli.exe");
-                if cand.exists() {
+            // Tauri externalBin may sit next to the GUI while daemon is
+            // nested one level down (or vice versa).
+            if let Some(grand) = parent.parent() {
+                let cand = grand.join(&file_name);
+                if cand.is_file() {
                     return cand;
                 }
             }
         }
     }
-    PathBuf::from("qubox-client-cli")
+
+    PathBuf::from(file_name)
+}
+
+fn resolve_client_cli_bin() -> PathBuf {
+    resolve_managed_bin("qubox-client-cli")
 }
 
 /// Spawn `qubox-client-cli` against the configured signaling URL.

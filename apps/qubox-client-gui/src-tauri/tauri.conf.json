@@ -33,13 +33,18 @@
     "targets": "all",
     "category": "Entertainment",
     "shortDescription": "Low-latency remote desktop for creators and gamers",
-    "longDescription": "Qubox is a low-latency remote-desktop client and host agent tuned for creators, gamers, and power users.",
+    "longDescription": "Qubox is a low-latency remote-desktop client and host agent tuned for creators, gamers, and power users. Install this app on every machine you want to control or connect from.",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
+    ],
+    "externalBin": [
+      "binaries/qubox-daemon",
+      "binaries/qubox-host-agent",
+      "binaries/qubox-client-cli"
     ]
   }
 }
