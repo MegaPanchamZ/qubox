@@ -2593,9 +2593,19 @@ mod tests {
         let v = sample_viewer_to_host();
         let bytes = canonical_json_bytes(&v).unwrap();
         let s = std::str::from_utf8(&bytes).unwrap();
-        // 'aud' < 'caps' < 'exp' < 'iat' < 'jti' < 'sub' < 'v' < 'viewerDtlsFp'
+        // 'aud' < 'caps' < 'exp' < 'iat' < 'jti' < 'sid' < 'sub' < 'v' < 'viewerDtlsFp'
         let mut last = 0;
-        for key in &["aud", "caps", "exp", "iat", "jti", "sub", "v", "viewerDtlsFp"] {
+        for key in &[
+            "aud",
+            "caps",
+            "exp",
+            "iat",
+            "jti",
+            "sid",
+            "sub",
+            "v",
+            "viewerDtlsFp",
+        ] {
             let pos = s.find(&format!("\"{key}\"")).expect(key);
             assert!(pos > last, "key {key} not sorted (pos={pos}, last={last})");
             last = pos;
