@@ -568,9 +568,16 @@ fn host_pairing_base_url() -> String {
     if let Some(dir) = directories::ProjectDirs::from("app", "Qubox", "qubox") {
         let path = dir.data_local_dir().join("host_pairing_port");
         if let Ok(s) = std::fs::read_to_string(&path) {
-            let port = s.trim();
-            if !port.is_empty() {
-                return format!("http://127.0.0.1:{port}");
+            let port_str = s.trim();
+            if let Ok(port) = port_str.parse::<u16>() {
+                // Verify the port is active before using it (loopback is <1ms, so 50ms is very safe).
+                let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
+                if std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(50)).is_ok() {
+                    return format!("http://127.0.0.1:{port}");
+                } else {
+                    // Stale port file - clean it up to prevent future stale hits
+                    let _ = std::fs::remove_file(&path);
+                }
             }
         }
     }
@@ -1429,6 +1436,15 @@ pub fn run() {
             Some(vec!["--minimized"]),
         ))
         .manage(registry)
+        .on_window_event(|window, event| match event {
+            tauri::WindowEvent::CloseRequested { api, .. } => {
+                if window.label() == "main" {
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
+            }
+            _ => {}
+        })
         .setup(|app| {
             let handle = app.handle().clone();
             spawn_daemon_bridge(handle.clone());
