@@ -301,17 +301,21 @@ mod tests {
     }
 
     #[test]
-    fn capacity_eviction_drops_oldest_lru() {
+    fn capacity_fails_closed_without_forgetting_seen_jtis() {
         let mut cache = JtiCache::with_capacity(3);
         let now = 1_000;
         let exp = now + 60_000;
         cache.check_and_mark(jti("a"), exp, now).unwrap();
         cache.check_and_mark(jti("b"), exp, now).unwrap();
         cache.check_and_mark(jti("c"), exp, now).unwrap();
-        cache.check_and_mark(jti("d"), exp, now + 1).unwrap();
-        // a is oldest; capacity=3 → a is evicted.
-        assert!(!cache.is_seen(jti("a"), now));
-        assert!(cache.is_seen(jti("d"), now));
+        assert_eq!(
+            cache.check_and_mark(jti("d"), exp, now + 1),
+            Err(JtiError::Capacity)
+        );
+        assert_eq!(
+            cache.check_and_mark(jti("a"), exp, now + 1),
+            Err(JtiError::Replay)
+        );
     }
 
     #[test]
