@@ -55,6 +55,7 @@ mod permissions;
 mod privacy;
 mod rate_control;
 mod rate_feedback;
+mod webrtc_session;
 
 #[cfg(feature = "file-sync")]
 mod file_sync_sensors;
@@ -522,6 +523,13 @@ async fn main() -> anyhow::Result<()> {
 
     let mut heartbeat = tokio::time::interval(Duration::from_secs(10));
 
+    // Registry of in-flight WebRTC sessions. The signaling message loop hands
+    // incoming RelaySignal::IceCandidate messages to the right session by
+    // `session_id`. Each session registers itself on entry and removes
+    // itself when the PeerConnection closes.
+    let webrtc_sessions: webrtc_session::SessionRegistry =
+        Arc::new(Mutex::new(std::collections::HashMap::new()));
+
     loop {
         tokio::select! {
             _ = heartbeat.tick() => {
@@ -537,6 +545,7 @@ async fn main() -> anyhow::Result<()> {
                             args.auto_approve_pairing,
                             runtime.clone(),
                             pairing_ui.clone(),
+                            webrtc_sessions.clone(),
                         ).await?;
                     }
                     Some(Ok(Message::Close(_))) | None => {
@@ -815,6 +824,7 @@ async fn handle_server_message(
     auto_approve_pairing: bool,
     runtime: HostSessionRuntime,
     pairing_ui: Option<pairing_ui::PairingUiState>,
+    webrtc_sessions: webrtc_session::SessionRegistry,
 ) -> anyhow::Result<()> {
     match message {
         ServerMessage::Welcome(welcome) => {
@@ -890,6 +900,13 @@ async fn handle_server_message(
 
             if requested.transport == TransportKind::NativeQuic {
                 tokio::spawn(run_native_quic_session(*requested, runtime));
+            } else if requested.transport == TransportKind::WebRtc {
+                tokio::spawn(run_webrtc_session(*requested, runtime, webrtc_sessions.clone()));
+            } else if requested.transport == TransportKind::RelayQuic {
+                tracing::warn!(
+                    session_id = %requested.session_id,
+                    "RelayQuic requested but no host-side relay path is implemented yet"
+                );
             }
         }
         ServerMessage::Signal(signal) => {
@@ -899,6 +916,12 @@ async fn handle_server_message(
                 kind = ?signal.signal,
                 "received relayed signaling"
             );
+            webrtc_session::dispatch_signal(
+                &webrtc_sessions,
+                signal.session_id,
+                signal.signal,
+            )
+            .await?;
         }
         ServerMessage::Presence(event) => {
             tracing::info!(
@@ -1053,6 +1076,91 @@ async fn run_native_quic_session(requested: SessionRequested, runtime: HostSessi
             run_multi_display_session(requested, runtime).await;
         }
     }
+}
+
+/// WebRTC session lifecycle, browser-originated.
+///
+/// 1. Build a `WebRtcSession` with the negotiated ICE servers + codecs.
+/// 2. Register it in the session registry so incoming `RelaySignal`s get
+///    routed correctly while we wait for the browser's SDP offer.
+/// 3. Spawn the (Phase A) test-pattern video producer so the browser sees a
+///    live MediaStream once ICE completes. Phase B replaces this with the
+///    real ffmpeg/PipeWire capture pipeline.
+/// 4. Wait until either the PeerConnection fails or the host's signaling
+///    connection drops; deregister and close.
+async fn run_webrtc_session(
+    requested: SessionRequested,
+    runtime: HostSessionRuntime,
+    registry: webrtc_session::SessionRegistry,
+) {
+    if requested.codec != VideoCodec::H264 {
+        tracing::warn!(
+            session_id = %requested.session_id,
+            codec = ?requested.codec,
+            "WebRTC media bridge only ships an H.264 track right now"
+        );
+        // Continue anyway — the browser will still see the peer connection
+        // and report "live"; just no video frames will flow.
+    }
+
+    let session = match webrtc_session::WebRtcSession::new(
+        runtime.signaling_writer.clone(),
+        runtime.self_peer_id,
+        requested.session_id,
+        requested.client.clone(),
+        &requested.ice_servers,
+        requested.codec,
+    )
+    .await
+    {
+        Ok(s) => s,
+        Err(err) => {
+            tracing::error!(
+                session_id = %requested.session_id,
+                ?err,
+                "failed to construct WebRtcSession"
+            );
+            return;
+        }
+    };
+
+    // The browser bundle creates the data channel on its side; the host
+    // attaches `on_data_channel` in `WebRtcSession::new` so it sees the
+    // channel as soon as the browser opens it.
+
+    {
+        let mut guard = registry.lock().await;
+        guard.insert(requested.session_id, session.clone());
+    }
+
+    tracing::info!(
+        session_id = %requested.session_id,
+        client_peer_id = %requested.client.peer_id,
+        codec = ?requested.codec,
+        "webrtc session registered; awaiting SDP offer via relay_signal"
+    );
+
+    // Spawn the test-pattern producer so the browser sees a live stream as
+    // soon as ICE completes. Phase B will spawn the real capture pipeline
+    // here instead and feed encoded H.264 access units into write_video.
+    let producer_session = session.clone();
+    let producer = tokio::spawn(webrtc_session::spawn_test_pattern_producer(
+        producer_session,
+    ));
+
+    // We don't currently drive the session from this task — the signaling
+    // loop dispatches each RelaySignal directly through `dispatch_signal`,
+    // which calls `handle_offer` / `add_ice_candidate` on the registered
+    // session. This task just waits for the registry entry to be removed
+    // (e.g., on close) or the producer to die.
+    let _ = producer.await;
+
+    if let Err(err) = session.close().await {
+        tracing::warn!(?err, "error closing webrtc session");
+    }
+    let mut guard = registry.lock().await;
+    guard.remove(&requested.session_id);
+    tracing::info!(session_id = %requested.session_id, "webrtc session torn down");
 }
 
 /// Single-stream session: keeps the existing behavior unchanged.

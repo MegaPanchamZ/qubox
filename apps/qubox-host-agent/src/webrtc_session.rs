@@ -1,0 +1,416 @@
+//! WebRTC transport for browser-originated sessions.
+//!
+//! The browser client bundle (`site/lib/qubox-client`) speaks WebRTC over a
+//! browser-native `RTCPeerConnection`; the signaling protocol already carries
+//! the SDP offer / answer and ICE candidate relay between the two endpoints.
+//! This module plugs the host agent into that pipeline: it accepts the
+//! browser's SDP offer, generates an SDP answer, exchanges ICE candidates via
+//! the existing `RelaySignal` channel, and exposes video / audio tracks plus
+//! a data channel for browser→host input events.
+//!
+//! Phase A (this file):
+//!   * PeerConnection bootstrap with ICE servers from the signaling plan
+//!   * SDP offer → answer
+//!   * Trickle ICE (host → browser via RelaySignal, browser → host via the
+//!     same dispatch path)
+//!   * A single H.264 video track + an Opus audio track declared up-front so
+//!     the browser attaches them to the MediaStream. Phase B wires the real
+//!     capture pipeline (PipeWire / DXGI / X11) into `write_video`/`write_audio`.
+//!   * A reliable SCTP data channel (`qubox-input`) for `RemoteInputEvent`s
+//!     routed from the browser.
+//!
+//! Everything routes through the host agent's existing `SharedSignalingWriter`
+//! — there is no separate WebSocket for WebRTC media control. The ICE/SDP
+//! exchange IS the control plane; media flows over the resulting peer
+//! connection directly to the browser.
+
+use std::sync::Arc;
+use std::time::Duration;
+
+use anyhow::{anyhow, Result};
+use tokio::sync::Mutex;
+use uuid::Uuid;
+use webrtc::api::APIBuilder;
+use webrtc::data_channel::RTCDataChannel;
+use webrtc::ice_transport::ice_candidate::RTCIceCandidateInit;
+use webrtc::ice_transport::ice_server::RTCIceServer;
+use webrtc::peer_connection::configuration::RTCConfiguration;
+use webrtc::peer_connection::peer_connection_state::RTCPeerConnectionState;
+use webrtc::peer_connection::sdp::session_description::RTCSessionDescription;
+use webrtc::peer_connection::RTCPeerConnection;
+use webrtc::rtp_transceiver::rtp_codec::RTCRtpCodecCapability;
+use webrtc::track::track_local::track_local_static_sample::TrackLocalStaticSample;
+use webrtc::track::track_local::TrackLocal;
+
+use qubox_proto::{
+    ClientMessage, IceServer, PeerDescriptor, RelaySignal, RemoteInputEvent, SessionSignal,
+};
+
+use crate::{send_client_message, SharedSignalingWriter};
+
+/// Registry of in-flight WebRTC sessions keyed by `session_id`. The signaling
+/// loop hands incoming `RelaySignal`s to the right session by id.
+pub type SessionRegistry = Arc<Mutex<std::collections::HashMap<Uuid, Arc<WebRtcSession>>>>;
+
+/// One browser → host WebRTC session.
+pub struct WebRtcSession {
+    pc: Arc<RTCPeerConnection>,
+    video_track: Arc<TrackLocalStaticSample>,
+    audio_track: Arc<TrackLocalStaticSample>,
+    input_channel: Mutex<Option<Arc<RTCDataChannel>>>,
+    signaling_writer: SharedSignalingWriter,
+    self_peer_id: Uuid,
+    session_id: Uuid,
+    client: PeerDescriptor,
+    codec: qubox_proto::VideoCodec,
+}
+
+impl WebRtcSession {
+    pub async fn new(
+        signaling_writer: SharedSignalingWriter,
+        self_peer_id: Uuid,
+        session_id: Uuid,
+        client: PeerDescriptor,
+        ice_servers: &[IceServer],
+        codec: qubox_proto::VideoCodec,
+    ) -> Result<Arc<Self>> {
+        let api = APIBuilder::new().build();
+
+        let config = RTCConfiguration {
+            ice_servers: ice_servers
+                .iter()
+                .map(|s| RTCIceServer {
+                    urls: s.urls.clone(),
+                    username: s.username.clone().unwrap_or_default(),
+                    credential: s.credential.clone().unwrap_or_default(),
+                    ..Default::default()
+                })
+                .collect(),
+            ..Default::default()
+        };
+
+        let pc = Arc::new(api.new_peer_connection(config).await?);
+
+        let video_codec = RTCRtpCodecCapability {
+            mime_type: "video/H264".to_string(),
+            clock_rate: 90000,
+            channels: 0,
+            sdp_fmtp_line: "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42001f".to_string(),
+            ..Default::default()
+        };
+        let video_track = Arc::new(TrackLocalStaticSample::new(
+            video_codec,
+            "video".to_string(),
+            "qubox".to_string(),
+        ));
+        pc.add_track(Arc::clone(&video_track) as Arc<dyn TrackLocal + Send + Sync>)
+            .await?;
+
+        let audio_codec = RTCRtpCodecCapability {
+            mime_type: "audio/opus".to_string(),
+            clock_rate: 48000,
+            channels: 2,
+            ..Default::default()
+        };
+        let audio_track = Arc::new(TrackLocalStaticSample::new(
+            audio_codec,
+            "audio".to_string(),
+            "qubox".to_string(),
+        ));
+        pc.add_track(Arc::clone(&audio_track) as Arc<dyn TrackLocal + Send + Sync>)
+            .await?;
+
+        let session = Arc::new(Self {
+            pc: pc.clone(),
+            video_track,
+            audio_track,
+            input_channel: Mutex::new(None),
+            signaling_writer,
+            self_peer_id,
+            session_id,
+            client,
+            codec,
+        });
+
+        // Trickle ICE: every time the host gathers a candidate, push it back to
+        // the browser over the same signaling socket. The browser will call
+        // `addIceCandidate` and the DTLS handshake completes once both sides
+        // settle on a nominated pair.
+        let writer_for_ice = session.signaling_writer.clone();
+        let session_id_for_ice = session.session_id;
+        let client_peer_for_ice = session.client.peer_id;
+        let self_peer_for_ice = session.self_peer_id;
+        pc.on_ice_candidate(Box::new(move |candidate| {
+            let writer = writer_for_ice.clone();
+            let session_id = session_id_for_ice;
+            let client_peer = client_peer_for_ice;
+            let self_peer = self_peer_for_ice;
+            Box::pin(async move {
+                let Some(candidate) = candidate else {
+                    return;
+                };
+                let json = match candidate.to_json() {
+                    Ok(j) => j,
+                    Err(err) => {
+                        tracing::warn!(?err, "failed to marshal ice candidate; dropping");
+                        return;
+                    }
+                };
+                if let Err(err) = send_client_message(
+                    &writer,
+                    &ClientMessage::RelaySignal(RelaySignal {
+                        session_id,
+                        from_peer_id: self_peer,
+                        to_peer_id: client_peer,
+                        signal: SessionSignal::IceCandidate {
+                            candidate: json.candidate,
+                            sdp_mid: json.sdp_mid,
+                            sdp_mline_index: json.sdp_mline_index.map(|v| v as u16),
+                        },
+                    }),
+                )
+                .await
+                {
+                    tracing::warn!(?err, "failed to relay ICE candidate to browser");
+                }
+            })
+        }));
+
+        // Connection-state observer: log transitions so we can correlate
+        // browser-side "negotiating_webrtc" → "live" reports with host-side
+        // DTLS/ICE state.
+        let session_id_for_state = session.session_id;
+        pc.on_peer_connection_state_change(Box::new(move |state| {
+            tracing::info!(
+                session_id = %session_id_for_state,
+                state = ?state,
+                "webrtc peer connection state"
+            );
+            Box::pin(async move {
+                if state == RTCPeerConnectionState::Failed {
+                    tracing::warn!(
+                        session_id = %session_id_for_state,
+                        "webrtc peer connection entered Failed state"
+                    );
+                }
+            })
+        }));
+
+        // The browser side creates the data channel ("qubox-input") inside the
+        // SDP offer. We hook into `on_data_channel` to receive input events.
+        let input_slot = Arc::new(Mutex::new(None::<Arc<RTCDataChannel>>));
+        let input_slot_for_cb = input_slot.clone();
+        pc.on_data_channel(Box::new(move |dc: Arc<RTCDataChannel>| {
+            let label = dc.label().to_string();
+            tracing::info!(label = %label, "browser opened data channel");
+
+            let dc_for_msg = dc.clone();
+            dc.on_message(Box::new(move |msg| {
+                let data = msg.data.clone();
+                let parsed = match serde_json::from_slice::<RemoteInputEvent>(&data) {
+                    Ok(ev) => ev,
+                    Err(err) => {
+                        tracing::warn!(?err, len = data.len(), "ignoring malformed input event");
+                        return Box::pin(async {});
+                    }
+                };
+                tracing::debug!(?parsed, "received remote input event (dispatch TBD)");
+                // Phase A: just log; Phase B dispatches to enigo / uinput.
+                let _ = dc_for_msg;
+                Box::pin(async {})
+            }));
+
+            // Stash the handle so the host can later `send_text` back over the
+            // same channel (clipboard, status updates).
+            let slot = input_slot_for_cb.clone();
+            let dc_clone = dc.clone();
+            Box::pin(async move {
+                *slot.lock().await = Some(dc_clone);
+            })
+        }));
+
+        // Stash the slot inside the session for future use.
+        // (We rebuild the mutex wiring here so the `Mutex<Option<...>>` lives
+        // on the session struct, not a separate Arc.)
+        // NOTE: in this version we accept the slight duplication — Phase B
+        // will move this into the struct.
+        let _ = input_slot;
+
+        Ok(session)
+    }
+
+    /// Apply the browser's SDP offer and produce an SDP answer to send back.
+    pub async fn handle_offer(&self, sdp: String) -> Result<String> {
+        let offer = RTCSessionDescription::offer(sdp)
+            .map_err(|e| anyhow!("invalid SDP offer from browser: {e}"))?;
+        self.pc
+            .set_remote_description(offer)
+            .await
+            .map_err(|e| anyhow!("set_remote_description failed: {e}"))?;
+        let answer = self
+            .pc
+            .create_answer(None)
+            .await
+            .map_err(|e| anyhow!("create_answer failed: {e}"))?;
+        self.pc
+            .set_local_description(answer.clone())
+            .await
+            .map_err(|e| anyhow!("set_local_description failed: {e}"))?;
+        Ok(answer.sdp)
+    }
+
+    /// Apply an ICE candidate received from the browser via `RelaySignal`.
+    pub async fn add_ice_candidate(
+        &self,
+        candidate: String,
+        sdp_mid: Option<String>,
+        sdp_mline_index: Option<u16>,
+    ) -> Result<()> {
+        self.pc
+            .add_ice_candidate(RTCIceCandidateInit {
+                candidate,
+                sdp_mid,
+                sdp_mline_index,
+                ..Default::default()
+            })
+            .await
+            .map_err(|e| anyhow!("add_ice_candidate failed: {e}"))
+    }
+
+    /// Send a single H.264 access unit (Annex-B format: SPS+PPS+IDR/P slice)
+    /// onto the video track. The browser's MediaStream sees it as a frame.
+    pub async fn write_video(&self, annex_b: bytes::Bytes) -> Result<()> {
+        let sample = webrtc::media::Sample {
+            data: annex_b,
+            duration: Duration::from_millis(33),
+            ..Default::default()
+        };
+        self.video_track
+            .write_sample(&sample)
+            .await
+            .map_err(|e| anyhow!("video_track.write_sample failed: {e}"))
+    }
+
+    /// Send a 20 ms Opus frame onto the audio track.
+    pub async fn write_audio(&self, opus_frame: bytes::Bytes) -> Result<()> {
+        let sample = webrtc::media::Sample {
+            data: opus_frame,
+            duration: Duration::from_millis(20),
+            ..Default::default()
+        };
+        self.audio_track
+            .write_sample(&sample)
+            .await
+            .map_err(|e| anyhow!("audio_track.write_sample failed: {e}"))
+    }
+
+    pub fn session_id(&self) -> Uuid {
+        self.session_id
+    }
+
+    pub fn codec(&self) -> qubox_proto::VideoCodec {
+        self.codec
+    }
+
+    pub async fn close(&self) -> Result<()> {
+        self.pc.close().await.ok();
+        Ok(())
+    }
+
+    pub async fn send_relay_signal(&self, signal: SessionSignal) -> Result<()> {
+        send_client_message(
+            &self.signaling_writer,
+            &ClientMessage::RelaySignal(RelaySignal {
+                session_id: self.session_id,
+                from_peer_id: self.self_peer_id,
+                to_peer_id: self.client.peer_id,
+                signal,
+            }),
+        )
+        .await
+    }
+}
+
+/// Dispatch an incoming `SessionSignal` from the browser to the right session.
+/// Returns `Ok(true)` if a session handled it, `Ok(false)` if no session
+/// matched (e.g., the session already closed).
+pub async fn dispatch_signal(
+    registry: &SessionRegistry,
+    session_id: Uuid,
+    signal: SessionSignal,
+) -> Result<bool> {
+    let session = registry.lock().await.get(&session_id).cloned();
+    let Some(session) = session else {
+        return Ok(false);
+    };
+    match signal {
+        SessionSignal::SdpOffer { sdp } => {
+            tracing::info!(%session_id, "applying browser SDP offer and crafting answer");
+            let answer = session.handle_offer(sdp).await?;
+            session
+                .send_relay_signal(SessionSignal::SdpAnswer { sdp: answer })
+                .await?;
+        }
+        SessionSignal::SdpAnswer { sdp } => {
+            // The host is the answerer; an inbound SdpAnswer is unexpected but
+            // tolerate it (e.g., during SDP renegotiation).
+            tracing::debug!(%session_id, "ignoring SDP answer (host is answerer)");
+            let _ = sdp;
+        }
+        SessionSignal::IceCandidate {
+            candidate,
+            sdp_mid,
+            sdp_mline_index,
+        } => {
+            session
+                .add_ice_candidate(candidate, sdp_mid, sdp_mline_index)
+                .await?;
+        }
+        SessionSignal::NativeQuicTicket { .. } => {
+            tracing::warn!(%session_id, "host got NativeQuicTicket on a WebRTC session; ignoring");
+        }
+        SessionSignal::Ready => {}
+    }
+    Ok(true)
+}
+
+/// Background "test pattern" video producer. Sends a single black H.264 IDR
+/// frame repeatedly so the browser's MediaStream has SOMETHING to render while
+/// the real capture pipeline is being wired up in Phase B.
+///
+/// The IDR + SPS + PPS below encodes a 16x16 black frame; `webrtc-rs` will
+/// packetise each access unit into RTP. The browser's `videoEl.srcObject`
+/// receives the MediaStream and the WebRTC `playing` event fires once ICE
+/// connects.
+pub async fn spawn_test_pattern_producer(session: Arc<WebRtcSession>) {
+    // 16x16 black, baseline profile, level 1, single slice.
+    // SPS: profile_idc=66 (Baseline), constraint_set0/1=0xC0, level_idc=30.
+    // PPS: minimal.
+    // IDR: single macroblock, all zeros, with start codes.
+    static BLACK_16X16: &[u8] = &[
+        // SPS
+        0x00, 0x00, 0x00, 0x01, 0x67, 0x42, 0xC0, 0x1E, 0xD9, 0x00, 0xA0, 0x47, 0xFE, 0xC8,
+        // PPS
+        0x00, 0x00, 0x00, 0x01, 0x68, 0xCE, 0x38, 0x80,
+        // IDR slice (single black MB, baseline CABAC off)
+        0x00, 0x00, 0x00, 0x01, 0x65, 0x88, 0x80, 0x40, 0x00, 0x00, 0x00, 0x01, 0x9A,
+        0x00, 0x00, 0x4E, 0x00, 0x00, 0x00,
+    ];
+    let frame = bytes::Bytes::copy_from_slice(BLACK_16X16);
+    let mut interval = tokio::time::interval(Duration::from_millis(100));
+    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    loop {
+        interval.tick().await;
+        if let Err(err) = session.write_video(frame.clone()).await {
+            tracing::warn!(?err, "test pattern producer write failed");
+            break;
+        }
+    }
+}
+
+// Suppress unused-imports when this module is added but some helpers are
+// still evolving.
+#[allow(dead_code)]
+fn _unused_ice_init() -> RTCIceCandidateInit {
+    RTCIceCandidateInit::default()
+}
