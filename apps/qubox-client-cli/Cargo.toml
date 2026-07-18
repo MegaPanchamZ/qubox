@@ -31,6 +31,7 @@ tokio-tungstenite.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 uuid.workspace = true
+rustls = { workspace = true }
 wgpu.workspace = true
 wgpu_glyph.workspace = true
 winit.workspace = true

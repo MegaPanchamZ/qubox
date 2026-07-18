@@ -8,8 +8,22 @@ if (!rootElement) {
   throw new Error("missing #root element");
 }
 
-createRoot(rootElement).render(
-  <StrictMode>
-    <App />
-  </StrictMode>,
-);
+const root = createRoot(rootElement);
+
+function mount(key = 0) {
+  root.render(
+    <StrictMode>
+      <App key={key} />
+    </StrictMode>,
+  );
+}
+
+mount();
+
+// Browser-mode e2e: remount after registering tauri mocks (full reload wipes mocks).
+declare global {
+  interface Window {
+    __QUBOX_E2E_REMOUNT__?: () => void;
+  }
+}
+window.__QUBOX_E2E_REMOUNT__ = () => mount(Date.now());

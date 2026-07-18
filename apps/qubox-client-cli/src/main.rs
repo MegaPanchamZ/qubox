@@ -681,6 +681,7 @@ struct WindowLoopOutcome {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    let _ = rustls::crypto::ring::default_provider().install_default();
     init_tracing();
     let args = Args::parse();
     if args.json_telemetry {

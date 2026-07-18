@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { useApp } from "./AppContext";
+import { open } from "@tauri-apps/plugin-dialog";
 import {
   canAddIgnore,
   canQueuePush,
@@ -14,6 +16,10 @@ type SyncConflict = {
   remotePath: string;
   peerId: string;
   createdAtUnix: number;
+  localSize?: number;
+  localModified?: number;
+  remoteSize?: number;
+  remoteModified?: number;
 };
 
 type SyncRule = {
@@ -34,7 +40,22 @@ type SyncJob = {
   retryCount: number;
 };
 
+function formatBytes(bytes?: number): string {
+  if (bytes === undefined) return "unknown size";
+  if (bytes === 0) return "0 Bytes";
+  const k = 1024;
+  const sizes = ["Bytes", "KB", "MB", "GB"];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + " " + sizes[i];
+}
+
+function formatDate(unix?: number): string {
+  if (unix === undefined) return "unknown date";
+  return new Date(unix * 1000).toLocaleString();
+}
+
 export function FileSyncView() {
+  const { knownHosts } = useApp();
   const [ignores, setIgnores] = useState<string[]>([]);
   const [newIgnore, setNewIgnore] = useState("");
   const [conflicts, setConflicts] = useState<SyncConflict[]>([]);
@@ -47,6 +68,36 @@ export function FileSyncView() {
   const [ruleProcess, setRuleProcess] = useState("");
   const [pushPath, setPushPath] = useState("");
   const [pushPeer, setPushPeer] = useState("");
+
+  const pickFolder = async () => {
+    try {
+      const selected = await open({
+        directory: true,
+        multiple: false,
+        title: "Select Watch Directory",
+      });
+      if (typeof selected === "string") {
+        setRulePath(selected);
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const pickFile = async () => {
+    try {
+      const selected = await open({
+        directory: false,
+        multiple: false,
+        title: "Select File to Push",
+      });
+      if (typeof selected === "string") {
+        setPushPath(selected);
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  };
 
   const refresh = useCallback(async () => {
     setError(null);
@@ -202,6 +253,13 @@ export function FileSyncView() {
               Preset: dev
             </button>
           </div>
+          <p className="subtitle" style={{ margin: "4px 0 12px", fontSize: "0.82rem", opacity: 0.8, lineHeight: "1.4" }}>
+            <strong>Preset contents:</strong><br />
+            • <code>default</code>: VCS paths, node_modules, target, build output, temp files.<br />
+            • <code>git</code>: Excludes only <code>.git</code> repository folders.<br />
+            • <code>emulator-saves</code>: Excludes ROMs and archives (<code>*.gba, *.nes, *.rom, *.iso</code>) but keeps saves.<br />
+            • <code>dev</code>: Excludes dependency trees and build artifacts (<code>node_modules, target, .venv, __pycache__, *.o</code>).
+          </p>
           <ul className="host-list" style={{ marginBottom: 12 }}>
             {ignores.map((p) => (
               <li key={p} className="host-card" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
@@ -233,43 +291,74 @@ export function FileSyncView() {
             <p className="state">No conflicts</p>
           ) : (
             <ul className="host-list">
-              {conflicts.map((c) => (
-                <li key={c.conflictId} className="host-card">
-                  <div>
-                    <strong>{c.conflictId}</strong>
-                    <div className="subtitle">
-                      local: {c.localPath}
-                      <br />
-                      remote: {c.remotePath}
-                      <br />
-                      peer: {c.peerId}
+              {conflicts.map((c) => {
+                const localNewer = c.localModified && c.remoteModified ? c.localModified > c.remoteModified : false;
+                const remoteNewer = c.localModified && c.remoteModified ? c.remoteModified > c.localModified : false;
+                return (
+                  <li key={c.conflictId} className="host-card" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                    <div>
+                      <strong style={{ fontSize: "1.05rem", color: "var(--primary)" }}>Conflict: {c.conflictId}</strong>
+                      <div className="subtitle" style={{ marginTop: 4 }}>
+                        Peer: <code>{c.peerId}</code> · Detected: {formatDate(c.createdAtUnix)}
+                      </div>
                     </div>
-                  </div>
-                  <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
-                    <button
-                      className="secondary-button"
-                      onClick={() => void resolve(c.conflictId, "keep-local")}
-                      type="button"
-                    >
-                      Keep local
-                    </button>
-                    <button
-                      className="secondary-button"
-                      onClick={() => void resolve(c.conflictId, "keep-remote")}
-                      type="button"
-                    >
-                      Keep remote
-                    </button>
-                    <button
-                      className="secondary-button"
-                      onClick={() => void resolve(c.conflictId, "keep-both")}
-                      type="button"
-                    >
-                      Keep both
-                    </button>
-                  </div>
-                </li>
-              ))}
+
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, backgroundColor: "rgba(255, 255, 255, 0.02)", padding: 12, borderRadius: 6 }}>
+                      <div style={{ borderRight: "1px solid rgba(229, 226, 221, 0.08)", paddingRight: 16 }}>
+                        <span style={{ fontWeight: 600, display: "flex", alignItems: "center", gap: 6, fontSize: "0.9rem" }}>
+                          Local Copy
+                          {localNewer ? <span style={{ fontSize: "0.7rem", backgroundColor: "var(--primary)", color: "#000", padding: "1px 5px", borderRadius: 3, fontWeight: "bold" }}>NEWER</span> : null}
+                        </span>
+                        <div style={{ fontSize: "0.8rem", marginTop: 4, wordBreak: "break-all", opacity: 0.9, lineHeight: "1.4" }}>
+                          Path: <code>{c.localPath}</code>
+                          <br />
+                          Size: {formatBytes(c.localSize)}
+                          <br />
+                          Modified: {formatDate(c.localModified)}
+                        </div>
+                      </div>
+
+                      <div style={{ paddingLeft: 8 }}>
+                        <span style={{ fontWeight: 600, display: "flex", alignItems: "center", gap: 6, fontSize: "0.9rem" }}>
+                          Remote Copy (Quarantined)
+                          {remoteNewer ? <span style={{ fontSize: "0.7rem", backgroundColor: "var(--primary)", color: "#000", padding: "1px 5px", borderRadius: 3, fontWeight: "bold" }}>NEWER</span> : null}
+                        </span>
+                        <div style={{ fontSize: "0.8rem", marginTop: 4, wordBreak: "break-all", opacity: 0.9, lineHeight: "1.4" }}>
+                          Path: <code>{c.remotePath}</code>
+                          <br />
+                          Size: {formatBytes(c.remoteSize)}
+                          <br />
+                          Modified: {formatDate(c.remoteModified)}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
+                      <button
+                        className="secondary-button"
+                        onClick={() => void resolve(c.conflictId, "keep-local")}
+                        type="button"
+                      >
+                        Keep local
+                      </button>
+                      <button
+                        className="secondary-button"
+                        onClick={() => void resolve(c.conflictId, "keep-remote")}
+                        type="button"
+                      >
+                        Keep remote
+                      </button>
+                      <button
+                        className="secondary-button"
+                        onClick={() => void resolve(c.conflictId, "keep-both")}
+                        type="button"
+                      >
+                        Keep both
+                      </button>
+                    </div>
+                  </li>
+                );
+              })}
             </ul>
           )}
         </div>
@@ -287,23 +376,46 @@ export function FileSyncView() {
               </li>
             ))}
           </ul>
-          <input
-            className="text-input"
-            onChange={(e) => setRulePath(e.target.value)}
-            placeholder="Watch path(s), comma-separated"
-            value={rulePath}
-          />
-          <input
-            className="text-input"
-            onChange={(e) => setRulePeer(e.target.value)}
-            placeholder="Peer id(s)"
-            value={rulePeer}
-          />
+          <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
+            <input
+              className="text-input"
+              onChange={(e) => setRulePath(e.target.value)}
+              placeholder="Watch path(s), comma-separated"
+              value={rulePath}
+              style={{ flex: 1 }}
+            />
+            <button className="secondary-button" onClick={() => void pickFolder()} type="button">
+              <span className="material-symbols-outlined" style={{ fontSize: "1.1rem" }}>folder_open</span>
+              Browse
+            </button>
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 8 }}>
+            <select
+              className="text-input"
+              value={rulePeer}
+              onChange={(e) => setRulePeer(e.target.value)}
+              style={{ backgroundColor: "var(--bg-accent)", color: "var(--text)" }}
+            >
+              <option value="">-- Select Peer ID from Paired Hosts --</option>
+              {knownHosts.map((h) => (
+                <option key={h.hostPeerId} value={h.hostPeerId}>
+                  {h.displayName || "Unnamed Peer"} ({h.hostPeerId})
+                </option>
+              ))}
+            </select>
+            <input
+              className="text-input"
+              onChange={(e) => setRulePeer(e.target.value)}
+              placeholder="Or enter custom peer ID manually"
+              value={rulePeer}
+            />
+          </div>
           <input
             className="text-input"
             onChange={(e) => setRuleProcess(e.target.value)}
             placeholder="Process lock names (e.g. mgba)"
             value={ruleProcess}
+            style={{ marginBottom: 8 }}
           />
           <button className="secondary-button" onClick={() => void addRule()} type="button">
             <span className="material-symbols-outlined" style={{ fontSize: "1.1rem" }}>add</span>
@@ -313,18 +425,40 @@ export function FileSyncView() {
 
         <div className="settings-field">
           <span>Manual push</span>
-          <input
-            className="text-input"
-            onChange={(e) => setPushPath(e.target.value)}
-            placeholder="/path/to/file.sav"
-            value={pushPath}
-          />
-          <input
-            className="text-input"
-            onChange={(e) => setPushPeer(e.target.value)}
-            placeholder="target peer id"
-            value={pushPeer}
-          />
+          <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
+            <input
+              className="text-input"
+              onChange={(e) => setPushPath(e.target.value)}
+              placeholder="/path/to/file.sav"
+              value={pushPath}
+              style={{ flex: 1 }}
+            />
+            <button className="secondary-button" onClick={() => void pickFile()} type="button">
+              <span className="material-symbols-outlined" style={{ fontSize: "1.1rem" }}>file_open</span>
+              Browse
+            </button>
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 8 }}>
+            <select
+              className="text-input"
+              value={pushPeer}
+              onChange={(e) => setPushPeer(e.target.value)}
+              style={{ backgroundColor: "var(--bg-accent)", color: "var(--text)" }}
+            >
+              <option value="">-- Select Target Peer ID --</option>
+              {knownHosts.map((h) => (
+                <option key={h.hostPeerId} value={h.hostPeerId}>
+                  {h.displayName || "Unnamed Peer"} ({h.hostPeerId})
+                </option>
+              ))}
+            </select>
+            <input
+              className="text-input"
+              onChange={(e) => setPushPeer(e.target.value)}
+              placeholder="Or enter custom target peer ID manually"
+              value={pushPeer}
+            />
+          </div>
           <button className="secondary-button" onClick={() => void pushNow()} type="button">
             <span className="material-symbols-outlined" style={{ fontSize: "1.1rem" }}>send</span>
             Queue push

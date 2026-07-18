@@ -112,6 +112,7 @@ struct Settings {
     mic_enabled: bool,
     clipboard_sync: Option<String>,
     stats_overlay: bool,
+    auto_start_host: bool,
 }
 
 // ── Process management ──────────────────────────────────────────────
@@ -671,6 +672,7 @@ async fn get_settings() -> Result<Settings, String> {
         mic_enabled: false,
         clipboard_sync: Some("off".into()),
         stats_overlay: true,
+        auto_start_host: false,
     };
 
     if let Ok(mut client) = connect_daemon().await {
@@ -692,6 +694,9 @@ async fn get_settings() -> Result<Settings, String> {
                     "clipboard_sync" => settings.clipboard_sync = Some(v),
                     "stats_overlay" => {
                         settings.stats_overlay = v != "0" && !v.eq_ignore_ascii_case("false")
+                    }
+                    "auto_start_host" => {
+                        settings.auto_start_host = v == "1" || v.eq_ignore_ascii_case("true")
                     }
                     _ => {}
                 }
@@ -848,6 +853,16 @@ async fn sync_drain_ready() -> Result<Vec<serde_json::Value>, String> {
 async fn start_host_agent(server: Option<String>) -> Result<(), String> {
     let mut client = connect_daemon().await?;
     let socket = default_daemon_socket_path().to_string_lossy().into_owned();
+    // Load signaling server from daemon settings
+    let signaling_server = match client
+        .call::<IpcResponse>(&IpcRequest::GetSetting {
+            key: "signaling_server".into(),
+        })
+        .await
+    {
+        Ok(IpcResponse::SettingValue { value, .. }) => value.filter(|v| !v.is_empty()),
+        _ => None,
+    };
     // Load privacy prefs from daemon settings (Host mode GUI).
     let privacy_mode = match client
         .call::<IpcResponse>(&IpcRequest::GetSetting {
@@ -871,13 +886,17 @@ async fn start_host_agent(server: Option<String>) -> Result<(), String> {
         Ok(IpcResponse::SettingValue { value, .. }) => value.filter(|v| !v.is_empty()),
         _ => None,
     };
+    let final_server = server
+        .or(signaling_server)
+        .or_else(|| std::env::var("QUBOX_SERVER").ok())
+        .unwrap_or_else(|| DEFAULT_SIGNALING_SERVER.to_string());
     match client
         .call::<IpcResponse>(&IpcRequest::StartHost {
             config: qubox_daemon::ipc::HostConfig {
                 identity_path: None,
                 auto_approve_pairing: false,
                 socket_path: socket,
-                server: server.or_else(|| std::env::var("QUBOX_SERVER").ok()),
+                server: Some(final_server),
                 privacy_mode,
                 enable_privacy_on_session_start: enable_privacy,
                 stream_mode,
@@ -903,6 +922,19 @@ async fn stop_host_agent() -> Result<(), String> {
         IpcResponse::Unit => Ok(()),
         IpcResponse::Error { code, message } => Err(format!("{code}: {message}")),
         other => Err(format!("unexpected {other:?}")),
+    }
+}
+
+#[tauri::command]
+async fn get_host_status() -> Result<bool, String> {
+    let mut client = connect_daemon().await?;
+    match client
+        .call::<IpcResponse>(&IpcRequest::GetHostStatus)
+        .await
+        .map_err(|e| e.to_string())?
+    {
+        IpcResponse::HostStatus { running, .. } => Ok(running),
+        other => Err(format!("unexpected response: {:?}", other)),
     }
 }
 
@@ -973,6 +1005,30 @@ async fn sync_list_conflicts() -> Result<Vec<serde_json::Value>, String> {
         IpcResponse::SyncConflicts { conflicts } => conflicts
             .into_iter()
             .map(|c| {
+                let local_meta = std::fs::metadata(&c.local_path);
+                let (local_size, local_modified) = match local_meta {
+                    Ok(m) => {
+                        let size = m.len();
+                        let modified = m.modified().ok()
+                            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                            .map(|d| d.as_secs());
+                        (Some(size), modified)
+                    }
+                    Err(_) => (None, None),
+                };
+
+                let remote_meta = std::fs::metadata(&c.remote_path);
+                let (remote_size, remote_modified) = match remote_meta {
+                    Ok(m) => {
+                        let size = m.len();
+                        let modified = m.modified().ok()
+                            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                            .map(|d| d.as_secs());
+                        (Some(size), modified)
+                    }
+                    Err(_) => (None, None),
+                };
+
                 serde_json::to_value(serde_json::json!({
                     "conflictId": c.conflict_id,
                     "fileId": c.file_id,
@@ -980,6 +1036,10 @@ async fn sync_list_conflicts() -> Result<Vec<serde_json::Value>, String> {
                     "remotePath": c.remote_path,
                     "peerId": c.peer_id,
                     "createdAtUnix": c.created_at_unix,
+                    "localSize": local_size,
+                    "localModified": local_modified,
+                    "remoteSize": remote_size,
+                    "remoteModified": remote_modified,
                 }))
                 .map_err(|e| e.to_string())
             })
@@ -1304,13 +1364,31 @@ fn spawn_daemon_bridge(app: AppHandle) {
     });
 }
 
+fn kill_process_by_pid(pid: u32) {
+    #[cfg(unix)]
+    {
+        if let Ok(pid_i32) = i32::try_from(pid) {
+            let _ = nix::sys::signal::kill(
+                nix::unistd::Pid::from_raw(pid_i32),
+                nix::sys::signal::Signal::SIGKILL,
+            );
+        }
+    }
+    #[cfg(windows)]
+    {
+        let _ = std::process::Command::new("taskkill")
+            .args(["/F", "/PID", &pid.to_string()])
+            .output();
+    }
+}
+
 // ── Tauri entrypoint ────────────────────────────────────────────────
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let registry: Arc<Mutex<SessionRegistry>> = Arc::new(Mutex::new(SessionRegistry::default()));
 
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
@@ -1412,6 +1490,7 @@ pub fn run() {
             sync_drain_ready,
             start_host_agent,
             stop_host_agent,
+            get_host_status,
             sync_list_ignores,
             sync_add_ignore,
             sync_remove_ignore,
@@ -1423,8 +1502,25 @@ pub fn run() {
             sync_add_rule,
             sync_push_now,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application");
+
+    app.run(|app_handle, event| {
+        if let tauri::RunEvent::Exit = event {
+            let registry = app_handle.state::<Arc<Mutex<SessionRegistry>>>();
+            let mut guard = tauri::async_runtime::block_on(async {
+                registry.lock().await
+            });
+            for (_, mut handle) in guard.sessions.drain() {
+                if let Some(tx) = handle.kill_tx.take() {
+                    let _ = tx.send(());
+                }
+                if let Some(pid) = handle.pid {
+                    kill_process_by_pid(pid);
+                }
+            }
+        }
+    });
 }
 
 // ── Tests ───────────────────────────────────────────────────────────

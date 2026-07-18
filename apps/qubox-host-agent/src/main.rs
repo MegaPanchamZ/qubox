@@ -67,6 +67,9 @@ use qubox_display::{
 
 #[derive(Debug, Parser)]
 struct Args {
+    #[arg(long, default_value_t = false)]
+    allow_standalone: bool,
+
     #[arg(long, env = "QUBOX_SERVER", default_value = "ws://127.0.0.1:7000/ws")]
     server: String,
 
@@ -340,6 +343,7 @@ struct RemoteInputInjector {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    let _ = rustls::crypto::ring::default_provider().install_default();
     init_tracing();
 
     let args = Args::parse();

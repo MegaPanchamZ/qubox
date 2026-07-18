@@ -95,11 +95,11 @@ export function FirstRun({ onDone }: FirstRunProps) {
 
   if (step === "mode") {
     return (
-      <div className="view first-run">
+      <div className="view first-run" data-testid="first-run">
         <header className="view__header">
           <div>
             <p className="eyebrow">Welcome</p>
-            <h1>How will you use Qubox?</h1>
+            <h1 data-testid="first-run-title">How will you use Qubox?</h1>
             <p className="subtitle">
               Cloud uses Qubox accounts and{" "}
               <code>wss://signal.qubox.app</code>. Self-host talks to your own
@@ -112,6 +112,7 @@ export function FirstRun({ onDone }: FirstRunProps) {
           <button
             type="button"
             className="mode-card mode-card--primary"
+            data-testid="mode-cloud"
             onClick={() => pickMode("cloud")}
           >
             <span className="mode-card__badge">Recommended</span>
@@ -130,6 +131,7 @@ export function FirstRun({ onDone }: FirstRunProps) {
           <button
             type="button"
             className="mode-card"
+            data-testid="mode-selfhost"
             onClick={() => pickMode("selfhost")}
           >
             <h2>Self-host</h2>
@@ -149,13 +151,13 @@ export function FirstRun({ onDone }: FirstRunProps) {
   }
 
   return (
-    <div className="view first-run">
+    <div className="view first-run" data-testid="first-run-details">
       <header className="view__header">
         <div>
           <p className="eyebrow">
             {mode === "cloud" ? "Qubox Cloud" : "Self-host"}
           </p>
-          <h1>Finish setup</h1>
+          <h1 data-testid="first-run-details-title">Finish setup</h1>
           <p className="subtitle">
             {mode === "cloud" ? (
               <>
@@ -190,7 +192,11 @@ export function FirstRun({ onDone }: FirstRunProps) {
         </button>
       </header>
 
-      {error ? <p className="state state--error">{error}</p> : null}
+      {error ? (
+        <p className="state state--error" data-testid="first-run-error">
+          {error}
+        </p>
+      ) : null}
       {status ? <p className="state state--info">{status}</p> : null}
 
       <div className="settings-grid">
@@ -198,6 +204,7 @@ export function FirstRun({ onDone }: FirstRunProps) {
           <span>Device display name</span>
           <input
             className="text-input"
+            data-testid="device-name"
             onChange={(e) => setName(e.target.value)}
             value={name}
             autoComplete="off"
@@ -209,6 +216,7 @@ export function FirstRun({ onDone }: FirstRunProps) {
             <span>Enroll code</span>
             <input
               className="text-input text-input--code"
+              data-testid="enroll-code"
               onChange={(e) => setEnrollCode(e.target.value)}
               placeholder="e.g. KXRETMZS"
               value={enrollCode}
@@ -250,6 +258,7 @@ export function FirstRun({ onDone }: FirstRunProps) {
 
         <button
           className="primary-button"
+          data-testid="first-run-continue"
           disabled={busy}
           onClick={() => void finish()}
           type="button"

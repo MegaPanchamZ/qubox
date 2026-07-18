@@ -1,6 +1,7 @@
 import { createContext, useContext, useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { invoke } from "@tauri-apps/api/core";
 
 export type KnownHost = {
   hostPeerId: string;
@@ -29,6 +30,7 @@ export type Settings = {
   micEnabled: boolean;
   clipboardSync: string | null;
   statsOverlay: boolean;
+  autoStartHost: boolean;
 };
 
 export type SessionTelemetry =
@@ -91,6 +93,21 @@ export function AppProvider({ children }: { children: ReactNode }) {
     Record<string, StderrLine[]>
   >({});
   const [pendingPairings, setPendingPairings] = useState<PairingRequest[]>([]);
+
+  useEffect(() => {
+    const initSettings = async () => {
+      try {
+        const loaded = await invoke<Settings>("get_settings");
+        setSettings(loaded);
+        if (loaded.autoStartHost) {
+          await invoke("start_host_agent", {});
+        }
+      } catch (e) {
+        console.error("Failed to load settings or auto start host", e);
+      }
+    };
+    void initSettings();
+  }, []);
 
   useEffect(() => {
     const unlistens: UnlistenFn[] = [];

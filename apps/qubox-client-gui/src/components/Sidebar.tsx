@@ -31,7 +31,7 @@ export function Sidebar({
   conflictCount = 0,
 }: SidebarProps) {
   return (
-    <aside className="rail">
+    <aside className="rail" data-testid="sidebar">
       <div className="rail__brand">
         <span className="rail__logo-text">QUBOX</span>
       </div>
@@ -50,6 +50,7 @@ export function Sidebar({
             <button
               key={item.id}
               className={`rail__item${active ? " rail__item--active" : ""}`}
+              data-testid={`nav-${item.id}`}
               onClick={() => onChange(item.id)}
               type="button"
             >

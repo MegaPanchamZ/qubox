@@ -80,6 +80,7 @@ pub enum SubprocessEvent {
 /// A single managed subprocess.
 pub struct ManagedSubprocess {
     child: Arc<Mutex<Option<Child>>>,
+    current_pid: std::sync::atomic::AtomicU32,
     stop_flag: Arc<Notify>,
     config: SubprocessConfig,
     restart_history: Arc<Mutex<VecDeque<Instant>>>,
@@ -99,6 +100,7 @@ impl ManagedSubprocess {
         let pid = child.id().expect("child should have a PID after spawn");
         let this = Arc::new(Self {
             child: Arc::new(Mutex::new(Some(child))),
+            current_pid: std::sync::atomic::AtomicU32::new(pid),
             stop_flag: Arc::new(Notify::new()),
             config,
             restart_history: Arc::new(Mutex::new(VecDeque::new())),
@@ -148,6 +150,7 @@ impl ManagedSubprocess {
                     }
                 }
             };
+            self.current_pid.store(0, std::sync::atomic::Ordering::SeqCst);
 
             let code = exit_result.ok().and_then(|s| s.code());
             let reason = match code {
@@ -220,6 +223,7 @@ impl ManagedSubprocess {
             match spawn_child(&self.config).await {
                 Ok(new_child) => {
                     let pid = new_child.id().expect("child should have a PID after spawn");
+                    self.current_pid.store(pid, std::sync::atomic::Ordering::SeqCst);
                     *self.child.lock().await = Some(new_child);
                     let _ = self.event_tx.send(IpcEvent::SubprocessEvent {
                         label: self.label.clone(),
@@ -246,8 +250,12 @@ impl ManagedSubprocess {
 
     /// Get the current child PID, if running.
     pub async fn current_pid(&self) -> Option<u32> {
-        let guard = self.child.lock().await;
-        guard.as_ref().and_then(|c| c.id())
+        let pid = self.current_pid.load(std::sync::atomic::Ordering::SeqCst);
+        if pid == 0 {
+            None
+        } else {
+            Some(pid)
+        }
     }
 
     #[cfg(unix)]

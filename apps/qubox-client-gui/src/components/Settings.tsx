@@ -11,6 +11,7 @@ type FormState = {
   micEnabled: boolean;
   clipboardSync: string;
   statsOverlay: boolean;
+  autoStartHost: boolean;
 };
 
 const DEFAULT_FORM: FormState = {
@@ -21,6 +22,7 @@ const DEFAULT_FORM: FormState = {
   micEnabled: false,
   clipboardSync: "off",
   statsOverlay: true,
+  autoStartHost: false,
 };
 
 export function SettingsView() {
@@ -47,6 +49,7 @@ export function SettingsView() {
           micEnabled: loaded.micEnabled,
           clipboardSync: loaded.clipboardSync ?? "off",
           statsOverlay: loaded.statsOverlay,
+          autoStartHost: loaded.autoStartHost,
         });
       } catch (error) {
         if (cancelled) {
@@ -259,6 +262,28 @@ export function SettingsView() {
               {savingKey === "stats_overlay" ? "sync" : "save"}
             </span>
             {savingKey === "stats_overlay" ? "Saving…" : "Save"}
+          </button>
+        </label>
+
+        <label className="settings-field settings-field--inline">
+          <input
+            checked={form.autoStartHost}
+            onChange={(event) =>
+              setForm((prev) => ({ ...prev, autoStartHost: event.target.checked }))
+            }
+            type="checkbox"
+          />
+          <span>Automatically start host on app open</span>
+          <button
+            className="secondary-button"
+            disabled={savingKey === "auto_start_host"}
+            onClick={() => void save("auto_start_host", String(form.autoStartHost))}
+            type="button"
+          >
+            <span className="material-symbols-outlined" style={{ fontSize: "1.1rem" }}>
+              {savingKey === "auto_start_host" ? "sync" : "save"}
+            </span>
+            {savingKey === "auto_start_host" ? "Saving…" : "Save"}
           </button>
         </label>
       </div>

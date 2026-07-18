@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { SharePanel } from "./SharePanel";
 import {
@@ -12,12 +12,30 @@ import {
 export function HostModeView() {
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [isRunning, setIsRunning] = useState<boolean>(false);
+
+  useEffect(() => {
+    const checkStatus = async () => {
+      try {
+        const running = await invoke<boolean>("get_host_status");
+        setIsRunning(running);
+      } catch (e) {
+        // Ignore error when checking status
+      }
+    };
+    void checkStatus();
+    const interval = setInterval(() => {
+      void checkStatus();
+    }, 1500);
+    return () => clearInterval(interval);
+  }, []);
 
   const start = async () => {
     setError(null);
     try {
       await invoke("start_host_agent", {});
       setStatus("Host agent start requested via daemon");
+      setIsRunning(true);
     } catch (e) {
       setError(String(e));
     }
@@ -28,6 +46,7 @@ export function HostModeView() {
     try {
       await invoke("stop_host_agent");
       setStatus("Host agent stop requested");
+      setIsRunning(false);
     } catch (e) {
       setError(String(e));
     }
@@ -73,14 +92,22 @@ export function HostModeView() {
       {status ? <p className="state">{status}</p> : null}
       <div className="settings-grid">
         <div className="settings-field settings-field--inline">
-          <button className="primary-button" onClick={() => void start()} type="button">
-            <span className="material-symbols-outlined" style={{ fontSize: "1.1rem" }}>play_arrow</span>
-            Start host
-          </button>
-          <button className="secondary-button" onClick={() => void stop()} type="button">
-            <span className="material-symbols-outlined" style={{ fontSize: "1.1rem" }}>stop</span>
-            Stop host
-          </button>
+          {isRunning ? (
+            <button
+              className="secondary-button"
+              onClick={() => void stop()}
+              type="button"
+              style={{ borderColor: "var(--color-error)", color: "var(--color-error)" }}
+            >
+              <span className="material-symbols-outlined" style={{ fontSize: "1.1rem" }}>stop</span>
+              Stop host
+            </button>
+          ) : (
+            <button className="primary-button" onClick={() => void start()} type="button">
+              <span className="material-symbols-outlined" style={{ fontSize: "1.1rem" }}>play_arrow</span>
+              Start host
+            </button>
+          )}
         </div>
         <div className="settings-field">
           <span>Privacy mode (host)</span>

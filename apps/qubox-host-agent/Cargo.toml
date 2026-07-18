@@ -32,6 +32,7 @@ tokio-tungstenite.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 uuid.workspace = true
+rustls = { workspace = true }
 axum.workspace = true
 sysinfo = { version = "0.33", optional = true }
 notify = { version = "7", optional = true }

@@ -81,7 +81,7 @@ function Shell() {
 
   if (!ready) {
     return (
-      <main className="shell">
+      <main className="shell" data-testid="shell-loading">
         <p className="state">Starting…</p>
       </main>
     );
@@ -89,7 +89,7 @@ function Shell() {
 
   if (needsOnboarding) {
     return (
-      <main className="shell">
+      <main className="shell" data-testid="shell-onboarding">
         <section className="panel" style={{ flex: 1 }}>
           <FirstRun onDone={() => setNeedsOnboarding(false)} />
         </section>
@@ -98,7 +98,7 @@ function Shell() {
   }
 
   return (
-    <main className="shell">
+    <main className="shell" data-testid="shell-app">
       <Sidebar
         activeSessionCount={activeSessions.length}
         onChange={setView}
