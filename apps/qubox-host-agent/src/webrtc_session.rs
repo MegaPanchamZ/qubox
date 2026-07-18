@@ -463,18 +463,22 @@ pub async fn dispatch_signal(
 /// receives the MediaStream and the WebRTC `playing` event fires once ICE
 /// connects.
 pub async fn spawn_test_pattern_producer(session: Arc<WebRtcSession>) {
-    // 16x16 black, baseline profile, level 1, single slice.
-    // SPS: profile_idc=66 (Baseline), constraint_set0/1=0xC0, level_idc=30.
-    // PPS: minimal.
-    // IDR: single macroblock, all zeros, with start codes.
+    // 16×16 black frame, H.264 Baseline L3.0. Generated with:
+    //   ffmpeg -f lavfi -i "color=c=black:s=16x16:r=1" -vframes 1 \
+    //          -vcodec libx264 -profile:v baseline -level 3.0      \
+    //          -pix_fmt yuv420p -fflags +bitexact -flags:v +bitexact \
+    //          out.h264
+    // then stripped to SPS + PPS + IDR NAL units only (SEI discarded).
+    // The SPS/PPS are emitted once per access unit so the browser decoder
+    // initialises immediately on the first RTP packet.
     static BLACK_16X16: &[u8] = &[
-        // SPS
-        0x00, 0x00, 0x00, 0x01, 0x67, 0x42, 0xC0, 0x1E, 0xD9, 0x00, 0xA0, 0x47, 0xFE, 0xC8,
-        // PPS
-        0x00, 0x00, 0x00, 0x01, 0x68, 0xCE, 0x38, 0x80,
-        // IDR slice (single black MB, baseline CABAC off)
-        0x00, 0x00, 0x00, 0x01, 0x65, 0x88, 0x80, 0x40, 0x00, 0x00, 0x00, 0x01, 0x9A,
-        0x00, 0x00, 0x4E, 0x00, 0x00, 0x00,
+        // SPS (NAL type 7): Baseline L3.0, 16×16
+        0x00, 0x00, 0x00, 0x01, 0x67, 0x42, 0xC0, 0x1E, 0xDD, 0xEC, 0x04, 0x40, 0x00, 0x00,
+        0x03, 0x00, 0x40, 0x00, 0x00, 0x03, 0x00, 0x83, 0xC5, 0x8B, 0xE0,
+        // PPS (NAL type 8)
+        0x00, 0x00, 0x00, 0x01, 0x68, 0xCE, 0x0F, 0x2C, 0x80,
+        // IDR slice (NAL type 5): single black macroblock
+        0x00, 0x00, 0x00, 0x01, 0x65, 0x88, 0x84, 0x04, 0xBC, 0x98, 0xA0, 0x00, 0x38, 0xA3, 0x80,
     ];
     let frame = bytes::Bytes::copy_from_slice(BLACK_16X16);
     let mut interval = tokio::time::interval(Duration::from_millis(100));
