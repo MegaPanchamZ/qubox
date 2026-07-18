@@ -1382,10 +1382,41 @@ fn kill_process_by_pid(pid: u32) {
     }
 }
 
+fn load_qubox_env() {
+    if let Some(proj_dirs) = directories::ProjectDirs::from("com", "qubox", "qubox") {
+        let env_path = proj_dirs.config_dir().join("env");
+        if env_path.exists() {
+            if let Ok(content) = std::fs::read_to_string(&env_path) {
+                for line in content.lines() {
+                    let line = line.trim();
+                    if line.is_empty() || line.starts_with('#') || line.starts_with(';') {
+                        continue;
+                    }
+                    let line = if line.starts_with("export ") {
+                        &line[7..]
+                    } else {
+                        line
+                    };
+                    if let Some((key, val)) = line.split_once('=') {
+                        let key = key.trim();
+                        let val = val.trim();
+                        let val = val.trim_matches(|c| c == '"' || c == '\'');
+                        if !key.is_empty() {
+                            std::env::set_var(key, val);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 // ── Tauri entrypoint ────────────────────────────────────────────────
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    load_qubox_env();
+
     let registry: Arc<Mutex<SessionRegistry>> = Arc::new(Mutex::new(SessionRegistry::default()));
 
     let app = tauri::Builder::default()
