@@ -718,15 +718,11 @@ async fn main() -> anyhow::Result<()> {
         tlm::enable();
     }
     let (identity, identity_path) = load_or_create_identity(args.identity_path, args.name.clone())?;
-    let role = match &args.command {
-        Command::CreateShareLink { .. } | Command::RevokePairing { .. } => PeerRole::Host,
-        _ => PeerRole::Client,
-    };
     let descriptor = describe_peer(
-        role,
+        PeerRole::Client,
         Some(identity.display_name.clone()),
         identity.device_id,
-        identity.peer_id_for(role),
+        identity.peer_id_for(PeerRole::Client),
     );
 
     if matches!(&args.command, Command::Identity) {

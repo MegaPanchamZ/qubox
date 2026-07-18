@@ -1119,8 +1119,14 @@ impl SignalingState {
         host_peer_id: Uuid,
         client_peer_id: Uuid,
     ) -> anyhow::Result<()> {
-        if actor.peer_id != host_peer_id {
-            bail!("only host {} may revoke this grant", host_peer_id);
+        let is_host = actor.peer_id == host_peer_id;
+        let is_device_owner = actor.role == PeerRole::Client && actor.device_id == {
+            let peers = self.peers.read().await;
+            peers.get(&host_peer_id).map(|p| p.descriptor.device_id)
+        }.unwrap_or(Uuid::nil());
+
+        if !is_host && !is_device_owner {
+            bail!("only host {} or authorized local client may revoke this grant", host_peer_id);
         }
         let removed = self
             .pairing_store
@@ -1177,13 +1183,24 @@ impl SignalingState {
 
     async fn create_share_link(
         &self,
-        host: PeerDescriptor,
+        actor: PeerDescriptor,
         ttl_secs: u64,
         permissions: SessionPermissions,
     ) -> anyhow::Result<(String, u64, String)> {
-        if host.role != PeerRole::Host {
-            bail!("only hosts can create share links");
-        }
+        let (host_peer_id, host_label) = if actor.role == PeerRole::Host {
+            (actor.peer_id, actor.device_name.clone())
+        } else {
+            // Find a connected host on the same device
+            let peers = self.peers.read().await;
+            let matching_host = peers.values().find(|p| {
+                p.descriptor.role == PeerRole::Host && p.descriptor.device_id == actor.device_id
+            });
+            if let Some(host) = matching_host {
+                (host.descriptor.peer_id, host.descriptor.device_name.clone())
+            } else {
+                bail!("only hosts or clients on a device with an active host-agent can create share links");
+            }
+        };
         let ttl = if ttl_secs == 0 {
             900
         } else {
@@ -1198,8 +1215,8 @@ impl SignalingState {
         self.share_links.write().await.insert(
             code.clone(),
             ShareLinkEntry {
-                host_peer_id: host.peer_id,
-                host_label: host.device_name.clone(),
+                host_peer_id,
+                host_label,
                 permissions,
                 expires_unix_ms: expires,
             },
