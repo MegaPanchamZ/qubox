@@ -13,6 +13,7 @@ name = "rkyv_vs_json"
 harness = false
 
 [dependencies]
+base64.workspace = true
 bitflags.workspace = true
 ed25519-dalek.workspace = true
 hmac = "0.12"

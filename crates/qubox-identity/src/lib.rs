@@ -185,6 +185,18 @@ impl DeviceIdentity {
     }
 }
 
+/// Recover the host's private-key bytes for use as a stable,
+/// per-host seed (e.g. for wrapping the recovery key under the
+/// host identity). The returned buffer MUST be zeroized by the
+/// caller when no longer needed.
+pub fn host_seed_for_recovery(identity_path: &Path) -> anyhow::Result<Vec<u8>> {
+    let (identity, _) = load_or_create_identity(Some(identity_path.to_path_buf()), None)?;
+    let mut kek = derive_kek(Some(identity_path))?;
+    let private = decrypt_envelope(&kek, &identity.encrypted_private_key, &identity.public_key)?;
+    kek.zeroize();
+    Ok(private.to_vec())
+}
+
 impl KeyEnvelope {
     fn empty_placeholder() -> Self {
         Self {

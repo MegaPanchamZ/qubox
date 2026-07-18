@@ -3,7 +3,7 @@ use std::{
     fs,
     net::SocketAddr,
     path::PathBuf,
-    sync::Arc,
+    sync::{Arc, Mutex},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
@@ -21,10 +21,11 @@ use axum::{
 use base64::Engine as _;
 use futures::{SinkExt, StreamExt};
 use qubox_proto::{
-    ClientMessage, ErrorMessage, IceServer, PairingDecision, PairingGrant, PairingRequest,
-    PairingRequested, PeerDescriptor, PeerRole, PresenceEvent, RelaySignal, ServerMessage,
-    SessionCredential, SessionPermissions, SessionPlan, SessionRequested, StartSessionRequest,
-    TransportKind, VideoCodec, Welcome,
+    ClientMessage, ErrorMessage, IceAllowlist, IceServer, PairingDecision, PairingGrant,
+    PairingRequest, PairingRequested, PeerDescriptor, PeerRole, PresenceEvent, RelaySignal,
+    ServerMessage, SessionBundleInfo, SessionCredential, SessionPermissions, SessionPlan,
+    SessionRequested, SignedBundle, SignedKill, SignedKillEnvelope, StartSessionRequest,
+    TransportKind, VideoCodec, ViewerToHost, Welcome,
 };
 use rand_core::{OsRng, RngCore};
 use serde::{Deserialize, Serialize};
@@ -33,6 +34,8 @@ use tracing::{debug, info, warn};
 use uuid::Uuid;
 
 pub mod cluster;
+pub mod jti_cache;
+pub mod jwks;
 #[cfg(feature = "webtransport")]
 pub mod webtransport;
 
@@ -67,7 +70,7 @@ pub struct SignalingState {
     /// back to `SignedHello`. Default is `true` (i.e. unsigned is
     /// currently ALLOWED) to avoid breaking the LAN self-host mode
     /// and existing test harnesses. Production servers are expected
-    /// to construct their state with `allow_unsigned_hello(false)` —
+    /// to construct `state` with `allow_unsigned_hello(false)` —
     /// see `with_options_and_secret_and_policy`.
     allow_unsigned_hello: bool,
     /// Short-lived share codes → host + permissions.
@@ -78,6 +81,16 @@ pub struct SignalingState {
     session_authorizer: Option<Arc<dyn SessionAuthorizer>>,
     /// Optional Redis cluster bus for multi-instance deployments.
     cluster: Option<Arc<cluster::ClusterBus>>,
+    /// Optional cloud JWKS client used to verify Phase 2
+    /// `ViewerToHost` session bundles. Self-host builds leave this
+    /// unset so bundle-bearing messages fall back to the legacy
+    /// HMAC-bound `SessionCredential` path.
+    jwks: Option<Arc<jwks::JwksClient>>,
+    /// Single-use `jti` cache for accepted bundles, plus the kill
+    /// denylist. Always present so the API is stable even when the
+    /// JWKS client is not configured (the cache is a no-op until a
+    /// caller actually inserts entries).
+    jti_cache: Arc<Mutex<jti_cache::JtiCache>>,
 }
 
 /// How the server resolves tenant membership for connecting peers.
@@ -149,6 +162,89 @@ pub trait SessionAuthorizer: Send + Sync + 'static {
     >;
 }
 
+/// Reasons a Phase 2 session bundle can be rejected. Flat string
+/// payload so callers (BFF, host-agent) can surface a stable error
+/// code without juggling internal types.
+#[derive(Debug)]
+pub enum BundleVerifyError {
+    /// JWKS is not configured on this signaling instance.
+    JwksNotConfigured,
+    /// JWKS / signature / decode layer failure.
+    Jwks(jwks::JwksError),
+    /// The JWK resolved to a non-Ed25519 key.
+    BadKey(String),
+    /// The `SignedBundle` decoded to an unexpected payload shape.
+    Decode(qubox_proto::SignedBundleError),
+    /// `aud` did not match the target host.
+    AudienceMismatch { expected: String, actual: String },
+    /// `exp` is in the past.
+    Expired { exp_unix_ms: u64, now_unix_ms: u64 },
+    /// `jti` is on the local seen or kill list.
+    Jti(jti_cache::JtiError),
+    /// `sid` was not a valid UUID.
+    MalformedSid(String),
+}
+
+impl std::fmt::Display for BundleVerifyError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            BundleVerifyError::JwksNotConfigured => {
+                write!(f, "signaling instance has no JWKS client configured")
+            }
+            BundleVerifyError::Jwks(e) => write!(f, "JWKS verification failed: {e}"),
+            BundleVerifyError::BadKey(e) => write!(f, "JWK key invalid: {e}"),
+            BundleVerifyError::Decode(e) => write!(f, "bundle decode failed: {e}"),
+            BundleVerifyError::AudienceMismatch { expected, actual } => write!(
+                f,
+                "bundle aud {actual} did not match target host {expected}"
+            ),
+            BundleVerifyError::Expired {
+                exp_unix_ms,
+                now_unix_ms,
+            } => write!(
+                f,
+                "bundle expired at {exp_unix_ms}, now {now_unix_ms}"
+            ),
+            BundleVerifyError::Jti(e) => write!(f, "{e}"),
+            BundleVerifyError::MalformedSid(s) => write!(f, "sid {s:?} is not a valid UUID"),
+        }
+    }
+}
+
+impl std::error::Error for BundleVerifyError {}
+
+/// Filter a candidate ICE-server list against a verified
+/// `IceAllowlist`. Every server URL in `candidates` MUST appear in
+/// `allowlist.urls` (exact match). Returns the surviving list, or
+/// an error if any candidate is not on the allowlist.
+pub fn filter_ice_servers_to_allowlist(
+    candidates: &[IceServer],
+    allowlist: &IceAllowlist,
+) -> anyhow::Result<Vec<IceServer>> {
+    let allow: std::collections::HashSet<&str> =
+        allowlist.urls.iter().map(String::as_str).collect();
+    let mut out = Vec::with_capacity(candidates.len());
+    for server in candidates {
+        let offending: Vec<&String> = server
+            .urls
+            .iter()
+            .filter(|u| !allow.contains(u.as_str()))
+            .collect();
+        if !offending.is_empty() {
+            bail!(
+                "ICE server URL(s) not on signed allowlist: {:?}",
+                offending
+            );
+        }
+        if !qubox_proto::ice_url_is_valid(&server.urls.iter().next().cloned().unwrap_or_default())
+        {
+            bail!("ICE server URL scheme is not stun:/turn:/turns:");
+        }
+        out.push(server.clone());
+    }
+    Ok(out)
+}
+
 impl EnrollmentPolicy {
     pub fn is_managed(&self) -> bool {
         matches!(self, Self::Managed { .. })
@@ -188,6 +284,8 @@ impl Default for SignalingState {
             enrollment: EnrollmentPolicy::Open,
             session_authorizer: None,
             cluster: None,
+            jwks: None,
+            jti_cache: Arc::new(Mutex::new(jti_cache::JtiCache::new())),
         }
     }
 }
@@ -419,6 +517,8 @@ impl SignalingState {
             enrollment: EnrollmentPolicy::Open,
             session_authorizer: None,
             cluster: None,
+            jwks: None,
+            jti_cache: Arc::new(Mutex::new(jti_cache::JtiCache::new())),
         })
     }
 
@@ -450,6 +550,32 @@ impl SignalingState {
 
     pub fn cluster_enabled(&self) -> bool {
         self.cluster.is_some()
+    }
+
+    /// Attach a cloud JWKS client so the relay can verify Phase 2
+    /// `ViewerToHost` / `SignedKill` bundles end-to-end. Without a
+    /// JWKS client, bundle-bearing messages are rejected with a
+    /// clear error rather than silently skipping crypto.
+    pub fn with_jwks(mut self, client: Arc<jwks::JwksClient>) -> Self {
+        self.jwks = Some(client);
+        self
+    }
+
+    /// `true` iff a JWKS client is configured.
+    pub fn jwks_enabled(&self) -> bool {
+        self.jwks.is_some()
+    }
+
+    /// Borrow the JWKS client (if any) for callers that need to
+    /// drive a verification themselves.
+    pub fn jwks(&self) -> Option<Arc<jwks::JwksClient>> {
+        self.jwks.clone()
+    }
+
+    /// Shared handle to the single-use `jti` cache. Wrapped in
+    /// `Arc<Mutex<...>>` so callers can `await`-lock it from any task.
+    pub fn jti_cache(&self) -> Arc<Mutex<jti_cache::JtiCache>> {
+        self.jti_cache.clone()
     }
 
     /// Number of static ICE server entries advertised in session plans.
@@ -601,6 +727,154 @@ impl SignalingState {
         }
     }
 
+    /// Verify a Phase 2 `ViewerToHost` envelope end-to-end:
+    /// JWKS lookup → Ed25519 signature check → audience match →
+    /// expiry → `jti` single-use enforcement.
+    ///
+    /// `host_device_id` is the target host's `device_id` (the value
+    /// the bundle must carry in `aud`). `now_unix_ms` is forwarded so
+    /// tests can drive the clock.
+    ///
+    /// Errors are stringified into a `BundleVerifyError` so callers
+    /// can surface the rejection reason without juggling types.
+    pub async fn verify_viewer_to_host(
+        &self,
+        envelope: &SignedBundle,
+        host_device_id: &Uuid,
+        now_unix_ms: u64,
+    ) -> Result<ViewerToHost, BundleVerifyError> {
+        let Some(jwks) = self.jwks.as_ref() else {
+            return Err(BundleVerifyError::JwksNotConfigured);
+        };
+        jwks
+            .verify_bundle(envelope)
+            .await
+            .map_err(BundleVerifyError::Jwks)?;
+        let payload: ViewerToHost = envelope
+            .decode(&{
+                let pk = jwks
+                    .lookup(&envelope.kid)
+                    .await
+                    .map_err(BundleVerifyError::Jwks)?;
+                ed25519_dalek::VerifyingKey::from_bytes(&pk)
+                    .map_err(|e| BundleVerifyError::BadKey(e.to_string()))?
+            })
+            .map_err(BundleVerifyError::Decode)?;
+        if payload.aud != host_device_id.to_string() {
+            return Err(BundleVerifyError::AudienceMismatch {
+                expected: host_device_id.to_string(),
+                actual: payload.aud.clone(),
+            });
+        }
+        if payload.exp as u64 <= now_unix_ms {
+            return Err(BundleVerifyError::Expired {
+                exp_unix_ms: payload.exp as u64,
+                now_unix_ms,
+            });
+        }
+        let mut cache = self.jti_cache.lock().unwrap_or_else(|p| p.into_inner());
+        cache
+            .check_and_mark(&payload.jti, payload.exp as u64, now_unix_ms)
+            .map_err(BundleVerifyError::Jti)?;
+        Ok(payload)
+    }
+
+    /// Verify a Phase 2 `IceAllowlist` envelope. The returned
+    /// `IceAllowlist` is the authoritative source for ICE servers —
+    /// call [`filter_ice_servers_to_allowlist`] before handing any
+    /// `IceServer` list to the host or viewer.
+    pub async fn verify_ice_allowlist(
+        &self,
+        envelope: &SignedBundle,
+        now_unix_ms: u64,
+    ) -> Result<IceAllowlist, BundleVerifyError> {
+        let Some(jwks) = self.jwks.as_ref() else {
+            return Err(BundleVerifyError::JwksNotConfigured);
+        };
+        jwks
+            .verify_bundle(envelope)
+            .await
+            .map_err(BundleVerifyError::Jwks)?;
+        let pk = jwks
+            .lookup(&envelope.kid)
+            .await
+            .map_err(BundleVerifyError::Jwks)?;
+        let vk = ed25519_dalek::VerifyingKey::from_bytes(&pk)
+            .map_err(|e| BundleVerifyError::BadKey(e.to_string()))?;
+        let payload: IceAllowlist = envelope
+            .decode(&vk)
+            .map_err(BundleVerifyError::Decode)?;
+        if payload.exp as u64 <= now_unix_ms {
+            return Err(BundleVerifyError::Expired {
+                exp_unix_ms: payload.exp as u64,
+                now_unix_ms,
+            });
+        }
+        Ok(payload)
+    }
+
+    /// Verify a `SignedKill` envelope and apply the kill locally:
+    /// add the killed `jti` to the local denylist and (best-effort)
+    /// tear down the matching active session.
+    ///
+    /// Returns the parsed [`SignedKill`] on success so the caller can
+    /// log the operator and reason.
+    pub async fn apply_signed_kill(
+        &self,
+        envelope: &SignedBundle,
+        now_unix_ms: u64,
+    ) -> Result<SignedKill, BundleVerifyError> {
+        let Some(jwks) = self.jwks.as_ref() else {
+            return Err(BundleVerifyError::JwksNotConfigured);
+        };
+        jwks
+            .verify_bundle(envelope)
+            .await
+            .map_err(BundleVerifyError::Jwks)?;
+        let pk = jwks
+            .lookup(&envelope.kid)
+            .await
+            .map_err(BundleVerifyError::Jwks)?;
+        let vk = ed25519_dalek::VerifyingKey::from_bytes(&pk)
+            .map_err(|e| BundleVerifyError::BadKey(e.to_string()))?;
+        let payload: SignedKill = envelope
+            .decode(&vk)
+            .map_err(BundleVerifyError::Decode)?;
+        if payload.exp as u64 <= now_unix_ms {
+            return Err(BundleVerifyError::Expired {
+                exp_unix_ms: payload.exp as u64,
+                now_unix_ms,
+            });
+        }
+        // Drop the targeted session if it is currently active on this
+        // instance.
+        let mut sessions = self.sessions.write().await;
+        let target_session = sessions.remove(&match Uuid::parse_str(&payload.sid) {
+            Ok(u) => u,
+            Err(_) => return Err(BundleVerifyError::MalformedSid(payload.sid.clone())),
+        });
+        drop(sessions);
+        if let Some(session) = target_session {
+            let msg = ServerMessage::SessionKicked {
+                session_id: Uuid::parse_str(&payload.sid).unwrap_or(Uuid::nil()),
+                reason: format!(
+                    "signed_kill: {}",
+                    if payload.reason.is_empty() {
+                        "killed".to_string()
+                    } else {
+                        payload.reason.clone()
+                    }
+                ),
+            };
+            let _ = self.send_to(session.host_peer_id, msg.clone()).await;
+            let _ = self.send_to(session.client_peer_id, msg).await;
+        }
+        // Denylist the killed `jti` for the rest of its validity.
+        let mut cache = self.jti_cache.lock().unwrap_or_else(|p| p.into_inner());
+        let _ = cache.denylist(&payload.jti, payload.exp as u64);
+        Ok(payload)
+    }
+
     /// Handle a `Heartbeat` from a connected peer. Re-emits
     /// `Presence { connected: true }` every `PRESENCE_HEARTBEAT_INTERVAL`
     /// heartbeats so subscribers (and the cluster bus) see a fresh
@@ -635,6 +909,21 @@ impl SignalingState {
 
     async fn peer_tenant(&self, peer_id: Uuid) -> Option<Uuid> {
         self.peers.read().await.get(&peer_id).map(|p| p.tenant_id)
+    }
+
+    /// Resolve a connected host peer_id by the host's `device_id`.
+    /// Returns `None` if no host with that device_id is currently
+    /// connected (e.g., they disconnected between bundle verify and
+    /// the relay hop). The caller should treat that as "no host to
+    /// notify" rather than an error.
+    async fn find_host_peer_for_device(&self, device_id: Uuid) -> Option<Uuid> {
+        let peers = self.peers.read().await;
+        peers
+            .values()
+            .find(|p| {
+                p.descriptor.role == PeerRole::Host && p.descriptor.device_id == device_id
+            })
+            .map(|p| p.descriptor.peer_id)
     }
 
     async fn unregister(&self, peer_id: Uuid) -> Option<PeerDescriptor> {
@@ -1924,6 +2213,71 @@ async fn handle_socket(socket: WebSocket, state: SignalingState) {
                     }
                 }
             }
+            (Some(peer), ClientMessage::StartSessionWithBundle(bundle_request)) => {
+                let now = unix_millis_after(Duration::ZERO);
+                // P2-2: verify the cloud-signed `ViewerToHost` and
+                // (optionally) the ICE allowlist BEFORE handing the
+                // request to the host. Anything we reject here is
+                // visible to the client as a session_rejected error
+                // with the underlying reason — never silently
+                // accepted.
+                let host_device_id = bundle_request.request.target_host_id;
+                let verified = match state
+                    .verify_viewer_to_host(&bundle_request.viewer_bundle, &host_device_id, now)
+                    .await
+                {
+                    Ok(viewer) => {
+                        if let Some(allow_env) = bundle_request.ice_allowlist.as_ref() {
+                            if let Err(e) = state.verify_ice_allowlist(allow_env, now).await {
+                                let _ = outbound_tx.send(ServerMessage::Error(
+                                    ErrorMessage::new("ice_allowlist_rejected", e.to_string()),
+                                ));
+                                return;
+                            }
+                        }
+                        let info = SessionBundleInfo {
+                            jti: viewer.jti.clone(),
+                            viewer_dtls_fp: viewer.viewer_dtls_fp.clone(),
+                            exp_unix_ms: viewer.exp as u64,
+                            caps: viewer.caps.clone(),
+                            sub: viewer.sub.clone(),
+                        };
+                        Some((bundle_request.request, info))
+                    }
+                    Err(e) => {
+                        let _ = outbound_tx.send(ServerMessage::Error(ErrorMessage::new(
+                            "bundle_rejected",
+                            e.to_string(),
+                        )));
+                        return;
+                    }
+                };
+
+                let Some((request, info)) = verified else {
+                    return;
+                };
+
+                match state.start_session(peer.clone(), request).await {
+                    Ok(plan) => {
+                        let _ = outbound_tx
+                            .send(ServerMessage::SessionBundleAccepted(info.clone()));
+                        if let Some(host_peer_id) =
+                            state.find_host_peer_for_device(host_device_id).await
+                        {
+                            let _ = state
+                                .send_to(host_peer_id, ServerMessage::SessionBundleAccepted(info))
+                                .await;
+                        }
+                        let _ = outbound_tx.send(ServerMessage::SessionPlanned(plan));
+                    }
+                    Err(error) => {
+                        let _ = outbound_tx.send(ServerMessage::Error(ErrorMessage::new(
+                            "session_rejected",
+                            error.to_string(),
+                        )));
+                    }
+                }
+            }
             (Some(peer), ClientMessage::RelaySignal(signal)) => {
                 match state.relay_signal(peer.clone(), signal).await {
                     Ok(()) => {}
@@ -1969,6 +2323,57 @@ async fn handle_socket(socket: WebSocket, state: SignalingState) {
                             )),
                         )
                         .await;
+                }
+            }
+            (Some(peer), ClientMessage::SignedKill(envelope)) => {
+                let now = unix_millis_after(Duration::ZERO);
+                match state.apply_signed_kill(&envelope, now).await {
+                    Ok(kill) => {
+                        // Echo the verified envelope to the host so
+                        // it can re-verify and tear down P2P without
+                        // depending on the relay's word. The client
+                        // side also gets a `SessionKicked` from the
+                        // relay's pre-emptive teardown path.
+                        let kill_for_echo = kill.clone();
+                        let target_host = Uuid::parse_str(&kill.aud).ok();
+                        if let Some(host_device_id) = target_host {
+                            if let Some(host_peer_id) =
+                                state.find_host_peer_for_device(host_device_id).await
+                            {
+                                let _ = state
+                                    .send_to(
+                                        host_peer_id,
+                                        ServerMessage::SignedKillReceived(
+                                            SignedKillEnvelope {
+                                                payload: kill_for_echo,
+                                                envelope: envelope.clone(),
+                                            },
+                                        ),
+                                    )
+                                    .await;
+                            }
+                        }
+                        let _ = state
+                            .send_to(
+                                peer.peer_id,
+                                ServerMessage::Error(ErrorMessage::new(
+                                    "kill_applied",
+                                    format!("session {} killed", kill.sid),
+                                )),
+                            )
+                            .await;
+                    }
+                    Err(error) => {
+                        let _ = state
+                            .send_to(
+                                peer.peer_id,
+                                ServerMessage::Error(ErrorMessage::new(
+                                    "kill_rejected",
+                                    error.to_string(),
+                                )),
+                            )
+                            .await;
+                    }
                 }
             }
             (
@@ -3382,5 +3787,238 @@ mod tests {
         let reloaded = load_pairings_from_path(path).unwrap();
         assert!(reloaded.contains(&grant));
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    // ── Phase 2: session-bundle verification ────────────────────────
+
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    use base64::Engine as _;
+    use qubox_proto::{SessionCaps, SignedBundle, SignedKill};
+
+    /// Lightweight test-only JWKS fetcher.
+    struct FakeJwks {
+        bytes: std::sync::Mutex<Option<Vec<u8>>>,
+        fail_next: std::sync::atomic::AtomicBool,
+    }
+
+    impl FakeJwks {
+        fn new(bytes: Vec<u8>) -> Self {
+            Self {
+                bytes: std::sync::Mutex::new(Some(bytes)),
+                fail_next: std::sync::atomic::AtomicBool::new(false),
+            }
+        }
+    }
+
+    impl jwks::JwksFetcher for FakeJwks {
+        fn fetch(&self, _url: &str) -> jwks::JwksFetchFuture {
+            let fail = self.fail_next.swap(false, std::sync::atomic::Ordering::SeqCst);
+            let bytes = self.bytes.lock().ok().and_then(|g| g.clone());
+            Box::pin(async move {
+                if fail {
+                    anyhow::bail!("scripted failure")
+                }
+                bytes.ok_or_else(|| anyhow::anyhow!("no canned bytes"))
+            })
+        }
+    }
+
+    /// Build a `JwksClient` backed by a static fake JWKS containing
+    /// exactly one key, identified by `kid`.
+    fn jwks_client_with(sk: &ed25519_dalek::SigningKey, kid: &str) -> Arc<jwks::JwksClient> {
+        let pk_b64 = URL_SAFE_NO_PAD.encode(sk.verifying_key().to_bytes());
+        let doc = serde_json::to_vec(&serde_json::json!({
+            "keys": [
+                {"kid": kid, "kty": "OKP", "crv": "Ed25519", "x": pk_b64}
+            ]
+        }))
+        .unwrap();
+        let fetcher: Arc<dyn jwks::JwksFetcher> = Arc::new(FakeJwks::new(doc));
+        let client = jwks::JwksClient::new("https://test/jwks", jwks::JwksPolicy::default())
+            .unwrap()
+            .with_fetcher(fetcher);
+        Arc::new(client)
+    }
+
+    fn sample_bundle(jti: &str, host_device_id: Uuid) -> ViewerToHost {
+        ViewerToHost {
+            v: 1,
+            jti: jti.into(),
+            sub: "account-1".into(),
+            aud: host_device_id.to_string(),
+            iat: 1_700_000_000_000,
+            exp: 1_700_000_900_000,
+            caps: SessionCaps::default(),
+            viewer_dtls_fp: "AA:BB:CC:DD".into(),
+        }
+    }
+
+    #[tokio::test]
+    async fn verify_viewer_to_host_accepts_well_formed_bundle() {
+        let sk = generate_signing_key();
+        let state = SignalingState::default().with_jwks(jwks_client_with(&sk, "kid-1"));
+        let host_device_id = Uuid::new_v4();
+        let payload = sample_bundle("jti-1", host_device_id);
+        let env = SignedBundle::new(&payload, "kid-1", &sk).unwrap();
+        let now = 1_700_000_001_000;
+        let decoded = state
+            .verify_viewer_to_host(&env, &host_device_id, now)
+            .await
+            .unwrap();
+        assert_eq!(decoded.jti, "jti-1");
+    }
+
+    #[tokio::test]
+    async fn verify_viewer_to_host_rejects_audience_mismatch() {
+        let sk = generate_signing_key();
+        let state = SignalingState::default().with_jwks(jwks_client_with(&sk, "kid-1"));
+        let host_device_id = Uuid::new_v4();
+        let payload = sample_bundle("jti-1", host_device_id);
+        let env = SignedBundle::new(&payload, "kid-1", &sk).unwrap();
+        let now = 1_700_000_001_000;
+        let err = state
+            .verify_viewer_to_host(&env, &Uuid::new_v4(), now)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, BundleVerifyError::AudienceMismatch { .. }));
+    }
+
+    #[tokio::test]
+    async fn verify_viewer_to_host_rejects_expired_bundle() {
+        let sk = generate_signing_key();
+        let state = SignalingState::default().with_jwks(jwks_client_with(&sk, "kid-1"));
+        let host_device_id = Uuid::new_v4();
+        let payload = sample_bundle("jti-1", host_device_id);
+        let env = SignedBundle::new(&payload, "kid-1", &sk).unwrap();
+        // Drive `now` past `exp`.
+        let now = payload.exp as u64 + 1;
+        let err = state
+            .verify_viewer_to_host(&env, &host_device_id, now)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, BundleVerifyError::Expired { .. }));
+    }
+
+    #[tokio::test]
+    async fn verify_viewer_to_host_rejects_replay() {
+        let sk = generate_signing_key();
+        let state = SignalingState::default().with_jwks(jwks_client_with(&sk, "kid-1"));
+        let host_device_id = Uuid::new_v4();
+        let payload = sample_bundle("jti-replay", host_device_id);
+        let env = SignedBundle::new(&payload, "kid-1", &sk).unwrap();
+        let now = 1_700_000_001_000;
+        state
+            .verify_viewer_to_host(&env, &host_device_id, now)
+            .await
+            .unwrap();
+        let err = state
+            .verify_viewer_to_host(&env, &host_device_id, now + 1)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, BundleVerifyError::Jti(jti_cache::JtiError::Replay)));
+    }
+
+    #[tokio::test]
+    async fn verify_viewer_to_host_rejects_without_jwks() {
+        let state = SignalingState::default();
+        let host_device_id = Uuid::new_v4();
+        // Bogus envelope — verifier must reject BEFORE attempting
+        // signature work because JWKS is not configured.
+        let payload = sample_bundle("jti-1", host_device_id);
+        let sk = generate_signing_key();
+        let env = SignedBundle::new(&payload, "kid-1", &sk).unwrap();
+        let err = state
+            .verify_viewer_to_host(&env, &host_device_id, 1_700_000_001_000)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, BundleVerifyError::JwksNotConfigured));
+    }
+
+    #[tokio::test]
+    async fn filter_ice_servers_to_allowlist_rejects_unlisted() {
+        let allow = IceAllowlist {
+            v: 1,
+            jti: "ice-1".into(),
+            exp: 1_700_000_900_000,
+            urls: vec!["stun:turn.example.com:3478".into()],
+            creds: None,
+        };
+        let ok = vec![IceServer {
+            urls: vec!["stun:turn.example.com:3478".into()],
+            username: None,
+            credential: None,
+        }];
+        assert!(filter_ice_servers_to_allowlist(&ok, &allow).is_ok());
+
+        let bad = vec![IceServer {
+            urls: vec!["stun:attacker.example:3478".into()],
+            username: None,
+            credential: None,
+        }];
+        let err = filter_ice_servers_to_allowlist(&bad, &allow).unwrap_err();
+        assert!(err.to_string().contains("not on signed allowlist"));
+    }
+
+    #[tokio::test]
+    async fn filter_ice_servers_to_allowlist_rejects_non_stun_turn_scheme() {
+        let allow = IceAllowlist {
+            v: 1,
+            jti: "ice-1".into(),
+            exp: 1_700_000_900_000,
+            urls: vec!["http://attacker.example/relay".into()],
+            creds: None,
+        };
+        let candidates = vec![IceServer {
+            urls: vec!["http://attacker.example/relay".into()],
+            username: None,
+            credential: None,
+        }];
+        assert!(filter_ice_servers_to_allowlist(&candidates, &allow).is_err());
+    }
+
+    #[tokio::test]
+    async fn apply_signed_kill_denylists_jti_and_drops_session() {
+        let sk = generate_signing_key();
+        let state = SignalingState::default().with_jwks(jwks_client_with(&sk, "kid-1"));
+        let session_id = Uuid::new_v4();
+        let host_id = Uuid::new_v4();
+        let client_id = Uuid::new_v4();
+        // Plant an active session with no outbound subscribers.
+        state
+            .sessions
+            .write()
+            .await
+            .insert(
+                session_id,
+                ActiveSession {
+                    host_peer_id: host_id,
+                    client_peer_id: client_id,
+                    transport: TransportKind::WebRtc,
+                    codec: VideoCodec::H264,
+                    host_credential: SessionCredential::new_legacy_token(1),
+                    client_credential: SessionCredential::new_legacy_token(1),
+                    expires_unix_millis: 1_700_000_900_000,
+                    permissions: SessionPermissions::default(),
+                },
+            );
+
+        let kill = SignedKill {
+            v: 1,
+            jti: "kill-1".into(),
+            sid: session_id.to_string(),
+            aud: host_id.to_string(),
+            sub: "admin-1".into(),
+            iat: 1_700_000_000_000,
+            exp: 1_700_000_900_000,
+            reason: "fired_employee".into(),
+        };
+        let env = SignedBundle::new(&kill, "kid-1", &sk).unwrap();
+        let now = 1_700_000_001_000;
+        state.apply_signed_kill(&env, now).await.unwrap();
+
+        // Session is gone and the jti is denied.
+        assert!(!state.sessions.read().await.contains_key(&session_id));
+        let cache = state.jti_cache.lock().unwrap();
+        assert!(cache.is_denied("kill-1", now));
     }
 }

@@ -1148,6 +1148,395 @@ pub enum SessionSignal {
     Ready,
 }
 
+// ── P2 session bundle (cloud-signed, audience-bound) ────────────────
+//
+// Per `docs/browser-viewer-identity-and-host-trust.md` Phase 2, the cloud
+// issues a *mutual* session bundle to both peers instead of an opaque
+// signaling-only token. Each half is Ed25519-signed by the cloud; both
+// peers verify against the same JWKS.
+//
+// Wire JSON is `camelCase` (matches Stream A's TypeScript schema). The
+// canonical signing payload is a JSON document with **sorted keys** to
+// make signatures deterministic regardless of struct field order. Use
+// `canonical_cbor_bytes` / canonicalize helpers below.
+
+/// One TURN credential entry paired with an ICE server URL.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct TurnCreds {
+    pub username: String,
+    pub credential: String,
+}
+
+/// Per-session capability mask used inside the cloud-signed bundle.
+/// Distinct from the existing `SessionPermissions` so the bundle stays
+/// self-describing on the wire (Stream A does not need to depend on the
+/// OSS crate hierarchy).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionCaps {
+    #[serde(default)]
+    pub input: bool,
+    #[serde(default)]
+    pub clipboard: bool,
+    #[serde(default)]
+    pub mic: bool,
+    #[serde(default)]
+    pub files: bool,
+    #[serde(default)]
+    pub audio: bool,
+}
+
+/// `viewer_to_host` half of the mutual session bundle.
+///
+/// Audience (`aud`) MUST equal the target host's `device_id`. The host
+/// pins the DTLS fingerprint of the WebRTC peer against
+/// `viewer_dtls_fp`; a mismatch aborts the session before any media
+/// frames are decoded.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ViewerToHost {
+    /// Schema version of this bundle (`1`).
+    pub v: u8,
+    pub jti: String,
+    pub sid: String,
+    /// Account id (or `account_id`) of the human holding the viewer.
+    pub sub: String,
+    /// Target host `device_id`.
+    pub aud: String,
+    /// Issued-at (unix milliseconds).
+    pub iat: i64,
+    /// Expires-at (unix milliseconds).
+    pub exp: i64,
+    pub caps: SessionCaps,
+    /// WebRTC DTLS fingerprint the viewer will present during handshake.
+    #[serde(alias = "viewer_dtls_fp")]
+    pub viewer_dtls_fp: String,
+}
+
+/// `host_to_viewer` half of the mutual session bundle.
+///
+/// `sid` is the canonical session id both peers track. The viewer
+/// pins its peer DTLS fingerprint against `host_dtls_fp` so a
+/// compromised signaling server cannot MITM the host side.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct HostToViewer {
+    pub v: u8,
+    pub jti: String,
+    pub sid: String,
+    /// Host device_id (issuing party).
+    pub sub: String,
+    /// Account id the viewer authenticated as.
+    pub aud: String,
+    pub iat: i64,
+    pub exp: i64,
+    /// WebRTC DTLS fingerprint the host will present during handshake.
+    #[serde(alias = "host_dtls_fp")]
+    pub host_dtls_fp: String,
+    pub caps: SessionCaps,
+}
+
+/// Cloud-signed ICE / TURN allowlist. Both ends reject ICE servers
+/// that are not in `urls`. Only `stun:` / `turn:` / `turns:` schemes
+/// are accepted on the wire.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct IceAllowlist {
+    pub v: u8,
+    pub jti: String,
+    pub exp: i64,
+    pub urls: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub creds: Option<TurnCreds>,
+}
+
+/// Cloud-signed wire envelope. Shape (matches Stream A's TypeScript
+/// schema):
+///
+/// ```text
+/// {
+///   "kid": "<jwk kid>",
+///   "v": <payload schema version>,
+///   "payload": "<base64url(canonical_json)>",
+///   "sig": "<base64url(ed25519_signature)>"
+/// }
+/// ```
+///
+/// `payload` is the canonical-JSON serialization of the underlying
+/// `ViewerToHost` / `HostToViewer` / `IceAllowlist` / `SignedKill`.
+/// The verifier resolves `kid` → JWKS, fetches the public key, and
+/// verifies the Ed25519 signature over the raw payload bytes before
+/// JSON-decoding `payload`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SignedBundle {
+    pub kid: String,
+    /// Schema version (mirrors the embedded payload's `v`).
+    pub v: u8,
+    pub payload: String,
+    pub sig: String,
+}
+
+impl SignedBundle {
+    /// Build a wire envelope from an arbitrary payload.
+    pub fn new<T: Serialize>(
+        value: &T,
+        kid: impl Into<String>,
+        signing_key: &ed25519_dalek::SigningKey,
+    ) -> serde_json::Result<Self> {
+        use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+        use base64::Engine as _;
+        use ed25519_dalek::Signer;
+        use serde_json::Value;
+
+        let payload = canonical_json_bytes(value)?;
+        let sig = signing_key.sign(&payload);
+        let payload_b64 = URL_SAFE_NO_PAD.encode(&payload);
+        let sig_b64 = URL_SAFE_NO_PAD.encode(sig.to_bytes());
+        let version = serde_json::to_value(value)
+            .ok()
+            .and_then(|v| match v {
+                Value::Object(map) => map.get("v").and_then(|x| x.as_u64()).map(|x| x as u8),
+                _ => None,
+            })
+            .unwrap_or(0);
+        Ok(SignedBundle {
+            kid: kid.into(),
+            v: version,
+            payload: payload_b64,
+            sig: sig_b64,
+        })
+    }
+
+    pub fn from_compact(
+        token: &str,
+        kid: impl Into<String>,
+    ) -> Result<Self, SignedBundleError> {
+        use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+        use base64::Engine as _;
+
+        let (payload, sig) = token
+            .split_once('.')
+            .ok_or(SignedBundleError::MalformedEnvelope)?;
+        if payload.is_empty() || sig.is_empty() || sig.contains('.') {
+            return Err(SignedBundleError::MalformedEnvelope);
+        }
+        let payload_bytes = URL_SAFE_NO_PAD
+            .decode(payload.as_bytes())
+            .map_err(|_| SignedBundleError::BadBase64)?;
+        let sig_bytes = URL_SAFE_NO_PAD
+            .decode(sig.as_bytes())
+            .map_err(|_| SignedBundleError::BadBase64)?;
+        if sig_bytes.len() != 64 {
+            return Err(SignedBundleError::BadSignatureLength);
+        }
+        let value: serde_json::Value =
+            serde_json::from_slice(&payload_bytes).map_err(SignedBundleError::BadPayload)?;
+        let version = value
+            .get("v")
+            .and_then(serde_json::Value::as_u64)
+            .and_then(|v| u8::try_from(v).ok())
+            .unwrap_or(0);
+        Ok(Self {
+            kid: kid.into(),
+            v: version,
+            payload: payload.to_string(),
+            sig: sig.to_string(),
+        })
+    }
+
+    pub fn to_compact(&self) -> String {
+        format!("{}.{}", self.payload, self.sig)
+    }
+
+    /// Verify the Ed25519 signature over the raw payload bytes using
+    /// the supplied verifying key. Does NOT deserialize the payload.
+    pub fn verify_signature(
+        &self,
+        verify_pk: &ed25519_dalek::VerifyingKey,
+    ) -> Result<(), SignedBundleError> {
+        use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+        use base64::Engine as _;
+        use ed25519_dalek::{Signature, Verifier};
+
+        let payload = URL_SAFE_NO_PAD
+            .decode(self.payload.as_bytes())
+            .map_err(|_| SignedBundleError::BadBase64)?;
+        let sig_bytes = URL_SAFE_NO_PAD
+            .decode(self.sig.as_bytes())
+            .map_err(|_| SignedBundleError::BadBase64)?;
+        let sig_array: [u8; 64] = sig_bytes
+            .as_slice()
+            .try_into()
+            .map_err(|_| SignedBundleError::BadSignatureLength)?;
+        verify_pk
+            .verify(&payload, &Signature::from_bytes(&sig_array))
+            .map_err(|_| SignedBundleError::SignatureMismatch)
+    }
+
+    /// Verify + decode the payload as `T`.
+    pub fn decode<T: for<'de> Deserialize<'de>>(
+        &self,
+        verify_pk: &ed25519_dalek::VerifyingKey,
+    ) -> Result<T, SignedBundleError> {
+        use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+        use base64::Engine as _;
+
+        self.verify_signature(verify_pk)?;
+        let payload = URL_SAFE_NO_PAD
+            .decode(self.payload.as_bytes())
+            .map_err(|_| SignedBundleError::BadBase64)?;
+        serde_json::from_slice(&payload).map_err(SignedBundleError::BadPayload)
+    }
+}
+
+/// Cloud-signed mid-session kill.
+///
+/// Same envelope shape as the session bundles. The host verifies
+/// `aud == host.device_id` and that the `sid` matches an active
+/// session before tearing down P2P.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SignedKill {
+    pub v: u8,
+    pub jti: String,
+    pub sid: String,
+    /// Host device_id whose session must be terminated.
+    pub aud: String,
+    /// Account id the operator acted as.
+    #[serde(default)]
+    pub sub: String,
+    pub iat: i64,
+    pub exp: i64,
+    pub reason: String,
+}
+
+/// Compute the deterministic, sorted-keys JSON bytes for a payload
+/// that will be fed to the Ed25519 signer.
+///
+/// This matches the JCS-ish convention used by the cloud: objects
+/// re-emit with keys sorted by their UTF-8 byte order, no whitespace,
+/// numbers in their natural Rust `Display` form (which is what
+/// `serde_json::Number::to_string` produces for finite values).
+pub fn canonical_json_bytes<T: Serialize>(value: &T) -> serde_json::Result<Vec<u8>> {
+    let v = serde_json::to_value(value)?;
+    Ok(canonicalize_value(&v).into_bytes())
+}
+
+fn canonicalize_value(v: &serde_json::Value) -> String {
+    use serde_json::Value;
+    match v {
+        Value::Null => "null".to_string(),
+        Value::Bool(b) => b.to_string(),
+        Value::Number(n) => n.to_string(),
+        Value::String(s) => serde_json::to_string(s).unwrap_or_else(|_| "\"\"".to_string()),
+        Value::Array(arr) => {
+            let parts: Vec<String> = arr.iter().map(canonicalize_value).collect();
+            format!("[{}]", parts.join(","))
+        }
+        Value::Object(map) => {
+            let mut entries: Vec<(&String, &Value)> = map.iter().collect();
+            entries.sort_by(|a, b| a.0.cmp(b.0));
+            let parts: Vec<String> = entries
+                .into_iter()
+                .map(|(k, v)| format!("{}:{}", serde_json::to_string(k).unwrap_or_else(|_| "\"\"".to_string()), canonicalize_value(v)))
+                .collect();
+            format!("{{{}}}", parts.join(","))
+        }
+    }
+}
+
+/// Encode a bundle + Ed25519 signature into the canonical wire form:
+/// `<base64url(payload)>.<base64url(signature)>`. Base64url = URL-safe
+/// no-padding (RFC 4648 §5). The `kid` is intentionally NOT part of the
+/// signed payload — the JWKS-resolver layer wraps the wire string in
+/// a higher-level envelope (see `SignedBundle`) that carries `kid`
+/// alongside it.
+pub fn encode_signed_bundle<T: Serialize>(
+    value: &T,
+    signing_key: &ed25519_dalek::SigningKey,
+) -> serde_json::Result<String> {
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    use base64::Engine as _;
+    use ed25519_dalek::Signer;
+
+    let payload = canonical_json_bytes(value)?;
+    let sig = signing_key.sign(&payload);
+    let payload_b64 = URL_SAFE_NO_PAD.encode(&payload);
+    let sig_b64 = URL_SAFE_NO_PAD.encode(sig.to_bytes());
+    let parts = [payload_b64, sig_b64];
+    Ok(format!("{}.{}", parts[0], parts[1]))
+}
+
+/// Decode + verify an Ed25519-signed wire envelope. Returns the parsed
+/// payload on success.
+///
+/// `verify_pk` is the Ed25519 verifying key the JWKS resolver returned
+/// for the envelope's `kid`. The caller is responsible for the JWKS
+/// lookup (and any clock-skew tolerance) — this helper only does the
+/// signature math + payload deserialization.
+pub fn decode_signed_bundle<T: for<'de> Deserialize<'de>>(
+    envelope_b64: &str,
+    verify_pk: &ed25519_dalek::VerifyingKey,
+) -> Result<T, SignedBundleError> {
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    use base64::Engine as _;
+    use ed25519_dalek::{Signature, Verifier};
+
+    let (payload_b64, sig_b64) = envelope_b64
+        .split_once('.')
+        .ok_or(SignedBundleError::MalformedEnvelope)?;
+    let payload = URL_SAFE_NO_PAD
+        .decode(payload_b64.as_bytes())
+        .map_err(|_| SignedBundleError::BadBase64)?;
+    let sig_bytes = URL_SAFE_NO_PAD
+        .decode(sig_b64.as_bytes())
+        .map_err(|_| SignedBundleError::BadBase64)?;
+    let sig_array: [u8; 64] = sig_bytes
+        .as_slice()
+        .try_into()
+        .map_err(|_| SignedBundleError::BadSignatureLength)?;
+    verify_pk
+        .verify(&payload, &Signature::from_bytes(&sig_array))
+        .map_err(|_| SignedBundleError::SignatureMismatch)?;
+    serde_json::from_slice(&payload).map_err(SignedBundleError::BadPayload)
+}
+
+#[derive(Debug)]
+pub enum SignedBundleError {
+    MalformedEnvelope,
+    BadBase64,
+    BadSignatureLength,
+    SignatureMismatch,
+    BadPayload(serde_json::Error),
+}
+
+impl std::fmt::Display for SignedBundleError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SignedBundleError::MalformedEnvelope => write!(f, "envelope missing '.' separator"),
+            SignedBundleError::BadBase64 => write!(f, "envelope base64url decode failed"),
+            SignedBundleError::BadSignatureLength => {
+                write!(f, "Ed25519 signature is not 64 bytes")
+            }
+            SignedBundleError::SignatureMismatch => write!(f, "signature did not verify"),
+            SignedBundleError::BadPayload(e) => write!(f, "payload deserialize failed: {e}"),
+        }
+    }
+}
+
+impl std::error::Error for SignedBundleError {}
+
+/// Scheme validation for ICE server URLs. Per spec, only `stun:`,
+/// `turn:`, and `turns:` are acceptable on the bundle wire. Anything
+/// else is rejected so a compromised signaling server cannot inject
+/// arbitrary relay hosts.
+pub fn ice_url_is_valid(url: &str) -> bool {
+    let lower = url.trim().to_ascii_lowercase();
+    lower.starts_with("stun:") || lower.starts_with("turn:") || lower.starts_with("turns:")
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Welcome {
     pub self_id: Uuid,
@@ -1187,6 +1576,12 @@ pub enum ClientMessage {
     RequestPairing(PairingRequest),
     PairingDecision(PairingDecision),
     StartSession(StartSessionRequest),
+    /// P2-2: Client presents a cloud-signed `ViewerToHost` bundle
+    /// alongside the session request. The signaling relay verifies
+    /// JWKS / audience / exp / jti before passing the request on to
+    /// the host. Optional — clients that still use the HMAC-bound
+    /// `SessionCredential` path can omit it.
+    StartSessionWithBundle(StartSessionBundleRequest),
     RelaySignal(RelaySignal),
     Heartbeat,
     /// Host revokes an existing pair grant.
@@ -1213,6 +1608,30 @@ pub enum ClientMessage {
         #[serde(default)]
         client_label: String,
     },
+    /// P2-2: Cloud pushes a signed kill for an active session.
+    /// Operator-side message; only the JWKS-verifying relay should
+    /// accept it (managed cloud admins, not LAN self-host). The host
+    /// independently re-verifies the envelope before tearing down
+    /// P2P.
+    SignedKill(SignedBundle),
+}
+
+/// Wrapper that pairs a legacy `StartSessionRequest` with an optional
+/// cloud-signed `ViewerToHost` bundle. Either field is enough to drive
+/// a session on its own; the relay prefers the bundle when present
+/// because it carries the `aud` / `jti` / DTLS-fp binding the host
+/// needs to enforce.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct StartSessionBundleRequest {
+    #[serde(flatten)]
+    pub request: StartSessionRequest,
+    pub viewer_bundle: SignedBundle,
+    /// Optional signed ICE allowlist. When present, the relay
+    /// filters the candidate `ice_servers` against it before
+    /// forwarding the request to the host.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ice_allowlist: Option<SignedBundle>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -1257,6 +1676,41 @@ pub enum ServerMessage {
         #[serde(default)]
         client_label: String,
     },
+    /// P2-2: Cloud-signed `ViewerToHost` bundle was accepted by the
+    /// relay and the host is being notified. Forwarded to the host
+    /// so it can independently compare the actual WebRTC DTLS
+    /// fingerprint against `viewer_dtls_fp` from the bundle.
+    SessionBundleAccepted(SessionBundleInfo),
+    /// P2-2: Cloud-signed kill for an active session. The host
+    /// verifies the envelope itself against JWKS before tearing
+    /// down P2P, but the relay pre-applies the local denylist so
+    /// concurrent bundle replays are rejected even before the host
+    /// observes the kill.
+    SignedKillReceived(SignedKillEnvelope),
+}
+
+/// Wire-friendly wrapper that pairs a `SignedKill` payload with its
+/// `SignedBundle` envelope, so the host can re-verify the kill
+/// without having to rebuild the envelope from scratch.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SignedKillEnvelope {
+    pub payload: SignedKill,
+    pub envelope: SignedBundle,
+}
+
+/// Trimmed `ViewerToHost` payload that the relay forwards to the
+/// host alongside `SessionRequested`. Keeps the DTLS-fp + jti
+/// binding available for the host's own media-time check without
+/// re-issuing the JWKS request.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionBundleInfo {
+    pub jti: String,
+    pub viewer_dtls_fp: String,
+    pub exp_unix_ms: u64,
+    pub caps: SessionCaps,
+    pub sub: String,
 }
 
 /// Events emitted by the daemon to subscribed clients.
@@ -1573,10 +2027,10 @@ mod tests {
                 bit_depth: 8,
                 max_framerate: None,
                 target_framerate: None,
-            consent_id: None,
-        }),
+            }),
             permissions: SessionPermissions::default(),
             sync_only: false,
+            consent_id: None,
         };
 
         let encoded = serde_json::to_string(&request).unwrap();
@@ -2101,5 +2555,150 @@ mod tests {
         };
         let cloned = event.clone();
         assert_eq!(format!("{event:?}"), format!("{cloned:?}"));
+    }
+
+    // ── Session bundle (Phase 2) tests ─────────────────────────────
+
+    fn sample_viewer_to_host() -> ViewerToHost {
+        ViewerToHost {
+            v: 1,
+            jti: "jti-abc".into(),
+            sid: "jti-abc".into(),
+            sub: "account-123".into(),
+            aud: "device-deadbeef".into(),
+            iat: 1_700_000_000_000,
+            exp: 1_700_000_600_000,
+            caps: SessionCaps {
+                input: true,
+                clipboard: false,
+                mic: false,
+                files: false,
+                audio: true,
+            },
+            viewer_dtls_fp: "AA:BB:CC:DD".into(),
+        }
+    }
+
+    #[test]
+    fn viewer_to_host_serializes_camel_case() {
+        let v = sample_viewer_to_host();
+        let json = serde_json::to_string(&v).unwrap();
+        assert!(json.contains(r#""viewerDtlsFp":"AA:BB:CC:DD""#), "got {json}");
+        assert!(json.contains(r#""jti":"jti-abc""#), "got {json}");
+        assert!(!json.contains("viewer_dtls_fp"), "got {json}");
+    }
+
+    #[test]
+    fn canonical_json_sorts_keys_lexicographically() {
+        let v = sample_viewer_to_host();
+        let bytes = canonical_json_bytes(&v).unwrap();
+        let s = std::str::from_utf8(&bytes).unwrap();
+        // 'aud' < 'caps' < 'exp' < 'iat' < 'jti' < 'sub' < 'v' < 'viewerDtlsFp'
+        let mut last = 0;
+        for key in &["aud", "caps", "exp", "iat", "jti", "sub", "v", "viewerDtlsFp"] {
+            let pos = s.find(&format!("\"{key}\"")).expect(key);
+            assert!(pos > last, "key {key} not sorted (pos={pos}, last={last})");
+            last = pos;
+        }
+    }
+
+    #[test]
+    fn signed_bundle_round_trips() {
+        let key = generate_signing_key();
+        let payload = sample_viewer_to_host();
+        let env = SignedBundle::new(&payload, "kid-1", &key).unwrap();
+        assert_eq!(env.kid, "kid-1");
+        assert_eq!(env.v, 1);
+        let decoded: ViewerToHost = env.decode(&key.verifying_key()).unwrap();
+        assert_eq!(decoded, payload);
+    }
+
+    #[test]
+    fn signed_bundle_rejects_tampered_signature() {
+        let key = generate_signing_key();
+        let other_key = generate_signing_key();
+        let payload = sample_viewer_to_host();
+        let mut env = SignedBundle::new(&payload, "kid-1", &key).unwrap();
+        env.sig = "AAAA".to_string();
+        assert!(matches!(
+            env.decode::<ViewerToHost>(&other_key.verifying_key()),
+            Err(SignedBundleError::BadBase64) | Err(SignedBundleError::BadSignatureLength)
+        ));
+    }
+
+    #[test]
+    fn signed_bundle_rejects_signature_mismatch() {
+        let key = generate_signing_key();
+        let other_key = generate_signing_key();
+        let payload = sample_viewer_to_host();
+        let env = SignedBundle::new(&payload, "kid-1", &key).unwrap();
+        assert!(matches!(
+            env.decode::<ViewerToHost>(&other_key.verifying_key()),
+            Err(SignedBundleError::SignatureMismatch)
+        ));
+    }
+
+    #[test]
+    fn encode_signed_bundle_matches_decode() {
+        let key = generate_signing_key();
+        let payload = sample_viewer_to_host();
+        let envelope = encode_signed_bundle(&payload, &key).unwrap();
+        let decoded = decode_signed_bundle::<ViewerToHost>(&envelope, &key.verifying_key())
+            .expect("decode");
+        assert_eq!(decoded, payload);
+    }
+
+    #[test]
+    fn signed_kill_round_trips() {
+        let key = generate_signing_key();
+        let payload = SignedKill {
+            v: 1,
+            jti: "kill-1".into(),
+            sid: "session-xyz".into(),
+            aud: "device-deadbeef".into(),
+            sub: "admin-1".into(),
+            iat: 1_700_000_000_000,
+            exp: 1_700_000_900_000,
+            reason: "fired_employee".into(),
+        };
+        let env = SignedBundle::new(&payload, "kid-1", &key).unwrap();
+        let decoded: SignedKill = env.decode(&key.verifying_key()).unwrap();
+        assert_eq!(decoded, payload);
+    }
+
+    #[test]
+    fn ice_allowlist_validation() {
+        assert!(ice_url_is_valid("stun:stun.l.google.com:19302"));
+        assert!(ice_url_is_valid("turn:turn.example.com:3478?transport=udp"));
+        assert!(ice_url_is_valid("turns:turn.example.com:5349"));
+        assert!(!ice_url_is_valid("http://attacker.example/relay"));
+        assert!(!ice_url_is_valid(""));
+        assert!(!ice_url_is_valid("javascript:alert(1)"));
+    }
+
+    #[test]
+    fn signed_kill_envelope_round_trip() {
+        let key = generate_signing_key();
+        let payload = SignedKill {
+            v: 1,
+            jti: "kill-1".into(),
+            sid: "11111111-2222-3333-4444-555555555555".into(),
+            aud: "66666666-7777-8888-9999-aaaaaaaaaaaa".into(),
+            sub: "admin-1".into(),
+            iat: 1_700_000_000_000,
+            exp: 1_700_000_900_000,
+            reason: "fired_employee".into(),
+        };
+        let envelope = SignedBundle::new(&payload, "kid-1", &key).unwrap();
+        let wrapped = SignedKillEnvelope {
+            payload: payload.clone(),
+            envelope,
+        };
+        let encoded = serde_json::to_string(&wrapped).unwrap();
+        let decoded: SignedKillEnvelope = serde_json::from_str(&encoded).unwrap();
+        assert_eq!(decoded.payload, payload);
+        assert_eq!(decoded.envelope.kid, "kid-1");
+        let back: SignedKill = decoded.envelope.decode(&key.verifying_key()).unwrap();
+        assert_eq!(back, payload);
     }
 }
