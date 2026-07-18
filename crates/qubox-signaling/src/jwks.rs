@@ -432,6 +432,25 @@ mod tests {
     }
 
     #[test]
+    fn parse_jwks_accepts_stream_a_wire_format() {
+        let pk = sample_key_b64();
+        let doc = serde_json::to_vec(&serde_json::json!({
+            "keys": [{
+                "kty": "OKP",
+                "crv": "Ed25519",
+                "kid": "qb1_12345678",
+                "x": pk,
+                "use": "sig",
+                "alg": "EdDSA"
+            }]
+        }))
+        .unwrap();
+        let entries = parse_jwks(&doc).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].kid, "qb1_12345678");
+    }
+
+    #[test]
     fn parse_jwks_ignores_rsa_entries() {
         let pk = sample_key_b64();
         let doc = serde_json::to_vec(&serde_json::json!({
@@ -558,6 +577,7 @@ mod tests {
         let payload = ViewerToHost {
             v: 1,
             jti: "abc".into(),
+            sid: "abc".into(),
             sub: "sub".into(),
             aud: "aud".into(),
             iat: 1_000,

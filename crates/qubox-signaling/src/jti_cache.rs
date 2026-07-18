@@ -36,6 +36,7 @@ pub enum JtiError {
     Replay,
     /// The `jti` is on the local kill denylist.
     Killed,
+    Capacity,
     /// The `jti` is malformed (empty / too long / contains control bytes).
     Invalid,
 }
@@ -45,6 +46,7 @@ impl std::fmt::Display for JtiError {
         match self {
             JtiError::Replay => write!(f, "jti replay rejected (single-use enforcement)"),
             JtiError::Killed => write!(f, "jti is on local kill denylist"),
+            JtiError::Capacity => write!(f, "jti cache is full (fail-closed)"),
             JtiError::Invalid => write!(f, "jti is malformed"),
         }
     }
@@ -110,6 +112,7 @@ impl JtiCache {
     /// seen" ordering doesn't leak a denylist hit past expiry).
     pub fn check_and_mark(&mut self, jti: &str, exp_unix_ms: u64, now_unix_ms: u64) -> Result<(), JtiError> {
         validate_jti(jti)?;
+        self.prune_expired(now_unix_ms);
 
         // Kill denylist always wins.
         if let Some(entry) = self.denied.get(jti).copied() {
@@ -129,12 +132,14 @@ impl JtiCache {
             self.lru.retain(|s| s != jti);
         }
 
+        if self.seen.len() + self.denied.len() >= self.max_entries {
+            return Err(JtiError::Capacity);
+        }
         self.seen.insert(
             jti.to_string(),
             Entry { exp_unix_ms },
         );
         self.lru.push(jti.to_string());
-        self.enforce_cap();
         Ok(())
     }
 
@@ -149,7 +154,6 @@ impl JtiCache {
             jti.to_string(),
             Entry { exp_unix_ms },
         );
-        self.enforce_cap();
         Ok(())
     }
 
@@ -182,33 +186,6 @@ impl JtiCache {
         let kept_seen: std::collections::HashSet<&String> = self.seen.keys().collect();
         self.lru.retain(|jti| kept_seen.contains(jti));
         before_seen - self.seen.len() + before_denied - self.denied.len()
-    }
-
-    fn enforce_cap(&mut self) {
-        let total = self.seen.len() + self.denied.len();
-        if total <= self.max_entries {
-            return;
-        }
-        // Evict oldest LRU entries from the seen bucket first; the
-        // denied bucket is higher-value (kills are irrevocable until
-        // their exp) so we prefer to keep it intact.
-        while self.seen.len() + self.denied.len() > self.max_entries {
-            let Some(oldest) = self.lru.first().cloned() else {
-                break;
-            };
-            // Only evict from `seen`. The denied bucket uses its own
-            // map; if it overflows we just stop enforcing.
-            if self.seen.remove(&oldest).is_some() {
-                self.lru.remove(0);
-            } else {
-                // Entry isn't in seen — pop and move on to avoid an
-                // infinite loop if LRU got out of sync.
-                self.lru.remove(0);
-                if self.lru.is_empty() {
-                    break;
-                }
-            }
-        }
     }
 }
 

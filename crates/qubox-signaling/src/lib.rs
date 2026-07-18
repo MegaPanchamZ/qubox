@@ -3844,6 +3844,7 @@ mod tests {
         ViewerToHost {
             v: 1,
             jti: jti.into(),
+            sid: jti.into(),
             sub: "account-1".into(),
             aud: host_device_id.to_string(),
             iat: 1_700_000_000_000,

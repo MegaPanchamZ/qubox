@@ -2613,6 +2613,45 @@ mod tests {
     }
 
     #[test]
+    fn canonical_json_matches_stream_a_serialization() {
+        let bytes = canonical_json_bytes(&sample_viewer_to_host()).unwrap();
+        assert_eq!(
+            std::str::from_utf8(&bytes).unwrap(),
+            r#"{"aud":"device-deadbeef","caps":{"audio":true,"clipboard":false,"files":false,"input":true,"mic":false},"exp":1700000600000,"iat":1700000000000,"jti":"jti-abc","sid":"jti-abc","sub":"account-123","v":1,"viewerDtlsFp":"AA:BB:CC:DD"}"#,
+        );
+        assert!(!bytes.ends_with(b"\n"));
+    }
+
+    #[test]
+    fn stream_a_compact_bundle_decodes_without_padding() {
+        let key = generate_signing_key();
+        let payload = serde_json::json!({
+            "aud": "device-deadbeef",
+            "caps": {
+                "audio": true,
+                "clipboard": false,
+                "files": false,
+                "input": true
+            },
+            "exp": 1_700_000_600_000_i64,
+            "iat": 1_700_000_000_000_i64,
+            "jti": "sid_0123456789abcdef0123456789abcdef",
+            "sid": "sid_0123456789abcdef0123456789abcdef",
+            "sub": "account-123",
+            "v": 1,
+            "viewer_dtls_fp": "AA:BB:CC:DD"
+        });
+        let token = encode_signed_bundle(&payload, &key).unwrap();
+        assert!(!token.contains('='));
+        let envelope = SignedBundle::from_compact(&token, "kid-1").unwrap();
+        assert_eq!(envelope.to_compact(), token);
+        let decoded: ViewerToHost = envelope.decode(&key.verifying_key()).unwrap();
+        assert_eq!(decoded.jti, "sid_0123456789abcdef0123456789abcdef");
+        assert_eq!(decoded.viewer_dtls_fp, "AA:BB:CC:DD");
+        assert!(!decoded.caps.mic);
+    }
+
+    #[test]
     fn signed_bundle_round_trips() {
         let key = generate_signing_key();
         let payload = sample_viewer_to_host();
