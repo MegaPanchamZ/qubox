@@ -30,6 +30,7 @@ use std::time::Duration;
 use anyhow::{anyhow, Result};
 use tokio::sync::Mutex;
 use uuid::Uuid;
+use webrtc::api::media_engine::{MIME_TYPE_H264, MIME_TYPE_OPUS};
 use webrtc::api::APIBuilder;
 use webrtc::data_channel::RTCDataChannel;
 use webrtc::ice_transport::ice_candidate::RTCIceCandidateInit;
@@ -38,7 +39,8 @@ use webrtc::peer_connection::configuration::RTCConfiguration;
 use webrtc::peer_connection::peer_connection_state::RTCPeerConnectionState;
 use webrtc::peer_connection::sdp::session_description::RTCSessionDescription;
 use webrtc::peer_connection::RTCPeerConnection;
-use webrtc::rtp_transceiver::rtp_codec::RTCRtpCodecCapability;
+use webrtc::rtp_transceiver::rtp_codec::{RTCRtpCodecCapability, RTCRtpCodecParameters, RTPCodecType};
+use webrtc::rtp_transceiver::RTCPFeedback;
 use webrtc::track::track_local::track_local_static_sample::TrackLocalStaticSample;
 use webrtc::track::track_local::TrackLocal;
 
@@ -74,7 +76,85 @@ impl WebRtcSession {
         ice_servers: &[IceServer],
         codec: qubox_proto::VideoCodec,
     ) -> Result<Arc<Self>> {
-        let api = APIBuilder::new().build();
+        let mut media_engine = webrtc::api::media_engine::MediaEngine::default();
+        media_engine
+            .register_codec(
+                RTCRtpCodecParameters {
+                    capability: RTCRtpCodecCapability {
+                        mime_type: MIME_TYPE_OPUS.to_owned(),
+                        clock_rate: 48000,
+                        channels: 2,
+                        sdp_fmtp_line: "minptime=10;useinbandfec=1".to_owned(),
+                        rtcp_feedback: vec![],
+                    },
+                    payload_type: 111,
+                    ..Default::default()
+                },
+                RTPCodecType::Audio,
+            )
+            .map_err(|e| anyhow!("register opus codec: {e}"))?;
+
+        let video_rtcp_feedback = vec![
+            RTCPFeedback {
+                typ: "goog-remb".to_owned(),
+                parameter: "".to_owned(),
+            },
+            RTCPFeedback {
+                typ: "ccm".to_owned(),
+                parameter: "fir".to_owned(),
+            },
+            RTCPFeedback {
+                typ: "nack".to_owned(),
+                parameter: "".to_owned(),
+            },
+            RTCPFeedback {
+                typ: "nack".to_owned(),
+                parameter: "pli".to_owned(),
+            },
+        ];
+
+        // Register H.264 in the same Baseline / level 3.1 / packetization-mode=1
+        // flavour the browser offered; we'll pick the matching PT during
+        // negotiation.
+        let h264_levels = [
+            (
+                "42001f",
+                "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42001f",
+                103,
+            ),
+            (
+                "42e01f",
+                "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f",
+                109,
+            ),
+            (
+                "4d001f",
+                "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=4d001f",
+                117,
+            ),
+        ];
+        for (profile_level_id, sdp_fmtp_line, payload_type) in h264_levels {
+            media_engine
+                .register_codec(
+                    RTCRtpCodecParameters {
+                        capability: RTCRtpCodecCapability {
+                            mime_type: MIME_TYPE_H264.to_owned(),
+                            clock_rate: 90000,
+                            channels: 0,
+                            sdp_fmtp_line: sdp_fmtp_line.to_owned(),
+                            rtcp_feedback: video_rtcp_feedback.clone(),
+                        },
+                        payload_type,
+                        ..Default::default()
+                    },
+                    RTPCodecType::Video,
+                )
+                .map_err(|e| anyhow!("register h264 codec {profile_level_id}: {e}"))?;
+        }
+
+        let api = APIBuilder::new()
+            .with_media_engine(media_engine)
+            .build();
 
         let config = RTCConfiguration {
             ice_servers: ice_servers

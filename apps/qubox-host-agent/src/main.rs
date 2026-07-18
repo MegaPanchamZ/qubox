@@ -969,6 +969,11 @@ async fn handle_server_message(
         ServerMessage::Error(error) => {
             tracing::warn!(code = %error.code, message = %error.message, "server error");
         }
+        ServerMessage::SessionBundleAccepted(_)
+        | ServerMessage::SignedKillReceived(_) => {
+            // Not relevant to host agent flow (these are client-side concerns).
+            tracing::debug!("ignoring client-only server message");
+        }
     }
 
     Ok(())
