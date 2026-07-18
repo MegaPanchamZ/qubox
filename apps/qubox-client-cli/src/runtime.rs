@@ -182,7 +182,9 @@ pub async fn start_session(
                     | ServerMessage::ShareLinkCreated { .. }
                     | ServerMessage::SessionKicked { .. }
                     | ServerMessage::PairingRevoked { .. }
-                    | ServerMessage::SessionConsentPending { .. } => {}
+                    | ServerMessage::SessionConsentPending { .. }
+                    | ServerMessage::SessionBundleAccepted(_)
+                    | ServerMessage::SignedKillReceived(_) => {}
                 }
             }
             Message::Close(_) => {
@@ -480,7 +482,9 @@ where
                     | ServerMessage::ShareLinkCreated { .. }
                     | ServerMessage::SessionKicked { .. }
                     | ServerMessage::PairingRevoked { .. }
-                    | ServerMessage::SessionConsentPending { .. } => {}
+                    | ServerMessage::SessionConsentPending { .. }
+                    | ServerMessage::SessionBundleAccepted(_)
+                    | ServerMessage::SignedKillReceived(_) => {}
                 }
             }
             Message::Close(_) => {
@@ -599,11 +603,14 @@ async fn wait_for_native_quic_ticket(
                             | ServerMessage::ShareLinkCreated { .. }
                             | ServerMessage::SessionKicked { .. }
                             | ServerMessage::PairingRevoked { .. }
-                    | ServerMessage::SessionConsentPending { .. } => {}
+                            | ServerMessage::SessionConsentPending { .. }
+                            | ServerMessage::SessionBundleAccepted(_)
+                            | ServerMessage::SignedKillReceived(_) => {}
                         }
                     }
                     Message::Close(_) => anyhow::bail!("signaling connection closed while waiting for native QUIC ticket"),
                     _ => {}
+
                 }
             }
         }

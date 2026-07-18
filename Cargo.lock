@@ -7055,13 +7055,16 @@ name = "qubox-host-agent"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "argon2",
  "axum",
  "bytes 1.12.1",
+ "chacha20poly1305",
  "clap 4.6.1",
  "cpal",
  "directories",
  "enigo",
  "futures",
+ "hex",
  "notify",
  "notify-debouncer-mini",
  "qubox-clipboard",
@@ -7074,8 +7077,10 @@ dependencies = [
  "qubox-platform",
  "qubox-proto",
  "qubox-rl-policy",
+ "qubox-signaling",
  "qubox-sync",
  "qubox-transport",
+ "rand_core 0.6.4",
  "rustls 0.23.42",
  "serde",
  "serde_json",
@@ -7089,6 +7094,7 @@ dependencies = [
  "uuid",
  "webrtc",
  "windows-sys 0.59.0",
+ "zeroize",
 ]
 
 [[package]]
@@ -7172,6 +7178,7 @@ dependencies = [
 name = "qubox-proto"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "bitflags 2.13.0",
  "bytecheck 0.8.2",
  "criterion",
@@ -7215,6 +7222,7 @@ dependencies = [
  "qubox-webtransport",
  "rand_core 0.6.4",
  "redis",
+ "reqwest 0.12.28",
  "serde",
  "serde_json",
  "sha2 0.10.9",
