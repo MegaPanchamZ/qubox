@@ -215,7 +215,19 @@ struct ConnectedPeer {
     public_key: Option<[u8; 32]>,
     /// Tenant namespace for managed isolation (`Uuid::nil()` = self-host).
     tenant_id: Uuid,
+    /// Number of heartbeats received from this peer. Used to drive
+    /// periodic `Presence { connected: true }` re-emissions so that
+    /// consumers (e.g. cloud dashboards) can detect liveness without
+    /// waiting for WS-level TCP keepalive.
+    heartbeat_count: u64,
 }
+
+/// How often (in heartbeats) to re-emit a `Presence { connected: true }`
+/// event for each connected peer. The host-agent sends a `Heartbeat`
+/// every 10 seconds, so a value of 3 yields a presence refresh roughly
+/// every 30 seconds — well under typical TCP keepalive defaults while
+/// keeping pubsub traffic minimal (one event per peer per 30s).
+const PRESENCE_HEARTBEAT_INTERVAL: u64 = 3;
 
 #[derive(Debug, Clone)]
 struct PendingPairing {
@@ -549,6 +561,7 @@ impl SignalingState {
                 outbound,
                 public_key,
                 tenant_id,
+                heartbeat_count: 0,
             },
         );
         drop(peers);
@@ -586,6 +599,38 @@ impl SignalingState {
                 Ok(info.tenant_id)
             }
         }
+    }
+
+    /// Handle a `Heartbeat` from a connected peer. Re-emits
+    /// `Presence { connected: true }` every `PRESENCE_HEARTBEAT_INTERVAL`
+    /// heartbeats so subscribers (and the cluster bus) see a fresh
+    /// liveness signal between connect and disconnect events.
+    ///
+    /// The host-agent sends a `Heartbeat` every 10 seconds; with the
+    /// default interval of 3 this yields one presence refresh per peer
+    /// per ~30 seconds — well under typical TCP keepalive windows.
+    async fn handle_heartbeat(&self, peer_id: Uuid) {
+        let to_broadcast = {
+            let mut peers = self.peers.write().await;
+            match peers.get_mut(&peer_id) {
+                Some(peer) => {
+                    peer.heartbeat_count = peer.heartbeat_count.wrapping_add(1);
+                    peer.heartbeat_count % PRESENCE_HEARTBEAT_INTERVAL == 0
+                }
+                None => false,
+            }
+        };
+        if !to_broadcast {
+            return;
+        }
+        let (descriptor, tenant_id) = {
+            let peers = self.peers.read().await;
+            match peers.get(&peer_id) {
+                Some(peer) => (peer.descriptor.clone(), peer.tenant_id),
+                None => return,
+            }
+        };
+        self.broadcast_presence(descriptor, tenant_id, true).await;
     }
 
     async fn peer_tenant(&self, peer_id: Uuid) -> Option<Uuid> {
@@ -1863,6 +1908,7 @@ async fn handle_socket(socket: WebSocket, state: SignalingState) {
             }
             (Some(peer), ClientMessage::Heartbeat) => {
                 debug!(peer_id = %peer.peer_id, "heartbeat");
+                state.handle_heartbeat(peer.peer_id).await;
                 let _ = outbound_tx.send(ServerMessage::HeartbeatAck);
             }
             (Some(peer), ClientMessage::StartSession(request)) => {
@@ -2162,6 +2208,170 @@ mod tests {
         assert_eq!(a_hosts[0].peer_id, host_a.peer_id);
         assert_eq!(b_hosts.len(), 1);
         assert_eq!(b_hosts[0].peer_id, host_b.peer_id);
+    }
+
+    #[tokio::test]
+    async fn heartbeat_re_emits_presence_on_schedule() {
+        // Two peers in the same tenant: A (host) sends heartbeats;
+        // B (client) is the observer that should see re-broadcast
+        // presence events. `register()` does not itself emit a
+        // presence event — that happens in the WS Hello handler —
+        // so we don't need to drain B's channel here.
+        let state = SignalingState::default();
+        let tenant = Uuid::new_v4();
+        let host = descriptor(PeerRole::Host, Uuid::new_v4());
+        let client = descriptor(PeerRole::Client, Uuid::new_v4());
+        let (host_tx, _host_rx) = mpsc::unbounded_channel::<ServerMessage>();
+        let (client_tx, mut client_rx) = mpsc::unbounded_channel::<ServerMessage>();
+        state
+            .register(host.clone(), None, tenant, host_tx)
+            .await
+            .unwrap();
+        state
+            .register(client.clone(), None, tenant, client_tx)
+            .await
+            .unwrap();
+
+        // 1st and 2nd heartbeats: must NOT trigger a presence event.
+        for n in 1..=2 {
+            state.handle_heartbeat(host.peer_id).await;
+            let got = tokio::time::timeout(
+                std::time::Duration::from_millis(50),
+                client_rx.recv(),
+            )
+            .await;
+            assert!(
+                got.is_err(),
+                "unexpected presence event after heartbeat #{n}",
+            );
+        }
+
+        // 3rd heartbeat: MUST trigger exactly one presence event.
+        state.handle_heartbeat(host.peer_id).await;
+        let after_three = tokio::time::timeout(
+            std::time::Duration::from_millis(500),
+            client_rx.recv(),
+        )
+        .await
+        .expect("presence after 3rd heartbeat within 500ms")
+        .expect("presence channel still open");
+        match after_three {
+            ServerMessage::Presence(ev) => {
+                assert!(ev.connected, "presence must be connected=true");
+                assert_eq!(
+                    ev.peer.peer_id, host.peer_id,
+                    "presence must reference the heartbeating peer"
+                );
+            }
+            other => panic!("expected Presence, got {other:?}"),
+        }
+
+        // 4th, 5th heartbeats: again no event.
+        for n in 4..=5 {
+            state.handle_heartbeat(host.peer_id).await;
+            let got = tokio::time::timeout(
+                std::time::Duration::from_millis(50),
+                client_rx.recv(),
+            )
+            .await;
+            assert!(
+                got.is_err(),
+                "unexpected presence event after heartbeat #{n}",
+            );
+        }
+
+        // 6th heartbeat: another presence event (6 % 3 == 0).
+        state.handle_heartbeat(host.peer_id).await;
+        let after_six = tokio::time::timeout(
+            std::time::Duration::from_millis(500),
+            client_rx.recv(),
+        )
+        .await
+        .expect("presence after 6th heartbeat within 500ms")
+        .expect("presence channel still open");
+        assert!(matches!(
+            after_six,
+            ServerMessage::Presence(ref ev) if ev.connected && ev.peer.peer_id == host.peer_id
+        ));
+    }
+
+    #[tokio::test]
+    async fn heartbeat_for_unknown_peer_is_silent() {
+        // Heartbeats from a peer_id that was never registered (e.g. a
+        // stale task firing after disconnect) must not panic or spawn
+        // phantom broadcasts.
+        let state = SignalingState::default();
+        let (tx, mut rx) = mpsc::unbounded_channel::<ServerMessage>();
+        state
+            .register(
+                descriptor(PeerRole::Host, Uuid::new_v4()),
+                None,
+                Uuid::nil(),
+                tx,
+            )
+            .await
+            .unwrap();
+        state.handle_heartbeat(Uuid::new_v4()).await; // unknown peer_id
+        let got = tokio::time::timeout(
+            std::time::Duration::from_millis(50),
+            rx.recv(),
+        )
+        .await;
+        assert!(got.is_err(), "unknown peer must not produce events");
+    }
+
+    #[tokio::test]
+    async fn heartbeat_does_not_leak_across_tenants() {
+        // Heartbeat-driven presence must respect the same tenant
+        // isolation as the connect-time broadcast.
+        let state = SignalingState::default();
+        let tenant_a = Uuid::new_v4();
+        let tenant_b = Uuid::new_v4();
+        let host_a = descriptor(PeerRole::Host, Uuid::new_v4());
+        let client_a = descriptor(PeerRole::Client, Uuid::new_v4());
+        let client_b = descriptor(PeerRole::Client, Uuid::new_v4());
+        let (host_tx, _host_rx) = mpsc::unbounded_channel::<ServerMessage>();
+        let (client_a_tx, mut client_a_rx) = mpsc::unbounded_channel::<ServerMessage>();
+        let (client_b_tx, mut client_b_rx) = mpsc::unbounded_channel::<ServerMessage>();
+        state
+            .register(host_a.clone(), None, tenant_a, host_tx)
+            .await
+            .unwrap();
+        state
+            .register(client_a.clone(), None, tenant_a, client_a_tx)
+            .await
+            .unwrap();
+        state
+            .register(client_b.clone(), None, tenant_b, client_b_tx)
+            .await
+            .unwrap();
+
+        // Three heartbeats from host_a — should re-emit only to tenant_a.
+        for _ in 0..PRESENCE_HEARTBEAT_INTERVAL {
+            state.handle_heartbeat(host_a.peer_id).await;
+        }
+
+        let saw_a = tokio::time::timeout(
+            std::time::Duration::from_millis(500),
+            client_a_rx.recv(),
+        )
+        .await
+        .expect("tenant_a observer should see re-emitted presence")
+        .expect("tenant_a channel open");
+        assert!(matches!(
+            saw_a,
+            ServerMessage::Presence(ref ev) if ev.peer.peer_id == host_a.peer_id
+        ));
+
+        let saw_b = tokio::time::timeout(
+            std::time::Duration::from_millis(50),
+            client_b_rx.recv(),
+        )
+        .await;
+        assert!(
+            saw_b.is_err(),
+            "tenant_b observer must not receive cross-tenant presence"
+        );
     }
 
     #[tokio::test]
