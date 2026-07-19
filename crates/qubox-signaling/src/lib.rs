@@ -3770,7 +3770,6 @@ mod tests {
     // ── Phase 2: session-bundle verification ────────────────────────
 
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-    use base64::Engine as _;
     use qubox_proto::{SessionCaps, SignedBundle, SignedKill};
 
     /// Lightweight test-only JWKS fetcher.
