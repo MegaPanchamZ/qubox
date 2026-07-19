@@ -2085,17 +2085,27 @@ async fn handle_socket(socket: WebSocket, state: SignalingState) {
                 {
                     Ok(t) => t,
                     Err(error) => {
-                        warn!(
-                            device_id = %descriptor.device_id,
-                            peer_id = %descriptor.peer_id,
-                            %error,
-                            "rejecting SignedHello: enrollment check failed"
-                        );
-                        let _ = outbound_tx.send(ServerMessage::Error(ErrorMessage::new(
-                            "not_enrolled",
-                            error.to_string(),
-                        )));
-                        break;
+                        // Clients (browser viewers) don't have an enrolled
+                        // device row — they're identified by the bundle's
+                        // `aud = viewer_user_id` claim and the Ed25519
+                        // signature on the `signed_hello`. Hosts MUST be
+                        // enrolled. Skip the lookup when role == client so
+                        // the browser flow can proceed; we'll still fall
+                        // back to the bundle for tenant attribution later.
+                        if descriptor.role == PeerRole::Client {
+                            Uuid::nil()
+                        } else {
+                            warn!(
+                                device_id = %descriptor.device_id,
+                                peer_id = %descriptor.peer_id,
+                                %error,
+                                "rejecting SignedHello: enrollment check failed"
+                            );
+                            let _ = outbound_tx.send(ServerMessage::Error(
+                                ErrorMessage::new("not_enrolled", error.to_string()),
+                            ));
+                            break;
+                        }
                     }
                 };
 
