@@ -19,9 +19,7 @@ export function PairingRequests() {
   const [hostErr, setHostErr] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
-  const cloud =
-    (settings?.signalingServer ?? "").includes("signal.qubox.app") ||
-    (settings?.signalingServer ?? "").startsWith("wss://");
+  const cloud = settings?.cloudMode ?? false;
 
   const refreshHost = useCallback(async () => {
     try {

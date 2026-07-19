@@ -56,28 +56,13 @@ export function FirstRun({ onDone }: FirstRunProps) {
           accountsUrl: CLOUD_ACCOUNTS,
         });
         setStatus("Saving preferences…");
-        await invoke("set_setting", {
-          key: "cloud_mode",
-          value: "1",
-        });
-        await invoke("set_setting", {
-          key: "accounts_url",
-          value: CLOUD_ACCOUNTS,
-        });
-      } else {
-        await invoke("set_setting", {
-          key: "cloud_mode",
-          value: "0",
-        });
       }
 
       await invoke("complete_onboarding", {
         deviceName,
         signalingServer: signaling,
-      });
-      await invoke("set_setting", {
-        key: "signaling_server",
-        value: signaling,
+        cloudMode: mode === "cloud",
+        accountsUrl: mode === "cloud" ? CLOUD_ACCOUNTS : null,
       });
       onDone();
     } catch (e) {

@@ -16,7 +16,7 @@ function Shell() {
   const [ready, setReady] = useState(false);
   const [needsOnboarding, setNeedsOnboarding] = useState(false);
   const [drainHint, setDrainHint] = useState<string | null>(null);
-  const { pendingPairings, activeSessions } = useApp();
+  const { pendingPairings, activeSessions, conflictCount } = useApp();
 
   useEffect(() => {
     let cancelled = false;
@@ -68,7 +68,13 @@ function Shell() {
       setView("sessions");
     } catch (error) {
       console.error("start_session_subprocess failed", error);
+      throw error;
     }
+  };
+
+  const pairAndStartSession = async (hostId: string) => {
+    await invoke("pair_host", { hostId });
+    await startSession(hostId);
   };
 
   const cancelSession = async (sessionId: string) => {
@@ -104,6 +110,7 @@ function Shell() {
         onChange={setView}
         pendingPairingCount={pendingPairings.length}
         view={view}
+        conflictCount={conflictCount}
       />
       <section className="panel">
         {drainHint ? (
@@ -111,14 +118,22 @@ function Shell() {
             {drainHint}{" "}
             <button
               className="secondary-button"
-              onClick={() => setView("sync")}
+              onClick={() => {
+                setView("sync");
+                setDrainHint(null);
+              }}
               type="button"
             >
               Open File Sync
             </button>
           </p>
         ) : null}
-        {view === "hosts" ? <HostList onStartSession={startSession} /> : null}
+        {view === "hosts" ? (
+          <HostList
+            onStartSession={startSession}
+            onPairAndStartSession={pairAndStartSession}
+          />
+        ) : null}
         {view === "host" ? <HostModeView /> : null}
         {view === "pairing" ? <PairingRequests /> : null}
         {view === "sessions" ? <SessionView onCancel={cancelSession} /> : null}

@@ -226,6 +226,30 @@ impl StateDb {
         Ok(())
     }
 
+    pub fn complete_onboarding(
+        &self,
+        device_name: &str,
+        signaling_server: &str,
+        cloud_mode: bool,
+        accounts_url: Option<&str>,
+    ) -> Result<()> {
+        let txn = self.db.begin_write()?;
+        {
+            let mut table = txn.open_table(SETTINGS)?;
+            table.insert("device_name", device_name)?;
+            table.insert("signaling_server", signaling_server)?;
+            table.insert("cloud_mode", if cloud_mode { "1" } else { "0" })?;
+            if let Some(url) = accounts_url.filter(|value| !value.is_empty()) {
+                table.insert("accounts_url", url)?;
+            } else {
+                table.remove("accounts_url")?;
+            }
+            table.insert("onboarding_complete", "1")?;
+        }
+        txn.commit()?;
+        Ok(())
+    }
+
     pub fn list_settings(&self) -> Result<Vec<(String, String)>> {
         let txn = self.db.begin_read()?;
         let table = txn.open_table(SETTINGS)?;
@@ -780,6 +804,32 @@ mod tests {
             .any(|x| x == "*.rom"));
         let after = db.apply_ignore_preset("emulator-saves").unwrap();
         assert!(after.iter().any(|x| x == "*.gba"));
+    }
+
+    #[test]
+    fn complete_onboarding_writes_profile() {
+        let (db, _dir) = temp_db();
+        db.complete_onboarding(
+            "device",
+            "wss://signal.example/ws",
+            true,
+            Some("https://accounts.example"),
+        )
+        .unwrap();
+        assert_eq!(db.get_setting("device_name").unwrap().as_deref(), Some("device"));
+        assert_eq!(
+            db.get_setting("signaling_server").unwrap().as_deref(),
+            Some("wss://signal.example/ws")
+        );
+        assert_eq!(db.get_setting("cloud_mode").unwrap().as_deref(), Some("1"));
+        assert_eq!(
+            db.get_setting("accounts_url").unwrap().as_deref(),
+            Some("https://accounts.example")
+        );
+        assert_eq!(
+            db.get_setting("onboarding_complete").unwrap().as_deref(),
+            Some("1")
+        );
     }
 
     #[test]

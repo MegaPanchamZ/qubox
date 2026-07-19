@@ -174,6 +174,8 @@ pub enum IpcRequest {
     CompleteOnboarding {
         device_name: String,
         signaling_server: String,
+        cloud_mode: bool,
+        accounts_url: Option<String>,
     },
     /// FileSync: list pending outbox (for session drain).
     SyncDrainReady,
@@ -1399,18 +1401,18 @@ async fn dispatch_request(
         IpcRequest::CompleteOnboarding {
             device_name,
             signaling_server,
+            cloud_mode,
+            accounts_url,
         } => {
             let resp = (|| -> Result<IpcResponse, String> {
                 state
-                    .set_setting("device_name", &device_name)
+                    .complete_onboarding(
+                        &device_name,
+                        &signaling_server,
+                        cloud_mode,
+                        accounts_url.as_deref(),
+                    )
                     .map_err(|e| e.to_string())?;
-                state
-                    .set_setting("signaling_server", &signaling_server)
-                    .map_err(|e| e.to_string())?;
-                state
-                    .set_setting("onboarding_complete", "1")
-                    .map_err(|e| e.to_string())?;
-                // Seed default FileSync ignores (includes .git).
                 let _ = state.get_global_ignores();
                 Ok(IpcResponse::Unit)
             })();
@@ -2207,6 +2209,8 @@ mod tests {
             .call(&IpcRequest::CompleteOnboarding {
                 device_name: "lab-host".into(),
                 signaling_server: "wss://sig.example".into(),
+                cloud_mode: false,
+                accounts_url: None,
             })
             .await
             .unwrap();

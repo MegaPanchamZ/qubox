@@ -1614,6 +1614,13 @@ pub enum ClientMessage {
     /// independently re-verifies the envelope before tearing down
     /// P2P.
     SignedKill(SignedBundle),
+    /// Stream-B §4 — host relays its operator-decision result back
+    /// to the cloud. Currently informational; lets the dashboard
+    /// log operator actions on self-hosted sessions.
+    OperatorDecision {
+        session_id: Uuid,
+        accept: bool,
+    },
 }
 
 /// Wrapper that pairs a legacy `StartSessionRequest` with an optional
@@ -1687,6 +1694,13 @@ pub enum ServerMessage {
     /// concurrent bundle replays are rejected even before the host
     /// observes the kill.
     SignedKillReceived(SignedKillEnvelope),
+    /// Stream-B §4.1 — cloud tells the host that an active session
+    /// is still alive; resets the host's idle watchdog. Optional;
+    /// hosts can also reset the watchdog based on local RelaySignal
+    /// traffic.
+    SessionActivity {
+        session_id: Uuid,
+    },
 }
 
 /// Wire-friendly wrapper that pairs a `SignedKill` payload with its
@@ -1706,11 +1720,27 @@ pub struct SignedKillEnvelope {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionBundleInfo {
+    pub session_id: Uuid,
     pub jti: String,
     pub viewer_dtls_fp: String,
     pub exp_unix_ms: u64,
     pub caps: SessionCaps,
     pub sub: String,
+    /// Stream-B §3 — proof that the viewer demonstrated knowledge of
+    /// the host PIN. Forwarded to the host so it can independently
+    /// gate session establishment on a positive proof.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pin_proof: Option<PinProof>,
+}
+
+/// Stream-B §3 — proof-of-knowledge of the host's PIN. The relay
+/// validates the bundle signature; the host then re-checks the
+/// `pin_hash_match` bit against its own `PinStore` snapshot.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PinProof {
+    /// True if the viewer's bundle claims `pin_hash_match`.
+    pub pin_hash_match: bool,
 }
 
 /// Events emitted by the daemon to subscribed clients.

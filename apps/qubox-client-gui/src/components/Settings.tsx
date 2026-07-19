@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useApp } from "./AppContext";
-import type { Settings } from "./AppContext";
 
 type FormState = {
   signalingServer: string;
@@ -26,43 +25,27 @@ const DEFAULT_FORM: FormState = {
 };
 
 export function SettingsView() {
-  const { settings, setSettings } = useApp();
+  const { settings } = useApp();
   const [form, setForm] = useState<FormState>(DEFAULT_FORM);
   const [savingKey, setSavingKey] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saveOk, setSaveOk] = useState<string | null>(null);
 
   useEffect(() => {
-    let cancelled = false;
-    const load = async () => {
-      try {
-        const loaded = await invoke<Settings>("get_settings");
-        if (cancelled) {
-          return;
-        }
-        setSettings(loaded);
-        setForm({
-          signalingServer: loaded.signalingServer ?? "",
-          bitrateKbps: String(loaded.bitrateKbps ?? 20000),
-          fpsCap: String(loaded.fpsCap ?? 60),
-          decoderBackend: loaded.decoderBackend ?? "ffmpeg",
-          micEnabled: loaded.micEnabled,
-          clipboardSync: loaded.clipboardSync ?? "off",
-          statsOverlay: loaded.statsOverlay,
-          autoStartHost: loaded.autoStartHost,
-        });
-      } catch (error) {
-        if (cancelled) {
-          return;
-        }
-        setSaveError(String(error));
-      }
-    };
-    void load();
-    return () => {
-      cancelled = true;
-    };
-  }, [setSettings]);
+    if (!settings) {
+      return;
+    }
+    setForm({
+      signalingServer: settings.signalingServer ?? "",
+      bitrateKbps: String(settings.bitrateKbps ?? 20000),
+      fpsCap: String(settings.fpsCap ?? 60),
+      decoderBackend: settings.decoderBackend ?? "ffmpeg",
+      micEnabled: settings.micEnabled,
+      clipboardSync: settings.clipboardSync ?? "off",
+      statsOverlay: settings.statsOverlay,
+      autoStartHost: settings.autoStartHost,
+    });
+  }, [settings]);
 
   const save = async (key: string, value: string) => {
     setSavingKey(key);

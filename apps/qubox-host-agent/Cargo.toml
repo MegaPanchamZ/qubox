@@ -18,6 +18,7 @@ qubox-platform = { path = "../../crates/qubox-platform" }
 qubox-proto = { path = "../../crates/qubox-proto" }
 qubox-signaling = { path = "../../crates/qubox-signaling" }
 qubox-transport = { path = "../../crates/qubox-transport" }
+ed25519-dalek.workspace = true
 qubox-sync = { path = "../../crates/qubox-sync" }
 # Stream-B host enforcement: PIN (argon2id) and recovery key
 # (chacha20poly1305 wrapping the host identity seed).

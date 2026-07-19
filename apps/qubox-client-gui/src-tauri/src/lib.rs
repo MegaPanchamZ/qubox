@@ -105,6 +105,8 @@ struct ActiveSession {
 #[serde(rename_all = "camelCase")]
 struct Settings {
     signaling_server: Option<String>,
+    accounts_url: Option<String>,
+    cloud_mode: bool,
     auto_approve_pairing: bool,
     bitrate_kbps: Option<u32>,
     fps_cap: Option<u32>,
@@ -359,6 +361,37 @@ fn start_session(host_id: String) -> Result<(), String> {
         .map_err(|error| format!("failed to spawn client session thread: {error}"))?;
 
     Ok(())
+}
+
+#[tauri::command]
+async fn pair_host(host_id: String) -> Result<(), String> {
+    let host_uuid =
+        Uuid::parse_str(&host_id).map_err(|error| format!("invalid host id {host_id}: {error}"))?;
+    let settings = get_settings().await?;
+    let server = settings
+        .signaling_server
+        .unwrap_or_else(|| DEFAULT_SIGNALING_SERVER.to_string());
+    let cli = resolve_qubox_client_cli_path();
+    let output = Command::new(&cli)
+        .arg("--server")
+        .arg(server)
+        .arg("--json-telemetry")
+        .arg("pair")
+        .arg("--host")
+        .arg(host_uuid.to_string())
+        .output()
+        .await
+        .map_err(|error| format!("failed to spawn qubox-client-cli pair: {error}"))?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        Err(if stderr.is_empty() {
+            format!("pairing failed with status {}", output.status)
+        } else {
+            stderr
+        })
+    }
 }
 
 /// Spawn `qubox-client-cli start-session --host <id> --json-telemetry ...` as
@@ -672,6 +705,8 @@ async fn get_settings() -> Result<Settings, String> {
         signaling_server: Some(
             std::env::var("QUBOX_SERVER").unwrap_or_else(|_| DEFAULT_SIGNALING_SERVER.to_string()),
         ),
+        accounts_url: None,
+        cloud_mode: false,
         auto_approve_pairing: false,
         bitrate_kbps: Some(20_000),
         fps_cap: Some(60),
@@ -689,6 +724,10 @@ async fn get_settings() -> Result<Settings, String> {
             for (k, v) in entries {
                 match k.as_str() {
                     "signaling_server" => settings.signaling_server = Some(v),
+                    "accounts_url" => settings.accounts_url = Some(v),
+                    "cloud_mode" => {
+                        settings.cloud_mode = v == "1" || v.eq_ignore_ascii_case("true")
+                    }
                     "auto_approve_pairing" => {
                         settings.auto_approve_pairing = v == "1" || v.eq_ignore_ascii_case("true")
                     }
@@ -752,12 +791,19 @@ async fn get_onboarding() -> Result<serde_json::Value, String> {
 }
 
 #[tauri::command]
-async fn complete_onboarding(device_name: String, signaling_server: String) -> Result<(), String> {
+async fn complete_onboarding(
+    device_name: String,
+    signaling_server: String,
+    cloud_mode: bool,
+    accounts_url: Option<String>,
+) -> Result<(), String> {
     let mut client = connect_daemon().await?;
     match client
         .call::<IpcResponse>(&IpcRequest::CompleteOnboarding {
             device_name,
             signaling_server,
+            cloud_mode,
+            accounts_url,
         })
         .await
         .map_err(|e| e.to_string())?
@@ -1520,6 +1566,7 @@ pub fn run() {
             discover_lan_hosts,
             start_session,
             start_session_subprocess,
+            pair_host,
             cancel_session,
             list_active_sessions,
             accept_pairing,

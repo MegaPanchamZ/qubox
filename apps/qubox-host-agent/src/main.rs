@@ -48,6 +48,7 @@ use tracing_subscriber::EnvFilter;
 use uuid::Uuid;
 
 mod capture_orchestrator;
+mod enforce;
 mod filesync_drain;
 mod input_mapping;
 mod pairing_ui;
@@ -357,6 +358,10 @@ struct HostSessionRuntime {
     recovery: Arc<recovery::RecoveryStore>,
     toast_gate: Arc<toast_policy::ToastGate>,
     idle_timeout: Duration,
+    // Stream-B §3–§6: host-agent local enforcement state.
+    host_device_id: String,
+    enforcement: enforce::EnforcementState,
+    webrtc_sessions: webrtc_session::SessionRegistry,
 }
 
 struct RemoteInputInjector {
@@ -368,6 +373,78 @@ struct RemoteInputInjector {
 }
 
 impl HostSessionRuntime {
+    /// Unix-epoch milliseconds using the host's monotonic-derived
+    /// clock. Stream-B verification (§5) needs a wall-clock
+    /// millisecond reading for `exp` checks; this wraps `SystemTime`
+    /// to keep the call sites short and the helper easy to mock in
+    /// tests.
+    fn unix_millis_now() -> i64 {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0)
+    }
+
+    /// Force-kill an active session regardless of transport. Used by:
+    ///   * the global idle-watchdog (§4.1)
+    ///   * the local `SignedKillReceived` verifier (§5)
+    ///   * `SessionKicked` from the cloud
+    ///
+    /// Closes the WebRTC entry (if any), drops any pending PIN /
+    /// operator decision waiters, removes the activity entry, and
+    /// notifies the cloud via `KickSession`. Returns `true` if an
+    /// active session was found and closed.
+    async fn kill_session(&self, session_id: Uuid) -> bool {
+        let mut closed = false;
+
+        let session_opt = {
+            let mut guard = self.webrtc_sessions.lock().await;
+            guard.remove(&session_id)
+        };
+        if let Some(session) = session_opt {
+            if let Err(err) = session.close().await {
+                tracing::warn!(
+                    session_id = %session_id,
+                    ?err,
+                    "error closing webrtc session during kill"
+                );
+            }
+            closed = true;
+        }
+
+        // Drop any in-flight PIN proof / operator-decision waiters
+        // for this session so they don't hang.
+        self.enforcement.drop_pending(session_id);
+        self.enforcement.remove_activity(session_id);
+
+        if let Err(err) = send_client_message(
+            &self.signaling_writer,
+            &ClientMessage::KickSession {
+                session_id,
+                reason: "host_kill".into(),
+            },
+        )
+        .await
+        {
+            tracing::warn!(
+                session_id = %session_id,
+                ?err,
+                "failed to send KickSession during kill"
+            );
+        } else {
+            closed = true;
+        }
+
+        closed
+    }
+
+    /// Record that this session saw live traffic — resets the idle
+    /// timer.
+    fn touch_activity(&self, session_id: Uuid) {
+        self.enforcement.touch_activity(session_id);
+    }
+
     /// Apply a cloud-pushed PIN update. Requires proof of either the
     /// old PIN, the host recovery key, or an operator physical ack.
     /// Returns the outcome so the caller (a control-channel handler,
@@ -629,6 +706,9 @@ let runtime = HostSessionRuntime {
         recovery: recovery.clone(),
         toast_gate: toast_gate.clone(),
         idle_timeout,
+        host_device_id: descriptor.peer_id.to_string(),
+        enforcement: enforce::EnforcementState::from_env(&descriptor.peer_id.to_string()),
+        webrtc_sessions: Arc::new(Mutex::new(std::collections::HashMap::new())),
     };
 
     send_client_message(
@@ -642,12 +722,33 @@ let runtime = HostSessionRuntime {
 
     let mut heartbeat = tokio::time::interval(Duration::from_secs(10));
 
-    // Registry of in-flight WebRTC sessions. The signaling message loop hands
-    // incoming RelaySignal::IceCandidate messages to the right session by
-    // `session_id`. Each session registers itself on entry and removes
-    // itself when the PeerConnection closes.
-    let webrtc_sessions: webrtc_session::SessionRegistry =
-        Arc::new(Mutex::new(std::collections::HashMap::new()));
+    // Stream-B §4.1 — global idle watchdog. Polls the activity
+    // tracker every `WATCHDOG_INTERVAL` and force-kills any session
+    // whose last activity is older than `runtime.idle_timeout`.
+    // This replaces the per-session `tokio::time::sleep(idle_timeout)`
+    // tasks which never reset on activity.
+    if !runtime.idle_timeout.is_zero() {
+        let watchdog_runtime = runtime.clone();
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(enforce::WATCHDOG_INTERVAL);
+            tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            loop {
+                tick.tick().await;
+                let now = std::time::Instant::now();
+                let stale = watchdog_runtime
+                    .enforcement
+                    .collect_stale_sessions(watchdog_runtime.idle_timeout, now);
+                for sid in stale {
+                    tracing::warn!(
+                        session_id = %sid,
+                        timeout = ?watchdog_runtime.idle_timeout,
+                        "idle watchdog: force-killing stale session"
+                    );
+                    watchdog_runtime.kill_session(sid).await;
+                }
+            }
+        });
+    }
 
     loop {
         tokio::select! {
@@ -664,7 +765,6 @@ let runtime = HostSessionRuntime {
                             args.auto_approve_pairing,
                             runtime.clone(),
                             pairing_ui.clone(),
-                            webrtc_sessions.clone(),
                         )
                         .await?;
                     }
@@ -995,7 +1095,6 @@ async fn handle_server_message(
     auto_approve_pairing: bool,
     runtime: HostSessionRuntime,
     pairing_ui: Option<pairing_ui::PairingUiState>,
-    webrtc_sessions: webrtc_session::SessionRegistry,
 ) -> anyhow::Result<()> {
     match message {
         ServerMessage::Welcome(welcome) => {
@@ -1069,22 +1168,94 @@ async fn handle_server_message(
                 "session request received"
             );
 
-            // ── Stream-B: PIN gate ────────────────────────────────
+            // ── Stream-B: PIN gate (§3) ──────────────────────────
+            // If the host policy requires a PIN, block up to
+            // `enforce::PIN_BUNDLE_TIMEOUT` for a `SessionBundleAccepted`
+            // message carrying the viewer's PIN proof. The bundle itself
+            // is verified locally via `enforce::verify_bundle_locally`.
             let policy = runtime.pin_store.snapshot();
             if policy.requires_pin() {
                 tracing::info!(
                     session_id = %requested.session_id,
-                    "PIN required by host policy; awaiting PIN proof from viewer"
+                    "PIN required by host policy; awaiting SessionBundleAccepted from cloud"
                 );
-                // Stream B: the cloud pushes a ViewerToHost bundle on the
-                // session request that carries the PIN proof under the
-                // session caps. For native QUIC we haven't yet wired the
-                // ViewerToHost payload — log and hold the session open.
-                // A real implementation would now block here until a
-                // ViewerToHost bundle arrives carrying a PIN match.
+
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                let pending = enforce::PendingBundle {
+                    expected_client: requested.client.peer_id,
+                    received: false,
+                    deliver: tx,
+                };
+                runtime
+                    .enforcement
+                    .register_pending_bundle(requested.session_id, pending);
+
+                let bundle_msg =
+                    match tokio::time::timeout(enforce::PIN_BUNDLE_TIMEOUT, rx).await {
+                        Ok(Ok(msg)) => msg,
+                        Ok(Err(_canceled)) => {
+                            tracing::warn!(
+                                session_id = %requested.session_id,
+                                "PIN gate oneshot canceled before delivery"
+                            );
+                            return Ok(());
+                        }
+                        Err(_) => {
+                            tracing::warn!(
+                                session_id = %requested.session_id,
+                                "PIN gate timed out without SessionBundleAccepted"
+                            );
+                            send_client_message(
+                                &writer,
+                                &ClientMessage::KickSession {
+                                    session_id: requested.session_id,
+                                    reason: "pin_timeout".into(),
+                                },
+                            )
+                            .await?;
+                            return Ok(());
+                        }
+                    };
+
+                let now_ms = HostSessionRuntime::unix_millis_now();
+                if let Err(err) = runtime
+                    .enforcement
+                    .verify_bundle_locally(
+                        &bundle_msg,
+                        runtime.host_device_id.as_str(),
+                        now_ms,
+                    )
+                    .await
+                {
+                    tracing::warn!(
+                        session_id = %requested.session_id,
+                        ?err,
+                        "PIN gate bundle failed local verification — kicking"
+                    );
+                    runtime.kill_session(requested.session_id).await;
+                    return Ok(());
+                }
+
+                if !enforce::verify_pin_proof(
+                    &bundle_msg,
+                    &runtime.pin_store,
+                    &requested.client,
+                ) {
+                    tracing::warn!(
+                        session_id = %requested.session_id,
+                        "PIN gate bundle missing or invalid PinProof — kicking"
+                    );
+                    runtime.kill_session(requested.session_id).await;
+                    return Ok(());
+                }
+
+                tracing::info!(
+                    session_id = %requested.session_id,
+                    "PIN gate satisfied"
+                );
             }
 
-            // ── Stream-B: toast gate ──────────────────────────────
+            // ── Stream-B: toast gate (§4) ─────────────────────────
             let toast_decision = runtime
                 .toast_gate
                 .evaluate(&requested.client, std::time::Instant::now());
@@ -1109,13 +1280,69 @@ async fn handle_server_message(
                     tracing::info!(
                         session_id = %requested.session_id,
                         client = %requested.client.device_name,
-                        "toast required; awaiting operator ack (auto-admit in --auto-approve-pairing mode)"
+                        "toast required; awaiting operator ack"
                     );
                     if !auto_approve_pairing {
-                        // In a real UI this would pop a notification and
-                        // block the session. We log + wait; the operator
-                        // can also pre-approve the pairing via the
-                        // pairing UI which already short-circuits this path.
+                        // Block on an operator decision oneshot up to
+                        // `OPERATOR_DECISION_TIMEOUT`. The dashboard
+                        // sends `ControlMsg::OperatorDecision` which the
+                        // outer dispatch loop converts into a
+                        // `ServerMessage`-style delivery via this gate.
+                        let (dtx, drx) = tokio::sync::oneshot::channel();
+                        runtime.enforcement.register_pending_decision(
+                            requested.session_id,
+                            enforce::PendingDecision { deliver: dtx },
+                        );
+
+                        let accept =
+                            match tokio::time::timeout(
+                                enforce::OPERATOR_DECISION_TIMEOUT,
+                                drx,
+                            )
+                            .await
+                            {
+                                Ok(Ok(b)) => b,
+                                Ok(Err(_canceled)) => {
+                                    tracing::warn!(
+                                        session_id = %requested.session_id,
+                                        "operator decision oneshot canceled"
+                                    );
+                                    false
+                                }
+                                Err(_) => {
+                                    tracing::warn!(
+                                        session_id = %requested.session_id,
+                                        "operator decision timed out — denying"
+                                    );
+                                    false
+                                }
+                            };
+
+                        if !accept {
+                            tracing::warn!(
+                                session_id = %requested.session_id,
+                                "operator denied session — kicking"
+                            );
+                            let _ = send_client_message(
+                                &writer,
+                                &ClientMessage::OperatorDecision {
+                                    session_id: requested.session_id,
+                                    accept: false,
+                                },
+                            )
+                            .await;
+                            runtime.kill_session(requested.session_id).await;
+                            return Ok(());
+                        }
+
+                        let _ = send_client_message(
+                            &writer,
+                            &ClientMessage::OperatorDecision {
+                                session_id: requested.session_id,
+                                accept: true,
+                            },
+                        )
+                        .await;
                     }
                 }
                 toast_policy::ToastDecision::SkipAutoAck => {
@@ -1126,14 +1353,14 @@ async fn handle_server_message(
                 }
             }
 
+            // Mark the session as active so the watchdog starts
+            // counting from now.
+            runtime.enforcement.touch_activity(requested.session_id);
+
             if requested.transport == TransportKind::NativeQuic {
-                tokio::spawn(run_native_quic_session(
-                    *requested,
-                    runtime,
-                    webrtc_sessions.clone(),
-                ));
+                tokio::spawn(run_native_quic_session(*requested, runtime));
             } else if requested.transport == TransportKind::WebRtc {
-                tokio::spawn(run_webrtc_session(*requested, runtime, webrtc_sessions.clone()));
+                tokio::spawn(run_webrtc_session(*requested, runtime));
             } else if requested.transport == TransportKind::RelayQuic {
                 tracing::warn!(
                     session_id = %requested.session_id,
@@ -1149,7 +1376,7 @@ async fn handle_server_message(
                 "received relayed signaling"
             );
             webrtc_session::dispatch_signal(
-                &webrtc_sessions,
+                &runtime.webrtc_sessions,
                 signal.session_id,
                 signal.signal,
             )
@@ -1176,23 +1403,7 @@ async fn handle_server_message(
         }
         ServerMessage::SessionKicked { session_id, reason } => {
             tracing::warn!(%session_id, %reason, "session kicked — closing active transport");
-            // Force-close any active session. We don't know which
-            // transport it was on; the WebRTC registry carries a
-            // close hook and the QUIC sessions will exit on their
-            // own when their socket drops.
-            let registry = webrtc_sessions.clone();
-            let sid = session_id;
-            tokio::spawn(async move {
-                let session_opt = {
-                    let mut guard = registry.lock().await;
-                    guard.remove(&sid)
-                };
-                if let Some(session) = session_opt {
-                    if let Err(e) = session.close().await {
-                        tracing::warn!(session_id = %sid, error = %e, "error closing session after kick");
-                    }
-                }
-            });
+            runtime.kill_session(session_id).await;
         }
         ServerMessage::SessionConsentPending {
             consent_id,
@@ -1218,10 +1429,55 @@ async fn handle_server_message(
         ServerMessage::Error(error) => {
             tracing::warn!(code = %error.code, message = %error.message, "server error");
         }
-        ServerMessage::SessionBundleAccepted(_)
-        | ServerMessage::SignedKillReceived(_) => {
-            // Not relevant to host agent flow (these are client-side concerns).
-            tracing::debug!("ignoring client-only server message");
+        ServerMessage::SessionBundleAccepted(bundle) => {
+            // Stream-B §3 — the cloud is delivering a ViewerToHost
+            // bundle in response to our session request. If a PIN gate
+            // is currently waiting for this session, deliver it.
+            let pending = runtime
+                .enforcement
+                .take_pending_bundle(bundle.session_id);
+            if let Some(pending) = pending {
+                let _ = pending.deliver.send(bundle);
+            } else {
+                tracing::debug!(
+                    session_id = %bundle.session_id,
+                    "SessionBundleAccepted arrived but no PIN gate waiter — ignoring"
+                );
+            }
+        }
+        ServerMessage::SignedKillReceived(envelope) => {
+            // Stream-B §5 — the cloud is forwarding a SignedKill envelope.
+            // Verify locally (JWKS + skew tolerance + JTI cache) before
+            // honoring it. If verification fails, log and drop: never
+            // trust the kill envelope blindly.
+            let now_ms = HostSessionRuntime::unix_millis_now();
+            match runtime
+                .enforcement
+                .verify_kill_envelope_local(&envelope, now_ms).await
+            {
+                Ok(decoded) => {
+                    let target_session = Uuid::parse_str(&decoded.sid).unwrap_or(Uuid::nil());
+                    tracing::warn!(
+                        session_id = %target_session,
+                        envelope_jti = %decoded.jti,
+                        reason = %decoded.reason,
+                        "signed kill envelope verified — closing session"
+                    );
+                    runtime.kill_session(target_session).await;
+                }
+                Err(err) => {
+                    tracing::warn!(
+                        ?err,
+                        envelope_kid = %envelope.envelope.kid,
+                        "signed kill envelope failed local verification — ignoring"
+                    );
+                }
+            }
+        }
+        ServerMessage::SessionActivity { session_id } => {
+            // Stream-B §4.1 — the cloud is telling us the session is
+            // still alive. Reset the idle watchdog.
+            runtime.touch_activity(session_id);
         }
     }
 
@@ -1311,7 +1567,6 @@ async fn run_datagram_dispatcher_loop(
 async fn run_native_quic_session(
     requested: SessionRequested,
     runtime: HostSessionRuntime,
-    _webrtc_registry: webrtc_session::SessionRegistry,
 ) {
     if requested.codec != VideoCodec::H264 {
         tracing::warn!(
@@ -1371,7 +1626,6 @@ async fn run_native_quic_session(
 async fn run_webrtc_session(
     requested: SessionRequested,
     runtime: HostSessionRuntime,
-    registry: webrtc_session::SessionRegistry,
 ) {
     if requested.codec != VideoCodec::H264 {
         tracing::warn!(
@@ -1383,34 +1637,13 @@ async fn run_webrtc_session(
         // and report "live"; just no video frames will flow.
     }
 
-    // Stream-B: idle / dead-man timer. On fire, close the session
-    // and notify the cloud via SessionKicked so it can propagate
-    // the kill back to the viewer.
-    let idle_timeout = runtime.idle_timeout;
-    if !idle_timeout.is_zero() {
-        let sid = requested.session_id;
-        let writer = runtime.signaling_writer.clone();
-        let reg = registry.clone();
-        tokio::spawn(async move {
-            tokio::time::sleep(idle_timeout).await;
-            tracing::warn!(session_id = %sid, ?idle_timeout, "webrtc idle timeout fired");
-            let session_opt = {
-                let mut guard = reg.lock().await;
-                guard.remove(&sid)
-            };
-            if let Some(session) = session_opt {
-                let _ = session.close().await;
-            }
-            let _ = send_client_message(
-                &writer,
-                &ClientMessage::KickSession {
-                    session_id: sid,
-                    reason: "idle_timeout".into(),
-                },
-            )
-            .await;
-        });
-    }
+    // Stream-B idle / dead-man timer (§4.1) is enforced by the
+    // global watchdog task spawned in `main` — it polls the
+    // activity tracker every `WATCHDOG_INTERVAL` and force-kills
+    // any session whose last activity is older than
+    // `runtime.idle_timeout`. The previous per-session
+    // `tokio::time::sleep(idle_timeout)` task (which never reset
+    // on activity) has been removed.
 
     let session = match webrtc_session::WebRtcSession::new(
         runtime.signaling_writer.clone(),
@@ -1438,7 +1671,7 @@ async fn run_webrtc_session(
     // channel as soon as the browser opens it.
 
     {
-        let mut guard = registry.lock().await;
+        let mut guard = runtime.webrtc_sessions.lock().await;
         guard.insert(requested.session_id, session.clone());
     }
 
@@ -1467,8 +1700,11 @@ async fn run_webrtc_session(
     if let Err(err) = session.close().await {
         tracing::warn!(?err, "error closing webrtc session");
     }
-    let mut guard = registry.lock().await;
-    guard.remove(&requested.session_id);
+    {
+        let mut guard = runtime.webrtc_sessions.lock().await;
+        guard.remove(&requested.session_id);
+    }
+    runtime.enforcement.remove_activity(requested.session_id);
     tracing::info!(session_id = %requested.session_id, "webrtc session torn down");
 }
 

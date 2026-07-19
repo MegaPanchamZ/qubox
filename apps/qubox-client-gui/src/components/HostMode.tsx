@@ -1,5 +1,6 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { useApp } from "./AppContext";
 import { SharePanel } from "./SharePanel";
 import {
   isPrivacyMode,
@@ -10,32 +11,16 @@ import {
 } from "../lib/hostPrefs";
 
 export function HostModeView() {
+  const { hostRunning } = useApp();
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [isRunning, setIsRunning] = useState<boolean>(false);
-
-  useEffect(() => {
-    const checkStatus = async () => {
-      try {
-        const running = await invoke<boolean>("get_host_status");
-        setIsRunning(running);
-      } catch (e) {
-        // Ignore error when checking status
-      }
-    };
-    void checkStatus();
-    const interval = setInterval(() => {
-      void checkStatus();
-    }, 1500);
-    return () => clearInterval(interval);
-  }, []);
+  const isRunning = hostRunning === true;
 
   const start = async () => {
     setError(null);
     try {
       await invoke("start_host_agent", {});
       setStatus("Host agent start requested via daemon");
-      setIsRunning(true);
     } catch (e) {
       setError(String(e));
     }
@@ -46,7 +31,6 @@ export function HostModeView() {
     try {
       await invoke("stop_host_agent");
       setStatus("Host agent stop requested");
-      setIsRunning(false);
     } catch (e) {
       setError(String(e));
     }
@@ -132,7 +116,7 @@ export function HostModeView() {
         </div>
         <div className="settings-field">
           <span>Display streams</span>
-          <p className="subtitle">Single stream (default) or multi-display capture on the host.</p>
+          <p className="subtitle">Single stream, multi-display, or all-display capture on the host.</p>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             <button
               className="secondary-button"
@@ -143,10 +127,10 @@ export function HostModeView() {
             </button>
             <button
               className="secondary-button"
-              onClick={() => void saveStreamMode("multi-display")}
+              onClick={() => void saveStreamMode("all-displays")}
               type="button"
             >
-              Multi-display
+              All displays
             </button>
           </div>
         </div>

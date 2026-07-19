@@ -2236,11 +2236,13 @@ async fn handle_socket(socket: WebSocket, state: SignalingState) {
                             }
                         }
                         let info = SessionBundleInfo {
+                            session_id: bundle_request.request.session_id,
                             jti: viewer.jti.clone(),
                             viewer_dtls_fp: viewer.viewer_dtls_fp.clone(),
                             exp_unix_ms: viewer.exp as u64,
                             caps: viewer.caps.clone(),
                             sub: viewer.sub.clone(),
+                            pin_proof: None,
                         };
                         Some((bundle_request.request, info))
                     }
@@ -2425,6 +2427,13 @@ async fn handle_socket(socket: WebSocket, state: SignalingState) {
                         )
                         .await;
                 }
+            }
+            (Some(_peer), ClientMessage::OperatorDecision { .. }) => {
+                // Stream-B §4 — host's relay of its operator-decision
+                // result back to the cloud. The relay doesn't act on
+                // this (the cloud already pushed the decision via
+                // `ControlMsg::OperatorDecision`); it's informational.
+                tracing::debug!("received OperatorDecision relay from host");
             }
         }
     }

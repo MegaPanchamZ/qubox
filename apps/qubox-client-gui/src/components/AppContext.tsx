@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useMemo, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
@@ -23,6 +23,8 @@ export type ActiveSession = {
 
 export type Settings = {
   signalingServer: string | null;
+  accountsUrl: string | null;
+  cloudMode: boolean;
   autoApprovePairing: boolean;
   bitrateKbps: number | null;
   fpsCap: number | null;
@@ -63,6 +65,8 @@ type AppContextValue = {
   discoveredHosts: DiscoveredHost[];
   activeSessions: ActiveSession[];
   settings: Settings | null;
+  hostRunning: boolean | null;
+  conflictCount: number;
   telemetryBySession: Record<string, SessionTelemetry[]>;
   stderrBySession: Record<string, StderrLine[]>;
   pendingPairings: PairingRequest[];
@@ -70,6 +74,8 @@ type AppContextValue = {
   setDiscoveredHosts: (hosts: DiscoveredHost[]) => void;
   setActiveSessions: (sessions: ActiveSession[]) => void;
   setSettings: (settings: Settings | null) => void;
+  setConflictCount: (count: number) => void;
+  refreshConflictCount: () => Promise<void>;
   pushTelemetry: (sessionId: string, event: SessionTelemetry) => void;
   pushStderr: (line: StderrLine) => void;
   pushPairingRequest: (request: PairingRequest) => void;
@@ -86,6 +92,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [discoveredHosts, setDiscoveredHosts] = useState<DiscoveredHost[]>([]);
   const [activeSessions, setActiveSessions] = useState<ActiveSession[]>([]);
   const [settings, setSettings] = useState<Settings | null>(null);
+  const [hostRunning, setHostRunning] = useState<boolean | null>(null);
+  const [conflictCount, setConflictCount] = useState(0);
   const [telemetryBySession, setTelemetryBySession] = useState<
     Record<string, SessionTelemetry[]>
   >({});
@@ -108,6 +116,22 @@ export function AppProvider({ children }: { children: ReactNode }) {
     };
     void initSettings();
   }, []);
+
+  const refreshConflictCount = useCallback(async () => {
+    try {
+      const conflicts = await invoke<unknown[]>("sync_list_conflicts");
+      setConflictCount(Array.isArray(conflicts) ? conflicts.length : 0);
+    } catch {
+      setConflictCount(0);
+    }
+  }, []);
+
+  useEffect(() => {
+    void invoke<boolean>("get_host_status")
+      .then(setHostRunning)
+      .catch(() => setHostRunning(null));
+    void refreshConflictCount();
+  }, [refreshConflictCount]);
 
   useEffect(() => {
     const unlistens: UnlistenFn[] = [];
@@ -193,9 +217,18 @@ export function AppProvider({ children }: { children: ReactNode }) {
       const unlistenEnded = await listen<{ sessionId: string; reason: string }>(
         "session://ended",
         (event) => {
-          setActiveSessions((prev) =>
-            prev.filter((s) => s.sessionId !== event.payload.sessionId),
-          );
+          const sessionId = event.payload.sessionId;
+          setActiveSessions((prev) => prev.filter((s) => s.sessionId !== sessionId));
+          setTelemetryBySession((prev) => {
+            const next = { ...prev };
+            delete next[sessionId];
+            return next;
+          });
+          setStderrBySession((prev) => {
+            const next = { ...prev };
+            delete next[sessionId];
+            return next;
+          });
         },
       );
       unlistens.push(unlistenEnded);
@@ -221,12 +254,33 @@ export function AppProvider({ children }: { children: ReactNode }) {
       );
       unlistens.push(unlistenStarted);
 
-      const unlistenDaemon = await listen<{ event: unknown }>(
-        "daemon://state-changed",
-        () => {
-          // Reserved for future daemon-state mirroring.
-        },
-      );
+      const unlistenDaemon = await listen<{
+        event?: unknown;
+        host?: string;
+      }>("daemon://state-changed", (event) => {
+        const payload = event.payload;
+        if (payload.host === "starting") {
+          setHostRunning(true);
+          return;
+        }
+        if (payload.host === "stopped") {
+          setHostRunning(false);
+          return;
+        }
+        if (!payload.event || typeof payload.event !== "object") {
+          return;
+        }
+        const daemonEvent = payload.event as {
+          HostStateChanged?: { running?: boolean };
+          SyncConflict?: unknown;
+        };
+        if (daemonEvent.SyncConflict) {
+          void refreshConflictCount();
+        }
+        if (typeof daemonEvent.HostStateChanged?.running === "boolean") {
+          setHostRunning(daemonEvent.HostStateChanged.running);
+        }
+      });
       unlistens.push(unlistenDaemon);
     };
 
@@ -237,7 +291,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         unlisten();
       }
     };
-  }, []);
+  }, [refreshConflictCount]);
 
   const value = useMemo<AppContextValue>(
     () => ({
@@ -245,6 +299,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
       discoveredHosts,
       activeSessions,
       settings,
+      hostRunning,
+      conflictCount,
       telemetryBySession,
       stderrBySession,
       pendingPairings,
@@ -252,6 +308,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setDiscoveredHosts,
       setActiveSessions,
       setSettings,
+      setConflictCount,
+      refreshConflictCount,
       pushTelemetry: (sessionId, event) => {
         setTelemetryBySession((prev) => {
           const list = prev[sessionId] ?? [];
@@ -282,9 +340,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
       discoveredHosts,
       activeSessions,
       settings,
+      hostRunning,
+      conflictCount,
       telemetryBySession,
       stderrBySession,
       pendingPairings,
+      refreshConflictCount,
     ],
   );
 

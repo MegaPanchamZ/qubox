@@ -55,7 +55,7 @@ function formatDate(unix?: number): string {
 }
 
 export function FileSyncView() {
-  const { knownHosts } = useApp();
+  const { knownHosts, setConflictCount } = useApp();
   const [ignores, setIgnores] = useState<string[]>([]);
   const [newIgnore, setNewIgnore] = useState("");
   const [conflicts, setConflicts] = useState<SyncConflict[]>([]);
@@ -111,6 +111,7 @@ export function FileSyncView() {
       ]);
       setIgnores(ig);
       setConflicts(cf);
+      setConflictCount(cf.length);
       setRules(rl);
       setJobs(mergeJobsWithDrain(jb, drain) as SyncJob[]);
     } catch (e) {
@@ -261,15 +262,19 @@ export function FileSyncView() {
             • <code>dev</code>: Excludes dependency trees and build artifacts (<code>node_modules, target, .venv, __pycache__, *.o</code>).
           </p>
           <ul className="host-list" style={{ marginBottom: 12 }}>
-            {ignores.map((p) => (
-              <li key={p} className="host-card" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                <code>{p}</code>
-                <button className="secondary-button" onClick={() => void removeIgnore(p)} type="button">
-                  <span className="material-symbols-outlined" style={{ fontSize: "1.1rem" }}>delete</span>
-                  Remove
-                </button>
-              </li>
-            ))}
+            {ignores.length === 0 ? (
+              <li className="state">No global ignore patterns.</li>
+            ) : (
+              ignores.map((p) => (
+                <li key={p} className="host-card" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <code>{p}</code>
+                  <button className="secondary-button" onClick={() => void removeIgnore(p)} type="button">
+                    <span className="material-symbols-outlined" style={{ fontSize: "1.1rem" }}>delete</span>
+                    Remove
+                  </button>
+                </li>
+              ))
+            )}
           </ul>
           <div style={{ display: "flex", gap: 8 }}>
             <input
@@ -333,29 +338,30 @@ export function FileSyncView() {
                       </div>
                     </div>
 
-                    <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
-                      <button
-                        className="secondary-button"
-                        onClick={() => void resolve(c.conflictId, "keep-local")}
-                        type="button"
-                      >
-                        Keep local
-                      </button>
-                      <button
-                        className="secondary-button"
-                        onClick={() => void resolve(c.conflictId, "keep-remote")}
-                        type="button"
-                      >
-                        Keep remote
-                      </button>
-                      <button
-                        className="secondary-button"
-                        onClick={() => void resolve(c.conflictId, "keep-both")}
-                        type="button"
-                      >
-                        Keep both
-                      </button>
-                    </div>
+                     <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
+                       <button
+                         className="secondary-button"
+                         onClick={() => void resolve(c.conflictId, "keep-local")}
+                         type="button"
+                       >
+                         Keep local
+                       </button>
+                       <button
+                         className="secondary-button"
+                         onClick={() => void resolve(c.conflictId, "keep-remote")}
+                         type="button"
+                       >
+                         Keep remote
+                       </button>
+                       <button
+                         className="secondary-button"
+                         onClick={() => void resolve(c.conflictId, "keep-both")}
+                         type="button"
+                       >
+                         Keep both
+                       </button>
+                     </div>
+                     <p className="subtitle">Keep both retains the local file and the quarantined remote copy.</p>
                   </li>
                 );
               })}
@@ -366,16 +372,24 @@ export function FileSyncView() {
         <div className="settings-field">
           <span>Watch rules</span>
           <ul className="host-list">
-            {rules.map((r) => (
-              <li key={r.ruleId} className="host-card">
-                <code>{r.ruleId}</code> {r.enabled ? "on" : "off"}
-                <div className="subtitle">
-                  paths={r.paths.join(", ")} · processes={r.processNames.join(", ")} · peers=
-                  {r.peerIds.join(", ")}
-                </div>
-              </li>
-            ))}
+            {rules.length === 0 ? (
+              <li className="state">No directories monitored. Browse to add one.</li>
+            ) : (
+              rules.map((r) => (
+                <li key={r.ruleId} className="host-card">
+                  <code>{r.ruleId}</code> {r.enabled ? "on" : "off"}
+                  <div className="subtitle">
+                    paths={r.paths.join(", ")} · processes={r.processNames.join(", ")} · peers=
+                    {r.peerIds.join(", ")}
+                  </div>
+                  <div className="subtitle">
+                    max file size={formatBytes(r.maxFileBytes)} · ignores={r.ignoreGlobs.join(", ") || "global only"}
+                  </div>
+                </li>
+              ))
+            )}
           </ul>
+          <p className="subtitle">Global ignore rules automatically apply to every watch rule.</p>
           <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
             <input
               className="text-input"
@@ -473,7 +487,7 @@ export function FileSyncView() {
             <ul className="host-list">
               {jobs.map((j) => (
                 <li key={j.jobId} className="host-card">
-                  {j.jobId} · {j.status} → {j.targetPeer} (retries {j.retryCount})
+                  {j.jobId} · <span title={j.status} style={{ display: "inline-block", maxWidth: "18rem", overflow: "hidden", textOverflow: "ellipsis", verticalAlign: "bottom", whiteSpace: "nowrap" }}>{j.status}</span> → {j.targetPeer} (retries {j.retryCount})
                 </li>
               ))}
             </ul>

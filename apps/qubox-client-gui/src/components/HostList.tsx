@@ -3,7 +3,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { useApp } from "./AppContext";
 
 type HostListProps = {
-  onStartSession: (hostId: string) => void;
+  onStartSession: (hostId: string) => Promise<void>;
+  onPairAndStartSession: (hostId: string) => Promise<void>;
 };
 
 type LoadState =
@@ -11,7 +12,7 @@ type LoadState =
   | { kind: "ready" }
   | { kind: "error"; message: string };
 
-export function HostList({ onStartSession }: HostListProps) {
+export function HostList({ onStartSession, onPairAndStartSession }: HostListProps) {
   const {
     knownHosts,
     setKnownHosts,
@@ -22,6 +23,7 @@ export function HostList({ onStartSession }: HostListProps) {
   const [discovering, setDiscovering] = useState(false);
   const [discoveryError, setDiscoveryError] = useState<string | null>(null);
   const [actionMessage, setActionMessage] = useState<string | null>(null);
+  const [connectingHost, setConnectingHost] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -70,12 +72,20 @@ export function HostList({ onStartSession }: HostListProps) {
     };
   }, [knownHosts, discoveredHosts]);
 
-  const handleConnect = async (hostId: string) => {
-    setActionMessage(`Launch requested for ${hostId}`);
+  const handleConnect = async (hostId: string, pair = false) => {
+    setConnectingHost(hostId);
+    setActionMessage(pair ? `Pairing requested for ${hostId}` : `Launch requested for ${hostId}`);
     try {
-      onStartSession(hostId);
+      if (pair) {
+        await onPairAndStartSession(hostId);
+      } else {
+        await onStartSession(hostId);
+      }
+      setActionMessage(pair ? `Paired and launched session for ${hostId}` : `Launch requested for ${hostId}`);
     } catch (error) {
       setActionMessage(String(error));
+    } finally {
+      setConnectingHost(null);
     }
   };
 
@@ -143,6 +153,7 @@ export function HostList({ onStartSession }: HostListProps) {
                 <div className="host-card__actions">
                   <button
                     className="connect-button"
+                    disabled={connectingHost === host.hostPeerId}
                     onClick={() => void handleConnect(host.hostPeerId)}
                     type="button"
                   >
@@ -178,7 +189,8 @@ export function HostList({ onStartSession }: HostListProps) {
                 <div className="host-card__actions">
                   <button
                     className="connect-button"
-                    onClick={() => void handleConnect(host.peerId)}
+                    disabled={connectingHost === host.peerId}
+                    onClick={() => void handleConnect(host.peerId, true)}
                     type="button"
                   >
                     Pair &amp; connect
