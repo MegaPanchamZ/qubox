@@ -109,6 +109,20 @@ pub enum IpcRequest {
         session_id: String,
         reason: String,
     },
+    /// GUI → daemon: operator approved / denied an inbound session
+    /// request that previously arrived via `IpcEvent::SessionConsentRequested`.
+    /// The daemon forwards the decision to the host-agent subprocess over
+    /// the same IPC socket.
+    SendSessionConsent {
+        session_id: String,
+        decision: SessionConsentDecision,
+    },
+    /// Host-agent → daemon: long-poll for any operator consent decisions
+    /// waiting on `session_id`. Returns `Ok(None)` if no decision yet
+    /// (the caller should sleep + retry).
+    GetConsentDecision {
+        session_id: String,
+    },
     // ADR-022 FileSync
     SyncAddRule {
         rule: qubox_sync::SyncRule,
@@ -270,10 +284,23 @@ pub enum IpcResponse {
         outbox: Vec<qubox_sync::OutboxJob>,
         entries: std::collections::HashMap<String, String>,
     },
+    /// Host-agent poll response. `decision == None` means "not yet decided".
+    ConsentDecisionResult {
+        session_id: String,
+        decision: Option<SessionConsentDecision>,
+    },
     Error {
         code: u32,
         message: String,
     },
+}
+
+/// Operator's consent decision for an inbound session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionConsentDecision {
+    Approved,
+    Denied,
 }
 
 /// Server-pushed events for subscribers.
@@ -309,6 +336,15 @@ pub enum IpcEvent {
         role: String,
         state: String,
         reason: String,
+    },
+    /// Emitted by host-agent when an incoming session request needs
+    /// operator consent (toast / tray "Accept" prompt). The GUI
+    /// should show a notification and call `ApproveSessionRequest`
+    /// or `DenySessionRequest` to release the gate.
+    SessionConsentRequested {
+        session_id: String,
+        viewer_account_id: String,
+        viewer_label: Option<String>,
     },
     Error {
         code: u32,
@@ -761,6 +797,30 @@ async fn dispatch_request(
                 ],
                 false,
             );
+            send_response(stream, corr_id, &resp).await
+        }
+        IpcRequest::SendSessionConsent { session_id, decision } => {
+            // Forward the operator's decision to the host-agent subprocess
+            // by stashing it on the manager's pending-consent map. The
+            // host-agent polls (or watches) the map on each incoming
+            // session gate.
+            let resp = match subprocess_manager
+                .set_consent_decision(&session_id, decision)
+                .await
+            {
+                Ok(()) => IpcResponse::Unit,
+                Err(e) => IpcResponse::Error {
+                    code: 404,
+                    message: format!("{e}"),
+                },
+            };
+            send_response(stream, corr_id, &resp).await
+        }
+        IpcRequest::GetConsentDecision { session_id } => {
+            let resp = IpcResponse::ConsentDecisionResult {
+                session_id: session_id.clone(),
+                decision: subprocess_manager.take_consent_decision(&session_id).await,
+            };
             send_response(stream, corr_id, &resp).await
         }
         IpcRequest::Ping => send_response(stream, corr_id, &IpcResponse::Pong).await,

@@ -28,7 +28,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{anyhow, Result};
-use tokio::sync::Mutex;
+use tokio::sync::{watch, Mutex};
 use uuid::Uuid;
 use webrtc::api::media_engine::{MIME_TYPE_H264, MIME_TYPE_OPUS};
 use webrtc::api::APIBuilder;
@@ -67,6 +67,8 @@ pub struct WebRtcSession {
     session_id: Uuid,
     client: PeerDescriptor,
     codec: qubox_proto::VideoCodec,
+    cancel_rx: watch::Receiver<bool>,
+    cancel_tx: watch::Sender<bool>,
 }
 
 impl WebRtcSession {
@@ -201,6 +203,7 @@ impl WebRtcSession {
         pc.add_track(Arc::clone(&audio_track) as Arc<dyn TrackLocal + Send + Sync>)
             .await?;
 
+        let (cancel_tx, cancel_rx) = watch::channel(false);
         let session = Arc::new(Self {
             pc: pc.clone(),
             video_track,
@@ -211,6 +214,8 @@ impl WebRtcSession {
             session_id,
             client,
             codec,
+            cancel_rx: cancel_rx.clone(),
+            cancel_tx,
         });
 
         // Trickle ICE: every time the host gathers a candidate, push it back to
@@ -286,6 +291,14 @@ impl WebRtcSession {
             tracing::info!(label = %label, "browser opened data channel");
 
             let dc_for_msg = dc.clone();
+            let injector = crate::input_inject::UinputInjector::open()
+                .ok()
+                .flatten()
+                .map(Arc::new);
+            if injector.is_none() {
+                tracing::info!("uinput not available; input events will be logged only");
+            }
+            let injector_for_msg = injector.clone();
             dc.on_message(Box::new(move |msg| {
                 let data = msg.data.clone();
                 let parsed = match serde_json::from_slice::<RemoteInputEvent>(&data) {
@@ -295,8 +308,12 @@ impl WebRtcSession {
                         return Box::pin(async {});
                     }
                 };
-                tracing::debug!(?parsed, "received remote input event (dispatch TBD)");
-                // Phase A: just log; Phase B dispatches to enigo / uinput.
+                tracing::trace!(?parsed, "received remote input event");
+                if let Some(inj) = injector_for_msg.as_ref() {
+                    if let Err(err) = inj.dispatch(&parsed) {
+                        tracing::warn!(?err, "uinput dispatch failed");
+                    }
+                }
                 let _ = dc_for_msg;
                 Box::pin(async {})
             }));
@@ -391,6 +408,13 @@ impl WebRtcSession {
 
     pub fn codec(&self) -> qubox_proto::VideoCodec {
         self.codec
+    }
+
+    /// Watch channel the capture pipeline uses to learn the session
+    /// should shut down (signaling disconnect, kill received, etc).
+    /// Producers watch this and stop writing samples.
+    pub fn cancel_rx(&self) -> watch::Receiver<bool> {
+        self.cancel_rx.clone()
     }
 
     pub async fn close(&self) -> Result<()> {

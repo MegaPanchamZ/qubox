@@ -311,6 +311,10 @@ impl ManagedSubprocess {
 pub struct SubprocessManager {
     registry: Arc<Mutex<HashMap<String, Arc<ManagedSubprocess>>>>,
     event_tx: broadcast::Sender<IpcEvent>,
+    /// Per-session consent decisions written by the GUI and consumed by
+    /// the host-agent. Keyed by `session_id` (UUID string). One-shot:
+    /// consumed and removed on the host-agent side after the gate.
+    consent_decisions: Arc<Mutex<HashMap<String, crate::ipc::SessionConsentDecision>>>,
 }
 
 impl SubprocessManager {
@@ -318,7 +322,34 @@ impl SubprocessManager {
         Self {
             registry: Arc::new(Mutex::new(HashMap::new())),
             event_tx,
+            consent_decisions: Arc::new(Mutex::new(HashMap::new())),
         }
+    }
+
+    /// Record the operator's consent decision for a session. The
+    /// host-agent subprocess will pick this up via its own IPC poll
+    /// and release / kill the pending gate accordingly.
+    pub async fn set_consent_decision(
+        &self,
+        session_id: &str,
+        decision: crate::ipc::SessionConsentDecision,
+    ) -> Result<(), String> {
+        let mut map = self.consent_decisions.lock().await;
+        if !self.registry.lock().await.contains_key("host") {
+            return Err(format!("no host-agent running; can't gate {session_id}"));
+        }
+        map.insert(session_id.to_string(), decision);
+        Ok(())
+    }
+
+    /// Consume (read + remove) the pending consent decision for a
+    /// session. Called by the host-agent's IPC reader.
+    pub async fn take_consent_decision(
+        &self,
+        session_id: &str,
+    ) -> Option<crate::ipc::SessionConsentDecision> {
+        let mut map = self.consent_decisions.lock().await;
+        map.remove(session_id)
     }
 
     /// Start a subprocess with the given label.

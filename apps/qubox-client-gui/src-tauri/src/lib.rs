@@ -649,6 +649,32 @@ async fn reject_pairing(host_id: String) -> Result<(), String> {
     Ok(())
 }
 
+/// Operator approves / denies an inbound session via the daemon IPC.
+#[tauri::command]
+async fn set_session_consent(
+    session_id: String,
+    approved: bool,
+) -> Result<(), String> {
+    use qubox_daemon::ipc::SessionConsentDecision;
+    let config = build_daemon_config();
+    let mut client = IpcClient::connect(&config)
+        .await
+        .map_err(|error| format!("failed to connect to daemon: {error}"))?;
+    let decision = if approved {
+        SessionConsentDecision::Approved
+    } else {
+        SessionConsentDecision::Denied
+    };
+    let _resp: IpcResponse = client
+        .call(&IpcRequest::SendSessionConsent {
+            session_id,
+            decision,
+        })
+        .await
+        .map_err(|error| format!("daemon call failed: {error}"))?;
+    Ok(())
+}
+
 fn host_pairing_base_url() -> String {
     // Port file written by host-agent pairing_ui
     if let Some(dir) = directories::ProjectDirs::from("app", "Qubox", "qubox") {
@@ -1909,6 +1935,7 @@ pub fn run() {
             notify_user,
             accept_pairing,
             reject_pairing,
+            set_session_consent,
             list_host_pending_pairings,
             host_pairing_decide,
             get_settings,

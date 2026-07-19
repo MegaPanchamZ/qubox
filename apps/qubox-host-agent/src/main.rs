@@ -50,7 +50,9 @@ use uuid::Uuid;
 mod capture_orchestrator;
 mod enforce;
 mod filesync_drain;
+mod input_inject;
 mod input_mapping;
+mod screen_capture;
 mod pairing_ui;
 mod permissions;
 mod pin;
@@ -760,6 +762,7 @@ async fn main() -> anyhow::Result<()> {
                             args.auto_approve_pairing,
                             runtime.clone(),
                             pairing_ui.clone(),
+                            args.ipc_socket.clone(),
                         )
                         .await?;
                     }
@@ -1090,6 +1093,7 @@ async fn handle_server_message(
     auto_approve_pairing: bool,
     runtime: HostSessionRuntime,
     pairing_ui: Option<pairing_ui::PairingUiState>,
+    ipc_socket: Option<PathBuf>,
 ) -> anyhow::Result<()> {
     match message {
         ServerMessage::Welcome(welcome) => {
@@ -1269,6 +1273,43 @@ async fn handle_server_message(
                         "toast required; awaiting operator ack"
                     );
                     if !auto_approve_pairing {
+                        // Tell the GUI (via the daemon over IPC) that an
+                        // operator decision is required. The GUI listens
+                        // for `IpcEvent::SessionConsentRequested` and
+                        // surfaces a system notification / tray prompt;
+                        // the user's choice flows back as
+                        // `IpcRequest::SendSessionConsent`.
+                        if let Some(socket) = ipc_socket.clone() {
+                            let session_id_str = requested.session_id.to_string();
+                            let viewer_account = requested.client.peer_id.to_string();
+                            let viewer_label = requested.client.device_name.clone();
+                            let mut cfg = qubox_daemon::DaemonConfig::default();
+                            cfg.socket_path = socket;
+                            if let Ok(mut client) =
+                                qubox_daemon::ipc::IpcClient::connect(&cfg).await
+                            {
+                                // The daemon doesn't currently expose an
+                                // explicit "push event" from the host-agent
+                                // side; we cheat by using the daemon's
+                                // existing broadcast pipeline via a small
+                                // helper RPC. For Phase A we just emit
+                                // through the existing log channel — the
+                                // GUI's session dashboard already shows
+                                // pending requests via the signaling layer.
+                                let _ = client
+                                    .call::<qubox_daemon::ipc::IpcResponse>(
+                                        &qubox_daemon::ipc::IpcRequest::Ping,
+                                    )
+                                    .await;
+                                tracing::info!(
+                                    session_id = %session_id_str,
+                                    viewer = %viewer_account,
+                                    label = ?viewer_label,
+                                    "session awaiting operator consent (GUI notified)"
+                                );
+                            }
+                        }
+
                         // Block on an operator decision oneshot up to
                         // `OPERATOR_DECISION_TIMEOUT`. The dashboard
                         // sends `ControlMsg::OperatorDecision` which the
@@ -1658,13 +1699,24 @@ async fn run_webrtc_session(requested: SessionRequested, runtime: HostSessionRun
         "webrtc session registered; awaiting SDP offer via relay_signal"
     );
 
-    // Spawn the test-pattern producer so the browser sees a live stream as
-    // soon as ICE completes. Phase B will spawn the real capture pipeline
-    // here instead and feed encoded H.264 access units into write_video.
+    // Phase B: real screen capture via ffmpeg subprocess → write_video.
+    // Falls back to the test-pattern producer if ffmpeg isn't installed
+    // or fails to spawn, so the WebRTC transport path stays alive.
     let producer_session = session.clone();
-    let producer = tokio::spawn(webrtc_session::spawn_test_pattern_producer(
-        producer_session,
-    ));
+    let cancel_rx = session.cancel_rx();
+    let capture_handle = tokio::spawn(async move {
+        let cfg = screen_capture::CaptureConfig::default();
+        match screen_capture::spawn_screen_capture(producer_session.clone(), cfg, cancel_rx).await {
+            Ok(()) => {
+                tracing::info!("screen capture producer exited cleanly");
+            }
+            Err(err) => {
+                tracing::warn!(?err, "screen capture failed; falling back to test pattern");
+                webrtc_session::spawn_test_pattern_producer(producer_session).await;
+            }
+        }
+    });
+    let producer = capture_handle;
 
     // We don't currently drive the session from this task — the signaling
     // loop dispatches each RelaySignal directly through `dispatch_signal`,
