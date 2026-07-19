@@ -29,7 +29,7 @@ qubox-webtransport = { path = "../qubox-webtransport", optional = true }
 
 [features]
 webtransport = ["dep:qubox-webtransport"]
-default = []
+default = ["webtransport"]
 
 [dev-dependencies]
 tower.workspace = true

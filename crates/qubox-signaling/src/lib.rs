@@ -2101,9 +2101,10 @@ async fn handle_socket(socket: WebSocket, state: SignalingState) {
                                 %error,
                                 "rejecting SignedHello: enrollment check failed"
                             );
-                            let _ = outbound_tx.send(ServerMessage::Error(
-                                ErrorMessage::new("not_enrolled", error.to_string()),
-                            ));
+                            let _ = outbound_tx.send(ServerMessage::Error(ErrorMessage::new(
+                                "not_enrolled",
+                                error.to_string(),
+                            )));
                             break;
                         }
                     }
@@ -2244,6 +2245,7 @@ async fn handle_socket(socket: WebSocket, state: SignalingState) {
                             caps: viewer.caps.clone(),
                             sub: viewer.sub.clone(),
                             pin_proof: None,
+                            selected_display_id: viewer.selected_display_id,
                         };
                         Some((bundle_request.request, info))
                     }

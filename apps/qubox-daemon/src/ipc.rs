@@ -799,7 +799,10 @@ async fn dispatch_request(
             );
             send_response(stream, corr_id, &resp).await
         }
-        IpcRequest::SendSessionConsent { session_id, decision } => {
+        IpcRequest::SendSessionConsent {
+            session_id,
+            decision,
+        } => {
             // Forward the operator's decision to the host-agent subprocess
             // by stashing it on the manager's pending-consent map. The
             // host-agent polls (or watches) the map on each incoming

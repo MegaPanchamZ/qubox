@@ -17,6 +17,7 @@ qubox-pen = { path = "../../crates/qubox-pen" }
 qubox-platform = { path = "../../crates/qubox-platform" }
 qubox-proto = { path = "../../crates/qubox-proto" }
 qubox-signaling = { path = "../../crates/qubox-signaling" }
+qubox-webtransport = { path = "../../crates/qubox-webtransport", optional = true }
 qubox-transport = { path = "../../crates/qubox-transport" }
 ed25519-dalek.workspace = true
 qubox-sync = { path = "../../crates/qubox-sync" }
@@ -43,6 +44,9 @@ tracing-subscriber.workspace = true
 uuid.workspace = true
 rustls = { workspace = true }
 axum.workspace = true
+base64 = { workspace = true }
+wtransport = { version = "0.7", optional = true }
+reed-solomon-erasure = { version = "6", optional = true }
 # Browser-side sessions arrive over WebRTC; the host accepts an SDP offer
 # from the browser, returns an SDP answer, and exchanges ICE candidates via
 # the same RelaySignal channel used for NativeQuic tickets. Video/audio
@@ -58,11 +62,12 @@ notify-debouncer-mini = { version = "0.5", optional = true }
 uinput = "0.1"
 
 [features]
-default = ["mic-apm"]
+default = ["mic-apm", "webtransport"]
 # Echo cancel / AGC via webrtc-audio-processing (not default on Windows CI).
 mic-apm = ["qubox-mic/webrtc-apm"]
 rl-abr = ["qubox-rl-policy"]
 file-sync = ["dep:sysinfo", "dep:notify", "dep:notify-debouncer-mini"]
+webtransport = ["dep:qubox-webtransport", "qubox-signaling/webtransport", "dep:wtransport", "dep:reed-solomon-erasure"]
 
 # Pin windows-sys for MSVC builds: 0.61.x + rustc 1.97 can trip
 # STATUS_STACK_BUFFER_OVERRUN (0xc0000409) on the WDK feature matrix.

@@ -241,6 +241,9 @@ pub struct HostVideoPipelineConfig {
     /// display for HDR10.
     #[serde(default)]
     pub hdr_static_metadata: Option<qubox_proto::HdrStaticMetadata>,
+    /// Chroma subsampling format. Defaults to YUV 4:2:0.
+    #[serde(default)]
+    pub chroma_format: Option<ChromaFormat>,
 }
 
 /// Codec-agnostic host pipeline configuration. New code should prefer this over
@@ -278,6 +281,9 @@ pub struct VideoPipelineConfig {
     /// display for HDR10.
     #[serde(default)]
     pub hdr_static_metadata: Option<qubox_proto::HdrStaticMetadata>,
+    /// Chroma subsampling format. Defaults to YUV 4:2:0.
+    #[serde(default)]
+    pub chroma_format: Option<ChromaFormat>,
 }
 
 impl VideoPipelineConfig {
@@ -326,6 +332,7 @@ impl HostVideoPipelineConfig {
             color_space: None,
             bit_depth: default_eight_bits(),
             hdr_static_metadata: None,
+            chroma_format: None,
         }
     }
 
@@ -351,6 +358,7 @@ impl HostVideoPipelineConfig {
             color_space: None,
             bit_depth: default_eight_bits(),
             hdr_static_metadata: None,
+            chroma_format: None,
         }
     }
 
@@ -376,6 +384,7 @@ impl HostVideoPipelineConfig {
             color_space: None,
             bit_depth: default_eight_bits(),
             hdr_static_metadata: None,
+            chroma_format: None,
         }
     }
 
@@ -403,6 +412,7 @@ impl HostVideoPipelineConfig {
             color_space: None,
             bit_depth: default_eight_bits(),
             hdr_static_metadata: None,
+            chroma_format: None,
         }
     }
 
@@ -428,6 +438,7 @@ impl HostVideoPipelineConfig {
             color_space: None,
             bit_depth: default_eight_bits(),
             hdr_static_metadata: None,
+            chroma_format: None,
         }
     }
 }
@@ -564,6 +575,19 @@ pub struct EncodedVideoAccessUnit {
 
 fn default_eight_bits() -> u8 {
     8
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum ChromaFormat {
+    Yuv420,
+    Yuv444,
+}
+
+impl Default for ChromaFormat {
+    fn default() -> Self {
+        Self::Yuv420
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -1477,10 +1501,12 @@ fn encoder_args_for(config: &VideoPipelineConfig) -> Vec<String> {
         .map(|c| c != qubox_proto::ColorSpace::Bt709)
         .unwrap_or(false)
         || config.bit_depth == 10;
-    let pix_fmt = if hdr_requested {
-        "yuv420p10le".to_string()
-    } else {
-        "yuv420p".to_string()
+    let chroma = config.chroma_format.unwrap_or(ChromaFormat::Yuv420);
+    let pix_fmt = match (chroma, hdr_requested) {
+        (ChromaFormat::Yuv420, false) => "yuv420p".to_string(),
+        (ChromaFormat::Yuv420, true) => "yuv420p10le".to_string(),
+        (ChromaFormat::Yuv444, false) => "yuv444p".to_string(),
+        (ChromaFormat::Yuv444, true) => "yuv444p10le".to_string(),
     };
 
     let mut args = vec![
@@ -3139,6 +3165,7 @@ mod tests {
             color_space: Some(qubox_proto::ColorSpace::Bt2100Pq),
             bit_depth: 10,
             hdr_static_metadata: Some(hdr_metadata_fixture()),
+            chroma_format: None,
         }
     }
 
@@ -3206,6 +3233,7 @@ mod tests {
             color_space: None,
             bit_depth: 8,
             hdr_static_metadata: None,
+            chroma_format: None,
         };
         let args = encoder_args_for(&config);
         let pix_fmt = args
@@ -3215,6 +3243,51 @@ mod tests {
             .expect("-pix_fmt must be present");
         assert_eq!(pix_fmt, "yuv420p");
         assert!(!args.iter().any(|a| a == "-x265-params"));
+    }
+
+    #[test]
+    fn encoder_args_for_picks_yuv444p_when_sdr_high_fidelity() {
+        let config = VideoPipelineConfig {
+            capture: CaptureSourceConfig::LinuxPipeWire {
+                node: "node_42".into(),
+            },
+            encoder_kind: VideoEncoderKind::H265,
+            backend: EncoderBackend::Software,
+            width: 3840,
+            height: 2160,
+            framerate: 60,
+            bitrate_kbps: 25_000,
+            min_bitrate_kbps: None,
+            buffer_size_kbits: None,
+            keyframe_interval_frames: 240,
+            scale_mode: qubox_proto::ScaleMode::Fit,
+            capture_region: None,
+            display_index: None,
+            color_space: None,
+            bit_depth: 8,
+            hdr_static_metadata: None,
+            chroma_format: Some(ChromaFormat::Yuv444),
+        };
+        let args = encoder_args_for(&config);
+        let pix_fmt = args
+            .iter()
+            .skip_while(|a| **a != "-pix_fmt")
+            .nth(1)
+            .expect("-pix_fmt must be present");
+        assert_eq!(pix_fmt, "yuv444p");
+    }
+
+    #[test]
+    fn encoder_args_for_picks_yuv444p10le_when_hdr_high_fidelity() {
+        let mut config = hdr_pipeline(VideoEncoderKind::H265);
+        config.chroma_format = Some(ChromaFormat::Yuv444);
+        let args = encoder_args_for(&config);
+        let pix_fmt = args
+            .iter()
+            .skip_while(|a| **a != "-pix_fmt")
+            .nth(1)
+            .expect("-pix_fmt must be present");
+        assert_eq!(pix_fmt, "yuv444p10le");
     }
 
     #[test]
@@ -3246,6 +3319,7 @@ mod tests {
             color_space: None,
             bit_depth: default_eight_bits(),
             hdr_static_metadata: None,
+            chroma_format: None,
         };
         assert_eq!(config.bit_depth, 8);
         assert!(config.color_space.is_none());
@@ -3295,6 +3369,7 @@ mod tests {
             color_space: None,
             bit_depth: 8,
             hdr_static_metadata: None,
+            chroma_format: None,
         };
 
         let err = plan_ffmpeg_macos_avfoundation_h264(&config).unwrap_err();
@@ -3344,6 +3419,7 @@ mod tests {
             color_space: Some(qubox_proto::ColorSpace::Bt2020),
             bit_depth: 10,
             hdr_static_metadata: None,
+            chroma_format: None,
         };
 
         let plan = plan_ffmpeg_windows_dxgi_h264(&config).unwrap();

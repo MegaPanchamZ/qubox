@@ -52,7 +52,6 @@ mod enforce;
 mod filesync_drain;
 mod input_inject;
 mod input_mapping;
-mod screen_capture;
 mod pairing_ui;
 mod permissions;
 mod pin;
@@ -60,6 +59,7 @@ mod privacy;
 mod rate_control;
 mod rate_feedback;
 mod recovery;
+mod screen_capture;
 mod toast_policy;
 mod webrtc_session;
 
@@ -363,6 +363,10 @@ struct HostSessionRuntime {
     host_device_id: String,
     enforcement: enforce::EnforcementState,
     webrtc_sessions: webrtc_session::SessionRegistry,
+    /// Displays enumerated at startup (xrandr on Linux; stub elsewhere).
+    /// `run_webrtc_session` looks up the viewer's `selected_display_id`
+    /// here to scope ffmpeg to a single output.
+    displays: Vec<qubox_proto::DisplayDescriptor>,
 }
 
 struct RemoteInputInjector {
@@ -597,8 +601,7 @@ async fn main() -> anyhow::Result<()> {
     // Build enforcement state up-front so the pairing-UI session-decision
     // dispatcher (loopback HTTP) can deliver operator consent decisions
     // to the toast gate without needing the full runtime yet.
-    let enforcement =
-        enforce::EnforcementState::from_env(&descriptor.peer_id.to_string());
+    let enforcement = enforce::EnforcementState::from_env(&descriptor.peer_id.to_string());
     let idle_timeout = Duration::from_secs(args.idle_timeout_secs);
 
     tracing::info!(
@@ -679,9 +682,7 @@ async fn main() -> anyhow::Result<()> {
         let ui_for_sessions = ui.clone();
         tokio::spawn(async move {
             while let Some((session_id, approved)) = session_rx.recv().await {
-                if let Some(pending) =
-                    enforcement_for_sessions.take_pending_decision(session_id)
-                {
+                if let Some(pending) = enforcement_for_sessions.take_pending_decision(session_id) {
                     let _ = pending.deliver.send(approved);
                     ui_for_sessions.remove_session(session_id).await;
                     tracing::info!(%session_id, approved, "session operator decision delivered");
@@ -732,6 +733,7 @@ async fn main() -> anyhow::Result<()> {
         host_device_id: descriptor.peer_id.to_string(),
         enforcement: enforcement.clone(),
         webrtc_sessions: Arc::new(Mutex::new(std::collections::HashMap::new())),
+        displays: descriptor.capabilities.displays.clone(),
     };
 
     send_client_message(
@@ -1199,6 +1201,10 @@ async fn handle_server_message(
             // message carrying the viewer's PIN proof. The bundle itself
             // is verified locally via `enforce::verify_bundle_locally`.
             let policy = runtime.pin_store.snapshot();
+            // `selected_display_id` is set from `SessionBundleInfo` when
+            // the PIN gate opens (or stays `None` if no PIN is configured,
+            // in which case the host picks its default).
+            let mut selected_display_id: Option<u32> = None;
             if policy.requires_pin() {
                 tracing::info!(
                     session_id = %requested.session_id,
@@ -1265,6 +1271,7 @@ async fn handle_server_message(
                     return Ok(());
                 }
 
+                selected_display_id = bundle_msg.selected_display_id;
                 tracing::info!(
                     session_id = %requested.session_id,
                     "PIN gate satisfied"
@@ -1418,7 +1425,29 @@ async fn handle_server_message(
             if requested.transport == TransportKind::NativeQuic {
                 tokio::spawn(run_native_quic_session(*requested, runtime));
             } else if requested.transport == TransportKind::WebRtc {
-                tokio::spawn(run_webrtc_session(*requested, runtime));
+                tracing::info!(
+                    session_id = %requested.session_id,
+                    ?selected_display_id,
+                    "webrtc session starting"
+                );
+                tokio::spawn(run_webrtc_session(*requested, runtime, selected_display_id));
+            } else if requested.transport == TransportKind::WebTransport {
+                tracing::info!(
+                    session_id = %requested.session_id,
+                    ?selected_display_id,
+                    "webtransport session starting"
+                );
+                #[cfg(feature = "webtransport")]
+                tokio::spawn(run_webtransport_session(
+                    *requested,
+                    runtime,
+                    selected_display_id,
+                ));
+                #[cfg(not(feature = "webtransport"))]
+                tracing::warn!(
+                    session_id = %requested.session_id,
+                    "WebTransport requested but not enabled in host-agent features"
+                );
             } else if requested.transport == TransportKind::RelayQuic {
                 tracing::warn!(
                     session_id = %requested.session_id,
@@ -1667,6 +1696,311 @@ async fn run_native_quic_session(requested: SessionRequested, runtime: HostSessi
     }
 }
 
+#[cfg(feature = "webtransport")]
+#[derive(Serialize)]
+struct WebTransportTicketJson {
+    url: String,
+    hashes: Vec<String>,
+}
+
+#[cfg(feature = "webtransport")]
+async fn run_webtransport_session(
+    requested: SessionRequested,
+    runtime: HostSessionRuntime,
+    selected_display_id: Option<u32>,
+) {
+    let session_id = requested.session_id;
+    if let Err(e) = run_webtransport_session_inner(requested, runtime, selected_display_id).await {
+        tracing::error!(%session_id, "WebTransport session error: {:?}", e);
+    }
+}
+
+#[cfg(feature = "webtransport")]
+async fn run_webtransport_session_inner(
+    requested: SessionRequested,
+    runtime: HostSessionRuntime,
+    _selected_display_id: Option<u32>,
+) -> anyhow::Result<()> {
+    use qubox_webtransport::WebTransportConfig;
+    use std::net::SocketAddr;
+    use wtransport::Endpoint;
+    use wtransport::ServerConfig;
+
+    let bind_ip = runtime.native_quic_bind.ip();
+    let bind_addr = SocketAddr::new(bind_ip, 0); // ephemeral port
+    let config = WebTransportConfig::new(bind_addr)?;
+    let wt_config = ServerConfig::builder()
+        .with_bind_address(config.listen_addr)
+        .with_identity(config.identity.clone_identity())
+        .build();
+    let endpoint = Endpoint::server(wt_config)?;
+    let local_port = endpoint.local_addr()?.port();
+
+    let advertise_ip = runtime.native_quic_advertise_ip.unwrap_or_else(|| {
+        if bind_ip.is_unspecified() {
+            std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)
+        } else {
+            bind_ip
+        }
+    });
+    let hash_hex = hex::encode(config.cert_hash);
+    let ticket_json = WebTransportTicketJson {
+        url: format!(
+            "https://{}:{}/v1/session/{}",
+            advertise_ip, local_port, requested.session_id
+        ),
+        hashes: vec![hash_hex],
+    };
+    let ticket_bytes = serde_json::to_vec(&ticket_json)?;
+    use base64::Engine;
+    let ticket_b64 = base64::engine::general_purpose::STANDARD.encode(&ticket_bytes);
+
+    // Relay the ticket to signaling
+    send_client_message(
+        &runtime.signaling_writer,
+        &ClientMessage::RelaySignal(RelaySignal {
+            session_id: requested.session_id,
+            from_peer_id: runtime.self_peer_id,
+            to_peer_id: requested.client.peer_id,
+            signal: SessionSignal::WebTransportTicket { ticket_b64 },
+        }),
+    )
+    .await?;
+
+    tracing::info!(session_id = %requested.session_id, "Waiting for WebTransport client connection...");
+    let incoming = endpoint.accept().await;
+    let request = incoming.await?;
+    let path = request.path().to_string();
+    tracing::info!(session_id = %requested.session_id, "WebTransport path requested: {}", path);
+
+    // Accept the connection
+    let connection = request.accept().await?;
+    tracing::info!(session_id = %requested.session_id, "WebTransport connection established!");
+
+    // Accept bidirectional control/input stream
+    let mut bi_stream = connection.accept_bi().await?;
+    tracing::info!(session_id = %requested.session_id, "Accepted WebTransport bidirectional control stream");
+
+    // Setup input injector
+    let readiness = probe_default_host_pipeline();
+    let media_config = media_config_from_runtime(&runtime, &readiness)?;
+    let video_config = VideoStreamParams {
+        codec: media_config.codec,
+        width: media_config.width,
+        height: media_config.height,
+        framerate: media_config.framerate,
+    };
+    let input_tx = spawn_remote_input_worker(requested.session_id, video_config)?;
+
+    // Spawn input parser task
+    let input_recv = bi_stream.1; // RecvStream part
+    tokio::spawn(async move {
+        if let Err(e) = run_webtransport_input_loop(input_recv, input_tx).await {
+            tracing::warn!("WebTransport input loop exited: {:?}", e);
+        }
+    });
+
+    // Start video pipeline
+    let plan = plan_ffmpeg_h264(&media_config)?;
+    let mut pipeline = spawn_ffmpeg_pipeline(&plan)?;
+    let mut framer = H264AnnexBStreamFramer::new(media_config.framerate)?;
+    let mut scratch = vec![0_u8; 64 * 1024];
+    let mut _frames = 0_u64;
+
+    loop {
+        match read_h264_access_units(pipeline.stdout_mut(), &mut framer, &mut scratch)? {
+            MediaPipelineRead::AccessUnits(access_units)
+            | MediaPipelineRead::EndOfStream(access_units) => {
+                for access_unit in access_units {
+                    encode_and_send_fec_datagrams(
+                        &connection,
+                        access_unit.frame_id as u32,
+                        &access_unit.bytes,
+                        10,
+                        2,
+                    )?;
+                    _frames += 1;
+                }
+            }
+        }
+    }
+}
+
+#[cfg(feature = "webtransport")]
+async fn run_webtransport_input_loop(
+    mut recv: wtransport::RecvStream,
+    input_tx: tokio_mpsc::UnboundedSender<RemoteInputEvent>,
+) -> anyhow::Result<()> {
+    use tokio::io::AsyncReadExt;
+    loop {
+        let mut op = [0u8; 1];
+        recv.read_exact(&mut op).await?;
+        match op[0] {
+            0x01 => {
+                let mut data = [0u8; 8];
+                recv.read_exact(&mut data).await?;
+                let dx = i32::from_le_bytes([data[0], data[1], data[2], data[3]]);
+                let dy = i32::from_le_bytes([data[4], data[5], data[6], data[7]]);
+                let _ = input_tx.send(RemoteInputEvent::RelativeMouseMove { dx, dy });
+            }
+            0x02 => {
+                let mut data = [0u8; 5];
+                recv.read_exact(&mut data).await?;
+                let hash = u32::from_le_bytes([data[0], data[1], data[2], data[3]]);
+                let is_down = data[4] != 0;
+                if let Some(key) = hash_to_key_string(hash) {
+                    let _ = input_tx.send(RemoteInputEvent::Keyboard {
+                        key,
+                        pressed: is_down,
+                    });
+                }
+            }
+            0x03 => {
+                let mut data = [0u8; 16];
+                recv.read_exact(&mut data).await?;
+                let state = qubox_proto::WireGamepadState {
+                    gamepad_id: data[0],
+                    flags: data[1],
+                    buttons_lo: data[2],
+                    buttons_hi: data[3],
+                    lt: data[4],
+                    rt: data[5],
+                    lx: i16::from_le_bytes([data[6], data[7]]),
+                    ly: i16::from_le_bytes([data[8], data[9]]),
+                    rx: i16::from_le_bytes([data[10], data[11]]),
+                    ry: i16::from_le_bytes([data[12], data[13]]),
+                    _pad: [data[14], data[15]],
+                };
+                let _ = input_tx.send(RemoteInputEvent::Gamepad { state });
+            }
+            other => {
+                tracing::warn!("unknown WebTransport input opcode: {other}");
+            }
+        }
+    }
+}
+
+#[cfg(feature = "webtransport")]
+fn encode_and_send_fec_datagrams(
+    connection: &wtransport::Connection,
+    frame_id: u32,
+    payload: &[u8],
+    data_shards: usize,
+    parity_shards: usize,
+) -> anyhow::Result<()> {
+    use reed_solomon_erasure::galois_8::ReedSolomon;
+
+    let rs = ReedSolomon::new(data_shards, parity_shards)
+        .map_err(|e| anyhow::anyhow!("failed to create ReedSolomon encoder: {:?}", e))?;
+
+    let orig_len = payload.len();
+    if orig_len == 0 {
+        return Ok(());
+    }
+
+    let shard_len = (orig_len + data_shards - 1) / data_shards;
+    let mut shards = vec![vec![0u8; shard_len]; data_shards + parity_shards];
+
+    for i in 0..data_shards {
+        let start = i * shard_len;
+        let end = (start + shard_len).min(orig_len);
+        if start < orig_len {
+            shards[i][..(end - start)].copy_from_slice(&payload[start..end]);
+        }
+    }
+
+    rs.encode(&mut shards)
+        .map_err(|e| anyhow::anyhow!("ReedSolomon encoding failed: {:?}", e))?;
+
+    let total_shards = (data_shards + parity_shards) as u8;
+
+    for (i, shard) in shards.iter().enumerate() {
+        let mut packet = Vec::with_capacity(6 + shard_len);
+        packet.extend_from_slice(&frame_id.to_le_bytes());
+        packet.push(i as u8);
+        packet.push(total_shards);
+        packet.extend_from_slice(shard);
+
+        let _ = connection.send_datagram(&packet);
+    }
+
+    Ok(())
+}
+
+fn key_hash(name: &str) -> u32 {
+    let mut hash = 0i32;
+    for byte in name.bytes() {
+        hash = (hash << 5).wrapping_sub(hash).wrapping_add(byte as i32);
+    }
+    hash as u32
+}
+
+fn hash_to_key_string(hash: u32) -> Option<String> {
+    for c in b'A'..=b'Z' {
+        let name = format!("Key{}", c as char);
+        if key_hash(&name) == hash {
+            return Some(name);
+        }
+    }
+    for c in b'0'..=b'9' {
+        let name = format!("Digit{}", c as char);
+        if key_hash(&name) == hash {
+            return Some(name);
+        }
+    }
+    for f in 1..=12 {
+        let name = format!("F{f}");
+        if key_hash(&name) == hash {
+            return Some(name);
+        }
+    }
+    let specials = [
+        "ArrowLeft",
+        "ArrowRight",
+        "ArrowUp",
+        "ArrowDown",
+        "Enter",
+        "Escape",
+        "Backspace",
+        "Tab",
+        "Space",
+        "Delete",
+        "Insert",
+        "Home",
+        "End",
+        "PageUp",
+        "PageDown",
+        "ShiftLeft",
+        "ShiftRight",
+        "ControlLeft",
+        "ControlRight",
+        "AltLeft",
+        "AltRight",
+        "MetaLeft",
+        "MetaRight",
+        "CapsLock",
+        "NumLock",
+        "ScrollLock",
+        "Minus",
+        "Equal",
+        "BracketLeft",
+        "BracketRight",
+        "Backslash",
+        "Semicolon",
+        "Quote",
+        "Backquote",
+        "Comma",
+        "Period",
+        "Slash",
+    ];
+    for name in specials {
+        if key_hash(name) == hash {
+            return Some(name.to_string());
+        }
+    }
+    None
+}
+
 /// WebRTC session lifecycle, browser-originated.
 ///
 /// 1. Build a `WebRtcSession` with the negotiated ICE servers + codecs.
@@ -1677,7 +2011,11 @@ async fn run_native_quic_session(requested: SessionRequested, runtime: HostSessi
 ///    real ffmpeg/PipeWire capture pipeline.
 /// 4. Wait until either the PeerConnection fails or the host's signaling
 ///    connection drops; deregister and close.
-async fn run_webrtc_session(requested: SessionRequested, runtime: HostSessionRuntime) {
+async fn run_webrtc_session(
+    requested: SessionRequested,
+    runtime: HostSessionRuntime,
+    selected_display_id: Option<u32>,
+) {
     if requested.codec != VideoCodec::H264 {
         tracing::warn!(
             session_id = %requested.session_id,
@@ -1739,7 +2077,46 @@ async fn run_webrtc_session(requested: SessionRequested, runtime: HostSessionRun
     let producer_session = session.clone();
     let cancel_rx = session.cancel_rx();
     let capture_handle = tokio::spawn(async move {
-        let cfg = screen_capture::CaptureConfig::default();
+        // Pick a display: the viewer's `selected_display_id`, else the
+        // primary reported via X11RandR / DXGI, else the first active
+        // display, else the hardcoded 1280×720 fallback in
+        // `CaptureConfig::default()`. Without this fallback chain the
+        // viewer sees only 1280×720 of their actual desktop even when
+        // their primary monitor is 1920×1080 / 2560×1440.
+        let cfg = match runtime
+            .displays
+            .iter()
+            .find(|d| Some(d.id) == selected_display_id)
+            .cloned()
+            .or_else(|| {
+                runtime
+                    .displays
+                    .iter()
+                    .find(|d| d.primary && d.active)
+                    .cloned()
+            })
+            .or_else(|| runtime.displays.iter().find(|d| d.active).cloned())
+        {
+            Some(picked) => {
+                if selected_display_id.is_some_and(|id| id != picked.id) {
+                    tracing::warn!(
+                        ?selected_display_id,
+                        actual = picked.id,
+                        "viewer requested an unknown display; capturing primary"
+                    );
+                }
+                screen_capture::CaptureConfig::for_display(picked)
+            }
+            None => {
+                if selected_display_id.is_some() {
+                    tracing::warn!(
+                        ?selected_display_id,
+                        "viewer requested a display but host has none; capturing 1280×720 fallback"
+                    );
+                }
+                screen_capture::CaptureConfig::default()
+            }
+        };
         match screen_capture::spawn_screen_capture(producer_session.clone(), cfg, cancel_rx).await {
             Ok(()) => {
                 tracing::info!("screen capture producer exited cleanly");

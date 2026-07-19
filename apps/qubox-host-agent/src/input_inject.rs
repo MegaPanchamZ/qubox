@@ -252,7 +252,9 @@ impl UinputInjector {
             return Ok(None);
         }
         let mut opts = OpenOptions::new();
-        opts.read(true).write(true).custom_flags(libc_like::O_NONBLOCK);
+        opts.read(true)
+            .write(true)
+            .custom_flags(libc_like::O_NONBLOCK);
         let file = opts
             .open(path)
             .with_context(|| format!("open {}", path.display()))?;
@@ -270,16 +272,19 @@ impl UinputInjector {
         for &ev_type in &[EV_KEY, EV_REL, EV_ABS, EV_MSC] {
             me_set_evbit(&mut f, ev_type)?;
         }
-        // UI_SET_KEYBIT — keys we may emit (full ASCII + a few extras).
+        // UI_SET_KEYBIT — keys we may emit (full ASCII + a few extras + gamepad buttons).
         for code in 1u16..=127 {
+            me_set_keybit(&mut f, code)?;
+        }
+        for code in 0x130u16..=0x13fu16 {
             me_set_keybit(&mut f, code)?;
         }
         // UI_SET_RELBIT — relative axes.
         for &rel in &[REL_X, REL_Y, REL_WHEEL, REL_HWHEEL] {
             me_set_relbit(&mut f, rel)?;
         }
-        // UI_SET_ABSBIT — touch / pen absolute axes.
-        for &abs in &[ABS_X, ABS_Y] {
+        // UI_SET_ABSBIT — touch / pen / gamepad absolute axes.
+        for &abs in &[ABS_X, ABS_Y, 0x02, 0x03, 0x04, 0x05, 0x10, 0x11] {
             me_set_absbit(&mut f, abs)?;
         }
         // UI_SET_MSCBIT
@@ -352,8 +357,155 @@ impl UinputInjector {
                 write_event(&mut f, EV_KEY, code, if *pressed { 1 } else { 0 })?;
                 write_event(&mut f, EV_SYN, SYN_REPORT, 0)?;
             }
-            // Gamepad / HoverDisplay / Pen are not injected by host — they're
-            // either client→server telemetry (gamepad) or host-emitted (hover).
+            RemoteInputEvent::Gamepad { state } => {
+                let mut f = self.file.lock().unwrap();
+
+                // 1. Buttons (lo)
+                write_event(
+                    &mut f,
+                    EV_KEY,
+                    0x130,
+                    if (state.buttons_lo & (1 << 0)) != 0 {
+                        1
+                    } else {
+                        0
+                    },
+                )?; // A
+                write_event(
+                    &mut f,
+                    EV_KEY,
+                    0x131,
+                    if (state.buttons_lo & (1 << 1)) != 0 {
+                        1
+                    } else {
+                        0
+                    },
+                )?; // B
+                write_event(
+                    &mut f,
+                    EV_KEY,
+                    0x133,
+                    if (state.buttons_lo & (1 << 2)) != 0 {
+                        1
+                    } else {
+                        0
+                    },
+                )?; // X
+                write_event(
+                    &mut f,
+                    EV_KEY,
+                    0x134,
+                    if (state.buttons_lo & (1 << 3)) != 0 {
+                        1
+                    } else {
+                        0
+                    },
+                )?; // Y
+                write_event(
+                    &mut f,
+                    EV_KEY,
+                    0x136,
+                    if (state.buttons_lo & (1 << 4)) != 0 {
+                        1
+                    } else {
+                        0
+                    },
+                )?; // LB
+                write_event(
+                    &mut f,
+                    EV_KEY,
+                    0x137,
+                    if (state.buttons_lo & (1 << 5)) != 0 {
+                        1
+                    } else {
+                        0
+                    },
+                )?; // RB
+                write_event(
+                    &mut f,
+                    EV_KEY,
+                    0x13a,
+                    if (state.buttons_lo & (1 << 6)) != 0 {
+                        1
+                    } else {
+                        0
+                    },
+                )?; // Select
+                write_event(
+                    &mut f,
+                    EV_KEY,
+                    0x13b,
+                    if (state.buttons_lo & (1 << 7)) != 0 {
+                        1
+                    } else {
+                        0
+                    },
+                )?; // Start
+
+                // 2. Buttons (hi)
+                write_event(
+                    &mut f,
+                    EV_KEY,
+                    0x13d,
+                    if (state.buttons_hi & (1 << 0)) != 0 {
+                        1
+                    } else {
+                        0
+                    },
+                )?; // LS (L3)
+                write_event(
+                    &mut f,
+                    EV_KEY,
+                    0x13e,
+                    if (state.buttons_hi & (1 << 1)) != 0 {
+                        1
+                    } else {
+                        0
+                    },
+                )?; // RS (R3)
+                write_event(
+                    &mut f,
+                    EV_KEY,
+                    0x13c,
+                    if (state.buttons_hi & (1 << 2)) != 0 {
+                        1
+                    } else {
+                        0
+                    },
+                )?; // Guide (Mode)
+
+                // 3. DPAD (Hat)
+                let hat_x = if (state.flags & (1 << 2)) != 0 {
+                    -1
+                } else if (state.flags & (1 << 3)) != 0 {
+                    1
+                } else {
+                    0
+                };
+                let hat_y = if (state.flags & (1 << 0)) != 0 {
+                    -1
+                } else if (state.flags & (1 << 1)) != 0 {
+                    1
+                } else {
+                    0
+                };
+                write_event(&mut f, EV_ABS, 0x10, hat_x)?; // ABS_HAT0X
+                write_event(&mut f, EV_ABS, 0x11, hat_y)?; // ABS_HAT0Y
+
+                // 4. Analog Sticks
+                write_event(&mut f, EV_ABS, ABS_X, state.lx as i32)?;
+                write_event(&mut f, EV_ABS, ABS_Y, state.ly as i32)?;
+                write_event(&mut f, EV_ABS, 0x03, state.rx as i32)?; // ABS_RX
+                write_event(&mut f, EV_ABS, 0x04, state.ry as i32)?; // ABS_RY
+
+                // 5. Analog Triggers
+                write_event(&mut f, EV_ABS, 0x02, state.lt as i32)?; // ABS_Z
+                write_event(&mut f, EV_ABS, 0x05, state.rt as i32)?; // ABS_RZ
+
+                write_event(&mut f, EV_SYN, SYN_REPORT, 0)?;
+            }
+            // HoverDisplay / Pen are not injected by host — they're
+            // either client→server telemetry or host-emitted (hover).
             other => {
                 tracing::debug!(?other, "ignoring non-injectable event");
             }

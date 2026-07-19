@@ -103,6 +103,7 @@ pub enum TransportKind {
     NativeQuic,
     WebRtc,
     RelayQuic,
+    WebTransport,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
@@ -189,6 +190,12 @@ pub struct CapabilityProfile {
     pub encoders: Vec<VideoCodec>,
     pub decoders: Vec<VideoCodec>,
     pub notes: Vec<String>,
+    /// Display descriptors for multi-monitor hosts. The viewer renders
+    /// each entry as a chip in the capability picker; the chosen
+    /// `display_id` flows back through `SessionBundleInfo::selected_display_id`.
+    /// Empty for headless / single-display hosts.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub displays: Vec<DisplayDescriptor>,
 }
 
 impl CapabilityProfile {
@@ -199,6 +206,43 @@ impl CapabilityProfile {
     pub fn supports_codec(&self, codec: VideoCodec) -> bool {
         self.encoders.contains(&codec) || self.decoders.contains(&codec)
     }
+
+    /// Find a display by id; falls back to the first display, then `None`.
+    pub fn display(&self, id: Option<u32>) -> Option<&DisplayDescriptor> {
+        if let Some(id) = id {
+            self.displays.iter().find(|d| d.id == id)
+        } else {
+            self.displays.first()
+        }
+    }
+}
+
+/// One physical display on the host. `id` is a stable u32 chosen by the
+/// host (on Linux, the index of the xrandr output list). `name` is the
+/// user-visible label the viewer sees in the picker.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DisplayDescriptor {
+    /// Stable id used in `SessionBundleInfo::selected_display_id`.
+    pub id: u32,
+    /// Human-readable label ("HDMI-0 1920x1080", "Built-in Retina").
+    pub name: String,
+    pub width: u32,
+    pub height: u32,
+    #[serde(default)]
+    pub x: i32,
+    #[serde(default)]
+    pub y: i32,
+    #[serde(default)]
+    pub primary: bool,
+    /// True when the display is currently connected + active. Hosts
+    /// with inactive displays filter them out before publishing.
+    #[serde(default = "display_default_active")]
+    pub active: bool,
+}
+
+fn display_default_active() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -1145,6 +1189,9 @@ pub enum SessionSignal {
         alpn: String,
         ticket_b64: String,
     },
+    WebTransportTicket {
+        ticket_b64: String,
+    },
     Ready,
 }
 
@@ -1212,6 +1259,11 @@ pub struct ViewerToHost {
     /// WebRTC DTLS fingerprint the viewer will present during handshake.
     #[serde(alias = "viewer_dtls_fp")]
     pub viewer_dtls_fp: String,
+    /// Display the viewer wants to view (multi-monitor hosts). Forwarded
+    /// to the host-agent in `SessionBundleInfo.selected_display_id` so
+    /// its capture pipeline can scope ffmpeg to a single output.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selected_display_id: Option<u32>,
 }
 
 /// `host_to_viewer` half of the mutual session bundle.
@@ -1734,6 +1786,11 @@ pub struct SessionBundleInfo {
     /// gate session establishment on a positive proof.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pin_proof: Option<PinProof>,
+    /// Display the viewer wants to view. The host's capture pipeline
+    /// uses this to scope its screen capture to a single output. `None`
+    /// means "primary" (the host picks its own default).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selected_display_id: Option<u32>,
 }
 
 /// Stream-B §3 — proof-of-knowledge of the host's PIN. The relay

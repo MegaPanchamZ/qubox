@@ -651,10 +651,7 @@ async fn reject_pairing(host_id: String) -> Result<(), String> {
 
 /// Operator approves / denies an inbound session via the daemon IPC.
 #[tauri::command]
-async fn set_session_consent(
-    session_id: String,
-    approved: bool,
-) -> Result<(), String> {
+async fn set_session_consent(session_id: String, approved: bool) -> Result<(), String> {
     use qubox_daemon::ipc::SessionConsentDecision;
     let config = build_daemon_config();
     let mut client = IpcClient::connect(&config)

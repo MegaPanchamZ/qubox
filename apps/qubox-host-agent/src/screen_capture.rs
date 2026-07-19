@@ -12,6 +12,7 @@
 //! is not available (or `ffmpeg` isn't installed).
 use anyhow::{anyhow, Context, Result};
 use bytes::Bytes;
+use qubox_proto::DisplayDescriptor;
 use std::process::Stdio;
 use tokio::io::{AsyncReadExt, BufReader};
 use tokio::process::Command;
@@ -21,12 +22,16 @@ use crate::webrtc_session::WebRtcSession;
 
 #[derive(Debug, Clone)]
 pub struct CaptureConfig {
-    pub display: String,   // X11: ":0"; avfoundation: "1"; gdigrab: "desktop"
+    pub display: String, // X11: ":0"; avfoundation: "1"; gdigrab: "desktop"
     pub framerate: u32,
     pub width: u32,
     pub height: u32,
     pub x_offset: u32,
     pub y_offset: u32,
+    /// Display to capture when the viewer picked a non-primary monitor.
+    /// `None` means "capture the display configured on the rest of the
+    /// struct" (primary, system default).
+    pub selected_display: Option<DisplayDescriptor>,
 }
 
 impl Default for CaptureConfig {
@@ -38,6 +43,24 @@ impl Default for CaptureConfig {
             height: 720,
             x_offset: 0,
             y_offset: 0,
+            selected_display: None,
+        }
+    }
+}
+
+impl CaptureConfig {
+    /// Build a config for the given display descriptor. The display's
+    /// geometry replaces width/height/x/y so ffmpeg captures exactly
+    /// that rectangle instead of the full virtual root.
+    pub fn for_display(display: DisplayDescriptor) -> Self {
+        Self {
+            display: std::env::var("DISPLAY").unwrap_or_else(|_| ":0".into()),
+            framerate: 30,
+            width: display.width,
+            height: display.height,
+            x_offset: display.x.max(0) as u32,
+            y_offset: display.y.max(0) as u32,
+            selected_display: Some(display),
         }
     }
 }
@@ -54,10 +77,7 @@ fn ffmpeg_argv(cfg: &CaptureConfig) -> Result<Vec<String>> {
             "-video_size".into(),
             format!("{}x{}", cfg.width, cfg.height),
             "-i".into(),
-            format!(
-                "{}+{},{}",
-                cfg.display, cfg.x_offset, cfg.y_offset
-            ),
+            format!("{}+{},{}", cfg.display, cfg.x_offset, cfg.y_offset),
         ]);
     }
     #[cfg(target_os = "macos")]
@@ -255,11 +275,10 @@ fn strip_sei(au: Bytes) -> Option<Bytes> {
             idx += 4;
             // Skip to next start code
             while idx + 3 < bytes.len() {
-                if bytes[idx] == 0 && bytes[idx + 1] == 0
+                if bytes[idx] == 0
+                    && bytes[idx + 1] == 0
                     && (bytes[idx + 2] == 1
-                        || (bytes[idx + 2] == 0
-                            && idx + 3 < bytes.len()
-                            && bytes[idx + 3] == 1))
+                        || (bytes[idx + 2] == 0 && idx + 3 < bytes.len() && bytes[idx + 3] == 1))
                 {
                     break;
                 }

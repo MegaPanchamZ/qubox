@@ -7086,6 +7086,7 @@ dependencies = [
  "anyhow",
  "argon2",
  "axum",
+ "base64 0.22.1",
  "bytes 1.12.1",
  "chacha20poly1305",
  "clap 4.6.1",
@@ -7110,7 +7111,9 @@ dependencies = [
  "qubox-signaling",
  "qubox-sync",
  "qubox-transport",
+ "qubox-webtransport",
  "rand_core 0.6.4",
+ "reed-solomon-erasure",
  "rustls 0.23.42",
  "serde",
  "serde_json",
@@ -7124,6 +7127,7 @@ dependencies = [
  "uuid",
  "webrtc",
  "windows-sys 0.59.0",
+ "wtransport",
  "zeroize",
 ]
 

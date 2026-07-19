@@ -88,12 +88,7 @@ impl PairingUiState {
         self.pending.lock().await.remove(&request_id);
     }
 
-    pub async fn push_session(
-        &self,
-        session_id: Uuid,
-        client_peer_id: Uuid,
-        client_name: String,
-    ) {
+    pub async fn push_session(&self, session_id: Uuid, client_peer_id: Uuid, client_name: String) {
         let view = PendingSessionView {
             session_id,
             client_peer_id,
@@ -156,7 +151,9 @@ async fn decide_session(
     State(state): State<PairingUiState>,
     Json(body): Json<DecideSessionBody>,
 ) -> Json<serde_json::Value> {
-    let _ = state.session_decisions.send((body.session_id, body.approved));
+    let _ = state
+        .session_decisions
+        .send((body.session_id, body.approved));
     state.pending_sessions.lock().await.remove(&body.session_id);
     Json(serde_json::json!({ "ok": true }))
 }

@@ -493,6 +493,9 @@ pub async fn dispatch_signal(
         SessionSignal::NativeQuicTicket { .. } => {
             tracing::warn!(%session_id, "host got NativeQuicTicket on a WebRTC session; ignoring");
         }
+        SessionSignal::WebTransportTicket { .. } => {
+            tracing::warn!(%session_id, "host got WebTransportTicket on a WebRTC session; ignoring");
+        }
         SessionSignal::Ready => {}
     }
     Ok(true)
