@@ -110,7 +110,12 @@ impl JtiCache {
     /// the kill denylist the call returns [`JtiError::Killed`]
     /// WITHOUT inserting into the seen bucket (so a "killed then
     /// seen" ordering doesn't leak a denylist hit past expiry).
-    pub fn check_and_mark(&mut self, jti: &str, exp_unix_ms: u64, now_unix_ms: u64) -> Result<(), JtiError> {
+    pub fn check_and_mark(
+        &mut self,
+        jti: &str,
+        exp_unix_ms: u64,
+        now_unix_ms: u64,
+    ) -> Result<(), JtiError> {
         validate_jti(jti)?;
         self.prune_expired(now_unix_ms);
 
@@ -135,10 +140,7 @@ impl JtiCache {
         if self.seen.len() + self.denied.len() >= self.max_entries {
             return Err(JtiError::Capacity);
         }
-        self.seen.insert(
-            jti.to_string(),
-            Entry { exp_unix_ms },
-        );
+        self.seen.insert(jti.to_string(), Entry { exp_unix_ms });
         self.lru.push(jti.to_string());
         Ok(())
     }
@@ -150,10 +152,7 @@ impl JtiCache {
         validate_jti(jti)?;
         self.seen.remove(jti);
         self.lru.retain(|s| s != jti);
-        self.denied.insert(
-            jti.to_string(),
-            Entry { exp_unix_ms },
-        );
+        self.denied.insert(jti.to_string(), Entry { exp_unix_ms });
         Ok(())
     }
 
@@ -284,7 +283,9 @@ mod tests {
         let exp = now + 60_000;
         assert!(cache.denylist(jti("a"), exp).is_ok());
         // Past expiry, the kill no longer applies.
-        assert!(cache.check_and_mark(jti("a"), exp + 1, now + 120_000).is_ok());
+        assert!(cache
+            .check_and_mark(jti("a"), exp + 1, now + 120_000)
+            .is_ok());
     }
 
     #[test]
@@ -320,7 +321,10 @@ mod tests {
 
     #[test]
     fn validate_jti_rejects_empty_and_overlong() {
-        assert_eq!(JtiCache::new().check_and_mark("", 1, 0), Err(JtiError::Invalid));
+        assert_eq!(
+            JtiCache::new().check_and_mark("", 1, 0),
+            Err(JtiError::Invalid)
+        );
         let long: String = "x".repeat(257);
         assert_eq!(
             JtiCache::new().check_and_mark(&long, 1, 0),

@@ -19,7 +19,9 @@ export function SharePanel() {
   const create = async () => {
     setErr(null);
     try {
-      const res = await invoke<ShareLinkPayload>("create_share_link", { ttlSecs: 900 });
+      const res = await invoke<ShareLinkPayload>("create_share_link", {
+        ttlSecs: 900,
+      });
       setCode(res.code);
       setUrl(res.urlHint || null);
       setExpiresMs(res.expiresUnixMs || null);
@@ -44,10 +46,16 @@ export function SharePanel() {
   return (
     <div className="settings-field">
       <span>Share link</span>
-      <p className="subtitle">Guest joins with a short code (no account required).</p>
+      <p className="subtitle">
+        Guest joins with a short code (no account required).
+      </p>
       {err ? <p className="state state--error">{err}</p> : null}
       {msg ? <p className="state">{msg}</p> : null}
-      <button className="secondary-button" onClick={() => void create()} type="button">
+      <button
+        className="secondary-button"
+        onClick={() => void create()}
+        type="button"
+      >
         Create share link
       </button>
       {code ? (
@@ -55,7 +63,11 @@ export function SharePanel() {
           <code className="share-code">{code}</code>
           {url ? (
             <p className="subtitle">
-              <a href={shareLinkPayload(code, url)} target="_blank" rel="noreferrer">
+              <a
+                href={shareLinkPayload(code, url)}
+                target="_blank"
+                rel="noreferrer"
+              >
                 {shareLinkPayload(code, url)}
               </a>
             </p>
@@ -91,7 +103,11 @@ export function SharePanel() {
           placeholder="paste code"
           value={redeem}
         />
-        <button className="secondary-button" onClick={() => void doRedeem()} type="button">
+        <button
+          className="secondary-button"
+          onClick={() => void doRedeem()}
+          type="button"
+        >
           Redeem
         </button>
       </label>

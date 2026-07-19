@@ -22,7 +22,9 @@ export function StreamSurface({
   embedded = false,
 }: StreamSurfaceProps) {
   const { stderrBySession } = useApp();
-  const lines = (sessionId ? stderrBySession[sessionId] ?? [] : []).slice(-TAIL_LIMIT);
+  const lines = (sessionId ? (stderrBySession[sessionId] ?? []) : []).slice(
+    -TAIL_LIMIT,
+  );
   const [autoScroll, setAutoScroll] = useState(true);
   const [now, setNow] = useState(() => Date.now());
   const containerRef = useRef<HTMLPreElement | null>(null);
@@ -42,10 +44,18 @@ export function StreamSurface({
 
   if (!embedded) {
     return (
-      <div className="stream-surface stream-surface--external" data-testid="stream-surface">
+      <div
+        className="stream-surface stream-surface--external"
+        data-testid="stream-surface"
+      >
         <div className="stream-surface__header">
           <span className="stream-surface__chip">
-            <span className="material-symbols-outlined" style={{ fontSize: "1rem" }}>terminal</span>
+            <span
+              className="material-symbols-outlined"
+              style={{ fontSize: "1rem" }}
+            >
+              terminal
+            </span>
             CLI subprocess monitor
           </span>
           <span className="stream-surface__meta">
@@ -83,10 +93,9 @@ export function StreamSurface({
           )}
         </pre>
         <p className="subtitle">
-          {streamCount > 1
-            ? `Receiving ${streamCount} streams · `
-            : ""}
-          Video still renders in the external <code>qubox-client-cli</code> window.
+          {streamCount > 1 ? `Receiving ${streamCount} streams · ` : ""}
+          Video still renders in the external <code>qubox-client-cli</code>{" "}
+          window.
         </p>
       </div>
     );
@@ -94,10 +103,12 @@ export function StreamSurface({
   return (
     <div className="stream-surface stream-surface--embedded">
       <div className="stream-surface__placeholder">
-        <span>Embedded surface ({streamCount} stream{streamCount === 1 ? "" : "s"})</span>
+        <span>
+          Embedded surface ({streamCount} stream{streamCount === 1 ? "" : "s"})
+        </span>
         <p className="subtitle">
-          Placeholder for future wgpu/WebView embed. Media path remains CLI until
-          Tauri texture bridge ships.
+          Placeholder for future wgpu/WebView embed. Media path remains CLI
+          until Tauri texture bridge ships.
         </p>
       </div>
     </div>

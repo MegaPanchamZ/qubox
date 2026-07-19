@@ -1309,10 +1309,7 @@ impl SignedBundle {
         })
     }
 
-    pub fn from_compact(
-        token: &str,
-        kid: impl Into<String>,
-    ) -> Result<Self, SignedBundleError> {
+    pub fn from_compact(token: &str, kid: impl Into<String>) -> Result<Self, SignedBundleError> {
         use base64::engine::general_purpose::URL_SAFE_NO_PAD;
         use base64::Engine as _;
 
@@ -1440,7 +1437,13 @@ fn canonicalize_value(v: &serde_json::Value) -> String {
             entries.sort_by(|a, b| a.0.cmp(b.0));
             let parts: Vec<String> = entries
                 .into_iter()
-                .map(|(k, v)| format!("{}:{}", serde_json::to_string(k).unwrap_or_else(|_| "\"\"".to_string()), canonicalize_value(v)))
+                .map(|(k, v)| {
+                    format!(
+                        "{}:{}",
+                        serde_json::to_string(k).unwrap_or_else(|_| "\"\"".to_string()),
+                        canonicalize_value(v)
+                    )
+                })
                 .collect();
             format!("{{{}}}", parts.join(","))
         }
@@ -2613,7 +2616,10 @@ mod tests {
     fn viewer_to_host_serializes_camel_case() {
         let v = sample_viewer_to_host();
         let json = serde_json::to_string(&v).unwrap();
-        assert!(json.contains(r#""viewerDtlsFp":"AA:BB:CC:DD""#), "got {json}");
+        assert!(
+            json.contains(r#""viewerDtlsFp":"AA:BB:CC:DD""#),
+            "got {json}"
+        );
         assert!(json.contains(r#""jti":"jti-abc""#), "got {json}");
         assert!(!json.contains("viewer_dtls_fp"), "got {json}");
     }
@@ -2722,8 +2728,8 @@ mod tests {
         let key = generate_signing_key();
         let payload = sample_viewer_to_host();
         let envelope = encode_signed_bundle(&payload, &key).unwrap();
-        let decoded = decode_signed_bundle::<ViewerToHost>(&envelope, &key.verifying_key())
-            .expect("decode");
+        let decoded =
+            decode_signed_bundle::<ViewerToHost>(&envelope, &key.verifying_key()).expect("decode");
         assert_eq!(decoded, payload);
     }
 

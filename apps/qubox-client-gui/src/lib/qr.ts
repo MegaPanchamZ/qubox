@@ -24,7 +24,11 @@ export function codeMatrix(text: string): boolean[][] {
 }
 
 /** Render a QR matrix as SVG (no native image dependency). */
-export function qrMatrixToSvg(matrix: boolean[][], cell = 4, margin = 2): string {
+export function qrMatrixToSvg(
+  matrix: boolean[][],
+  cell = 4,
+  margin = 2,
+): string {
   const n = matrix.length;
   const size = (n + margin * 2) * cell;
   let rects = "";

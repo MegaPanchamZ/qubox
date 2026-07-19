@@ -210,7 +210,6 @@ struct Args {
     file_sync_node_id: Option<String>,
 
     // ── Stream-B host enforcement ──
-
     /// Idle / dead-man timeout for an active session in seconds. If
     /// no media datagrams or signaling arrive for this long, the
     /// host tears the session down. 0 disables. Default 900 (15m).
@@ -477,8 +476,7 @@ impl HostSessionRuntime {
     pub fn rotate_recovery(&self) -> anyhow::Result<String> {
         let identity_path = resolve_identity_path_from_env()
             .unwrap_or_else(|_| std::env::temp_dir().join("qubox-fallback"));
-        let seed =
-            qubox_identity::host_seed_for_recovery(&identity_path).unwrap_or_default();
+        let seed = qubox_identity::host_seed_for_recovery(&identity_path).unwrap_or_default();
         let new = self.recovery.rotate(&seed)?;
         Ok(hex::encode(new.as_bytes()))
     }
@@ -559,25 +557,22 @@ async fn main() -> anyhow::Result<()> {
         .clone()
         .unwrap_or_else(|| pin::PinStore::default_policy_path(&identity_path));
     let pin_store = Arc::new(
-        pin::PinStore::from_path(policy_path.clone())
-            .unwrap_or_else(|e| {
-                tracing::warn!(error = %e, "failed to load host policy; starting empty");
-                pin::PinStore::from_path(policy_path.clone()).expect("policy path reopened")
-            }),
+        pin::PinStore::from_path(policy_path.clone()).unwrap_or_else(|e| {
+            tracing::warn!(error = %e, "failed to load host policy; starting empty");
+            pin::PinStore::from_path(policy_path.clone()).expect("policy path reopened")
+        }),
     );
     let recovery_path = recovery::RecoveryStore::default_path(&identity_path);
-    let host_seed = qubox_identity::host_seed_for_recovery(&identity_path)
-        .unwrap_or_else(|_| {
-            tracing::warn!("could not derive host seed; using all-zero (recovery unavailable)");
-            vec![0u8; 32]
-        });
+    let host_seed = qubox_identity::host_seed_for_recovery(&identity_path).unwrap_or_else(|_| {
+        tracing::warn!("could not derive host seed; using all-zero (recovery unavailable)");
+        vec![0u8; 32]
+    });
     let recovery = Arc::new(
-        recovery::RecoveryStore::load_or_generate(&host_seed, recovery_path)
-            .unwrap_or_else(|e| {
-                tracing::warn!(error = %e, "recovery store failed; using memory-only");
-                recovery::RecoveryStore::load_or_generate(&host_seed, PathBuf::new())
-                    .expect("memory recovery store")
-            }),
+        recovery::RecoveryStore::load_or_generate(&host_seed, recovery_path).unwrap_or_else(|e| {
+            tracing::warn!(error = %e, "recovery store failed; using memory-only");
+            recovery::RecoveryStore::load_or_generate(&host_seed, PathBuf::new())
+                .expect("memory recovery store")
+        }),
     );
     let toast_mode = match args.toast_mode.as_deref() {
         Some("off") => toast_policy::ToastMode::Off,
@@ -676,7 +671,7 @@ async fn main() -> anyhow::Result<()> {
         None
     };
 
-let runtime = HostSessionRuntime {
+    let runtime = HostSessionRuntime {
         self_peer_id: descriptor.peer_id,
         signaling_writer: writer.clone(),
         native_quic_bind: args.native_quic_bind,
@@ -1190,41 +1185,36 @@ async fn handle_server_message(
                     .enforcement
                     .register_pending_bundle(requested.session_id, pending);
 
-                let bundle_msg =
-                    match tokio::time::timeout(enforce::PIN_BUNDLE_TIMEOUT, rx).await {
-                        Ok(Ok(msg)) => msg,
-                        Ok(Err(_canceled)) => {
-                            tracing::warn!(
-                                session_id = %requested.session_id,
-                                "PIN gate oneshot canceled before delivery"
-                            );
-                            return Ok(());
-                        }
-                        Err(_) => {
-                            tracing::warn!(
-                                session_id = %requested.session_id,
-                                "PIN gate timed out without SessionBundleAccepted"
-                            );
-                            send_client_message(
-                                &writer,
-                                &ClientMessage::KickSession {
-                                    session_id: requested.session_id,
-                                    reason: "pin_timeout".into(),
-                                },
-                            )
-                            .await?;
-                            return Ok(());
-                        }
-                    };
+                let bundle_msg = match tokio::time::timeout(enforce::PIN_BUNDLE_TIMEOUT, rx).await {
+                    Ok(Ok(msg)) => msg,
+                    Ok(Err(_canceled)) => {
+                        tracing::warn!(
+                            session_id = %requested.session_id,
+                            "PIN gate oneshot canceled before delivery"
+                        );
+                        return Ok(());
+                    }
+                    Err(_) => {
+                        tracing::warn!(
+                            session_id = %requested.session_id,
+                            "PIN gate timed out without SessionBundleAccepted"
+                        );
+                        send_client_message(
+                            &writer,
+                            &ClientMessage::KickSession {
+                                session_id: requested.session_id,
+                                reason: "pin_timeout".into(),
+                            },
+                        )
+                        .await?;
+                        return Ok(());
+                    }
+                };
 
                 let now_ms = HostSessionRuntime::unix_millis_now();
                 if let Err(err) = runtime
                     .enforcement
-                    .verify_bundle_locally(
-                        &bundle_msg,
-                        runtime.host_device_id.as_str(),
-                        now_ms,
-                    )
+                    .verify_bundle_locally(&bundle_msg, runtime.host_device_id.as_str(), now_ms)
                     .await
                 {
                     tracing::warn!(
@@ -1236,11 +1226,7 @@ async fn handle_server_message(
                     return Ok(());
                 }
 
-                if !enforce::verify_pin_proof(
-                    &bundle_msg,
-                    &runtime.pin_store,
-                    &requested.client,
-                ) {
+                if !enforce::verify_pin_proof(&bundle_msg, &runtime.pin_store, &requested.client) {
                     tracing::warn!(
                         session_id = %requested.session_id,
                         "PIN gate bundle missing or invalid PinProof — kicking"
@@ -1295,11 +1281,8 @@ async fn handle_server_message(
                         );
 
                         let accept =
-                            match tokio::time::timeout(
-                                enforce::OPERATOR_DECISION_TIMEOUT,
-                                drx,
-                            )
-                            .await
+                            match tokio::time::timeout(enforce::OPERATOR_DECISION_TIMEOUT, drx)
+                                .await
                             {
                                 Ok(Ok(b)) => b,
                                 Ok(Err(_canceled)) => {
@@ -1433,9 +1416,7 @@ async fn handle_server_message(
             // Stream-B §3 — the cloud is delivering a ViewerToHost
             // bundle in response to our session request. If a PIN gate
             // is currently waiting for this session, deliver it.
-            let pending = runtime
-                .enforcement
-                .take_pending_bundle(bundle.session_id);
+            let pending = runtime.enforcement.take_pending_bundle(bundle.session_id);
             if let Some(pending) = pending {
                 let _ = pending.deliver.send(bundle);
             } else {
@@ -1453,7 +1434,8 @@ async fn handle_server_message(
             let now_ms = HostSessionRuntime::unix_millis_now();
             match runtime
                 .enforcement
-                .verify_kill_envelope_local(&envelope, now_ms).await
+                .verify_kill_envelope_local(&envelope, now_ms)
+                .await
             {
                 Ok(decoded) => {
                     let target_session = Uuid::parse_str(&decoded.sid).unwrap_or(Uuid::nil());
@@ -1564,10 +1546,7 @@ async fn run_datagram_dispatcher_loop(
     }
 }
 
-async fn run_native_quic_session(
-    requested: SessionRequested,
-    runtime: HostSessionRuntime,
-) {
+async fn run_native_quic_session(requested: SessionRequested, runtime: HostSessionRuntime) {
     if requested.codec != VideoCodec::H264 {
         tracing::warn!(
             session_id = %requested.session_id,
@@ -1623,10 +1602,7 @@ async fn run_native_quic_session(
 ///    real ffmpeg/PipeWire capture pipeline.
 /// 4. Wait until either the PeerConnection fails or the host's signaling
 ///    connection drops; deregister and close.
-async fn run_webrtc_session(
-    requested: SessionRequested,
-    runtime: HostSessionRuntime,
-) {
+async fn run_webrtc_session(requested: SessionRequested, runtime: HostSessionRuntime) {
     if requested.codec != VideoCodec::H264 {
         tracing::warn!(
             session_id = %requested.session_id,

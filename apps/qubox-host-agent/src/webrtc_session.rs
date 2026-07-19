@@ -39,7 +39,9 @@ use webrtc::peer_connection::configuration::RTCConfiguration;
 use webrtc::peer_connection::peer_connection_state::RTCPeerConnectionState;
 use webrtc::peer_connection::sdp::session_description::RTCSessionDescription;
 use webrtc::peer_connection::RTCPeerConnection;
-use webrtc::rtp_transceiver::rtp_codec::{RTCRtpCodecCapability, RTCRtpCodecParameters, RTPCodecType};
+use webrtc::rtp_transceiver::rtp_codec::{
+    RTCRtpCodecCapability, RTCRtpCodecParameters, RTPCodecType,
+};
 use webrtc::rtp_transceiver::RTCPFeedback;
 use webrtc::track::track_local::track_local_static_sample::TrackLocalStaticSample;
 use webrtc::track::track_local::TrackLocal;
@@ -152,9 +154,7 @@ impl WebRtcSession {
                 .map_err(|e| anyhow!("register h264 codec {profile_level_id}: {e}"))?;
         }
 
-        let api = APIBuilder::new()
-            .with_media_engine(media_engine)
-            .build();
+        let api = APIBuilder::new().with_media_engine(media_engine).build();
 
         let config = RTCConfiguration {
             ice_servers: ice_servers
@@ -175,7 +175,8 @@ impl WebRtcSession {
             mime_type: "video/H264".to_string(),
             clock_rate: 90000,
             channels: 0,
-            sdp_fmtp_line: "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42001f".to_string(),
+            sdp_fmtp_line: "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42001f"
+                .to_string(),
             ..Default::default()
         };
         let video_track = Arc::new(TrackLocalStaticSample::new(
@@ -473,9 +474,8 @@ pub async fn spawn_test_pattern_producer(session: Arc<WebRtcSession>) {
     // initialises immediately on the first RTP packet.
     static BLACK_16X16: &[u8] = &[
         // SPS (NAL type 7): Baseline L3.0, 16×16
-        0x00, 0x00, 0x00, 0x01, 0x67, 0x42, 0xC0, 0x1E, 0xDD, 0xEC, 0x04, 0x40, 0x00, 0x00,
-        0x03, 0x00, 0x40, 0x00, 0x00, 0x03, 0x00, 0x83, 0xC5, 0x8B, 0xE0,
-        // PPS (NAL type 8)
+        0x00, 0x00, 0x00, 0x01, 0x67, 0x42, 0xC0, 0x1E, 0xDD, 0xEC, 0x04, 0x40, 0x00, 0x00, 0x03,
+        0x00, 0x40, 0x00, 0x00, 0x03, 0x00, 0x83, 0xC5, 0x8B, 0xE0, // PPS (NAL type 8)
         0x00, 0x00, 0x00, 0x01, 0x68, 0xCE, 0x0F, 0x2C, 0x80,
         // IDR slice (NAL type 5): single black macroblock
         0x00, 0x00, 0x00, 0x01, 0x65, 0x88, 0x84, 0x04, 0xBC, 0x98, 0xA0, 0x00, 0x38, 0xA3, 0x80,

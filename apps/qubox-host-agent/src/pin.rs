@@ -201,9 +201,7 @@ pub fn hash_pin(pin: &str) -> anyhow::Result<StoredPin> {
 /// (the caller is responsible for verifying it; we don't pre-hash
 /// here because we need the literal to run through Argon2 anyway).
 pub fn env_pin() -> Option<String> {
-    std::env::var(PIN_ENV)
-        .ok()
-        .filter(|p| !p.is_empty())
+    std::env::var(PIN_ENV).ok().filter(|p| !p.is_empty())
 }
 
 fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
@@ -255,9 +253,7 @@ where
             match verify_pin(stored, old_pin) {
                 Ok(true) => gate = true,
                 Ok(false) => {
-                    return PinUpdateOutcome::Rejected(
-                        "old PIN does not match stored hash".into(),
-                    );
+                    return PinUpdateOutcome::Rejected("old PIN does not match stored hash".into());
                 }
                 Err(e) => return PinUpdateOutcome::Rejected(format!("verify_pin failed: {e}")),
             }

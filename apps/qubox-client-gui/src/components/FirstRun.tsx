@@ -107,9 +107,8 @@ export function FirstRun({ onDone }: FirstRunProps) {
             <p className="eyebrow">Welcome</p>
             <h1 data-testid="first-run-title">How will you use Qubox?</h1>
             <p className="subtitle">
-              Cloud uses Qubox accounts and{" "}
-              <code>wss://signal.qubox.app</code>. Self-host talks to your own
-              signaling server (LAN or private VPS).
+              Cloud uses Qubox accounts and <code>wss://signal.qubox.app</code>.
+              Self-host talks to your own signaling server (LAN or private VPS).
             </p>
           </div>
         </header>
@@ -180,8 +179,8 @@ export function FirstRun({ onDone }: FirstRunProps) {
               </>
             ) : (
               <>
-                Enter the WebSocket URL of your signaling server. Leave blank
-                to type it after setup.
+                Enter the WebSocket URL of your signaling server. Leave blank to
+                type it after setup.
               </>
             )}
           </p>
@@ -239,13 +238,17 @@ export function FirstRun({ onDone }: FirstRunProps) {
             <input
               className="text-input"
               onChange={(e) => setSelfhostServer(e.target.value)}
-              placeholder={lanIp ? `ws://${lanIp}:7000/ws` : "ws://your-host:7000/ws"}
+              placeholder={
+                lanIp ? `ws://${lanIp}:7000/ws` : "ws://your-host:7000/ws"
+              }
               value={selfhostServer}
             />
             <p className="subtitle">
               {lanIp ? (
-                <>Auto-detected LAN IP <code>{lanIp}</code>. </>)
-              : null}
+                <>
+                  Auto-detected LAN IP <code>{lanIp}</code>.{" "}
+                </>
+              ) : null}
               Example: <code>ws://192.168.1.10:7000/ws</code> or{" "}
               <code>wss://signal.home.lan/ws</code>. Do not use{" "}
               <code>127.0.0.1</code> for other machines.

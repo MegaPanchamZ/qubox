@@ -10,7 +10,10 @@ export const CLOUD_ACCOUNTS = "https://signal.qubox.app";
 export const DEFAULT_SELFHOST_SIGNALING = "";
 
 export function normalizeEnrollCode(raw: string): string {
-  return raw.trim().toUpperCase().replace(/[^A-Z0-9]/g, "");
+  return raw
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, "");
 }
 
 export function isValidEnrollCode(code: string): boolean {

@@ -113,10 +113,7 @@ pub enum BundleVerifyErrorLocal {
     #[error("bad signing key: {0}")]
     BadKey(String),
     #[error("bundle expired (exp={exp_unix_ms}, now={now_unix_ms}, skew={SKEW_TOLERANCE_MS_MS} ms tolerated)")]
-    Expired {
-        exp_unix_ms: u64,
-        now_unix_ms: u64,
-    },
+    Expired { exp_unix_ms: u64, now_unix_ms: u64 },
     #[error("audience mismatch (expected={expected}, got={got})")]
     Audience { expected: String, got: String },
     #[error("malformed sid: {0}")]
@@ -335,10 +332,7 @@ impl EnforcementState {
         }
 
         // Audience must target this host's device_id.
-        let my_id = envelope
-            .payload
-            .aud
-            .clone();
+        let my_id = envelope.payload.aud.clone();
         if !my_id.is_empty() && payload.aud != my_id {
             return Err(BundleVerifyErrorLocal::Audience {
                 expected: my_id,
@@ -374,8 +368,7 @@ async fn verify_signed_kill_envelope(
         .lookup(&envelope.envelope.kid)
         .await
         .map_err(|e| format!("jwks lookup: {e}"))?;
-    let vk = qubox_proto_ed25519_verifying_key(&pk)
-        .map_err(|e| format!("bad ed25519 key: {e}"))?;
+    let vk = qubox_proto_ed25519_verifying_key(&pk).map_err(|e| format!("bad ed25519 key: {e}"))?;
     envelope
         .envelope
         .decode::<SignedKill>(&vk)
@@ -431,7 +424,9 @@ pub fn bundle_with_pin_proof(jti: &str, sub: &str) -> SessionBundleInfo {
     SessionBundleInfo {
         session_id: Uuid::new_v4(),
         jti: jti.to_string(),
-        viewer_dtls_fp: "00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00".to_string(),
+        viewer_dtls_fp:
+            "00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00"
+                .to_string(),
         exp_unix_ms: (qubox_proto_now() + 60_000) as u64,
         caps: SessionCaps::default(),
         sub: sub.to_string(),
@@ -541,11 +536,13 @@ mod tests {
         // Reset activity at t0+2; collecting at t0+2.5 should NOT find it stale
         // because only 500ms have elapsed (< 1s threshold).
         tracker.touch(sid, t0 + Duration::from_secs(2));
-        let stale = tracker
-            .collect_stale(Duration::from_secs(1), t0 + Duration::from_millis(2_500));
+        let stale =
+            tracker.collect_stale(Duration::from_secs(1), t0 + Duration::from_millis(2_500));
         assert!(stale.is_empty());
         tracker.remove(sid);
-        assert!(tracker.collect_stale(Duration::from_secs(1), t0 + Duration::from_secs(10)).is_empty());
+        assert!(tracker
+            .collect_stale(Duration::from_secs(1), t0 + Duration::from_secs(10))
+            .is_empty());
     }
 
     #[test]

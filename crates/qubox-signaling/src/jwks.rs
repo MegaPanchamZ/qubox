@@ -78,8 +78,7 @@ struct CacheSnapshot {
 
 /// Type alias for our async fetcher. Implementations return the raw
 /// HTTP body bytes; the parser handles JSON.
-pub type JwksFetchFuture =
-    Pin<Box<dyn Future<Output = anyhow::Result<Vec<u8>>> + Send>>;
+pub type JwksFetchFuture = Pin<Box<dyn Future<Output = anyhow::Result<Vec<u8>>> + Send>>;
 
 /// How to actually fetch a JWKS document over the network. The
 /// default implementation uses [`reqwest`] (see [`HttpJwksFetcher`]).
@@ -193,8 +192,7 @@ impl JwksClient {
                     if let Some(pk) = snapshot.keys.get(kid) {
                         warn!(
                             ?err,
-                            kid,
-                            "JWKS refetch failed; serving from cache (within max-stale)"
+                            kid, "JWKS refetch failed; serving from cache (within max-stale)"
                         );
                         return Ok(*pk);
                     }
@@ -210,9 +208,9 @@ impl JwksClient {
         }
 
         let cache = self.cache.lock().await;
-        let snapshot = cache
-            .as_ref()
-            .ok_or_else(|| JwksError::UnknownKid { kid: kid.to_string() })?;
+        let snapshot = cache.as_ref().ok_or_else(|| JwksError::UnknownKid {
+            kid: kid.to_string(),
+        })?;
         snapshot
             .keys
             .get(kid)
@@ -241,8 +239,8 @@ impl JwksClient {
     async fn fetch_now(&self) -> anyhow::Result<()> {
         debug!(url = %self.url, "refreshing JWKS");
         let bytes = self.fetcher.fetch(&self.url).await?;
-        let parsed = parse_jwks(&bytes)
-            .with_context(|| format!("parse JWKS document from {}", self.url))?;
+        let parsed =
+            parse_jwks(&bytes).with_context(|| format!("parse JWKS document from {}", self.url))?;
         let mut keys = HashMap::new();
         for entry in parsed {
             keys.insert(entry.kid, entry.public_key);
@@ -360,7 +358,7 @@ mod tests {
     use super::*;
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     use base64::Engine as _;
-    use qubox_proto::{generate_signing_key, SignedBundle, SessionCaps, ViewerToHost};
+    use qubox_proto::{generate_signing_key, SessionCaps, SignedBundle, ViewerToHost};
 
     fn sample_key_b64() -> String {
         let sk = generate_signing_key();
@@ -399,12 +397,10 @@ mod tests {
 
     impl JwksFetcher for FakeFetcher {
         fn fetch(&self, _url: &str) -> JwksFetchFuture {
-            let fail = self.fail_next.swap(false, std::sync::atomic::Ordering::SeqCst);
-            let bytes = self
-                .bytes
-                .lock()
-                .ok()
-                .and_then(|guard| guard.clone());
+            let fail = self
+                .fail_next
+                .swap(false, std::sync::atomic::Ordering::SeqCst);
+            let bytes = self.bytes.lock().ok().and_then(|guard| guard.clone());
             Box::pin(async move {
                 if fail {
                     bail!("scripted failure");
@@ -521,7 +517,8 @@ mod tests {
             .unwrap()
             .with_fetcher(fetcher);
         client.lookup("kid-1").await.unwrap();
-        fake.fail_next.store(true, std::sync::atomic::Ordering::SeqCst);
+        fake.fail_next
+            .store(true, std::sync::atomic::Ordering::SeqCst);
         tokio::time::sleep(Duration::from_millis(600)).await;
         let err = client.lookup("kid-1").await.unwrap_err();
         assert!(matches!(err, JwksError::UnreachableAndStale(_)));
@@ -539,7 +536,8 @@ mod tests {
             .unwrap()
             .with_fetcher(fetcher);
         client.lookup("kid-1").await.unwrap();
-        fake.fail_next.store(true, std::sync::atomic::Ordering::SeqCst);
+        fake.fail_next
+            .store(true, std::sync::atomic::Ordering::SeqCst);
         tokio::time::sleep(Duration::from_millis(600)).await;
         let err = client.lookup("kid-1").await.unwrap_err();
         assert!(matches!(err, JwksError::Unreachable(_)));
@@ -559,7 +557,8 @@ mod tests {
             .with_fetcher(fetcher);
         client.lookup("kid-1").await.unwrap();
         tokio::time::sleep(Duration::from_millis(80)).await;
-        fake.fail_next.store(true, std::sync::atomic::Ordering::SeqCst);
+        fake.fail_next
+            .store(true, std::sync::atomic::Ordering::SeqCst);
         let pk = client.lookup("kid-1").await.unwrap();
         assert_eq!(pk.len(), 32);
     }

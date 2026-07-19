@@ -135,9 +135,7 @@ pub fn spawn_pipeline(
     let apm = {
         let _ = channels;
         if config.aec_enabled || config.agc_enabled {
-            tracing::info!(
-                "WebRTC APM disabled in this build; mic uses RNNoise/Opus only"
-            );
+            tracing::info!("WebRTC APM disabled in this build; mic uses RNNoise/Opus only");
         }
         None::<()>
     };

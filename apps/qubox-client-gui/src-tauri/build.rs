@@ -23,7 +23,10 @@ fn ensure_external_bin_placeholders() {
         let path = binaries_dir.join(format!("{name}-{triple}{ext}"));
         if !path.exists() {
             let _ = fs::write(&path, []);
-            println!("cargo:warning=created placeholder sidecar {}", path.display());
+            println!(
+                "cargo:warning=created placeholder sidecar {}",
+                path.display()
+            );
         }
         println!("cargo:rerun-if-changed={}", path.display());
     }

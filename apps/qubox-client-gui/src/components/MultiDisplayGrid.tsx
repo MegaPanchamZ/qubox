@@ -52,11 +52,12 @@ export function MultiDisplayGrid({
         }}
       >
         {Array.from({ length: tiles }, (_, index) => {
-          const label =
-            displayLabels?.[index] ?? `Display ${index + 1}`;
+          const label = displayLabels?.[index] ?? `Display ${index + 1}`;
           const active = activeIndex === index;
           const stateLabel = showReady
-            ? active ? "active · ready" : "ready"
+            ? active
+              ? "active · ready"
+              : "ready"
             : "buffering";
           return (
             <div

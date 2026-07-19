@@ -1,10 +1,6 @@
 import { useMemo, useState } from "react";
 import { useApp } from "./AppContext";
-import type {
-  ActiveSession,
-  SessionTelemetry,
-  StderrLine,
-} from "./AppContext";
+import type { ActiveSession, SessionTelemetry, StderrLine } from "./AppContext";
 import { MultiDisplayGrid } from "./MultiDisplayGrid";
 import { StreamSurface } from "./StreamSurface";
 import { StatsOverlay } from "./StatsOverlay";
@@ -15,8 +11,12 @@ type SessionViewProps = {
 };
 
 export function SessionView({ onCancel, onKick }: SessionViewProps) {
-  const { activeSessions, recentSessions, telemetryBySession, stderrBySession } =
-    useApp();
+  const {
+    activeSessions,
+    recentSessions,
+    telemetryBySession,
+    stderrBySession,
+  } = useApp();
   const [showRecent, setShowRecent] = useState(false);
 
   const sorted = useMemo(
@@ -41,7 +41,10 @@ export function SessionView({ onCancel, onKick }: SessionViewProps) {
             onClick={() => setShowRecent((s) => !s)}
             type="button"
           >
-            <span className="material-symbols-outlined" style={{ fontSize: "1.1rem" }}>
+            <span
+              className="material-symbols-outlined"
+              style={{ fontSize: "1.1rem" }}
+            >
               history
             </span>
             {showRecent ? "Hide recent" : "Recent crashes"}
@@ -54,7 +57,14 @@ export function SessionView({ onCancel, onKick }: SessionViewProps) {
 
       {sorted.length === 0 ? (
         <div className="empty-state">
-          <span className="material-symbols-outlined" style={{ fontSize: "2.5rem", color: "var(--muted)", marginBottom: "12px" }}>
+          <span
+            className="material-symbols-outlined"
+            style={{
+              fontSize: "2.5rem",
+              color: "var(--muted)",
+              marginBottom: "12px",
+            }}
+          >
             play_disabled
           </span>
           <p className="empty-state__title">No active sessions</p>
@@ -88,7 +98,13 @@ type SessionRowProps = {
   onKick: (sessionId: string, reason: string) => void;
 };
 
-function SessionRow({ session, telemetry, stderr, onCancel, onKick }: SessionRowProps) {
+function SessionRow({
+  session,
+  telemetry,
+  stderr,
+  onCancel,
+  onKick,
+}: SessionRowProps) {
   const stats = useMemo(() => computeStats(telemetry), [telemetry]);
   const lastLog = stderr[stderr.length - 1];
   const [kickArmed, setKickArmed] = useState(false);
@@ -115,7 +131,12 @@ function SessionRow({ session, telemetry, stderr, onCancel, onKick }: SessionRow
             }}
             type="button"
           >
-            <span className="material-symbols-outlined" style={{ fontSize: "1.1rem" }}>logout</span>
+            <span
+              className="material-symbols-outlined"
+              style={{ fontSize: "1.1rem" }}
+            >
+              logout
+            </span>
             {kickArmed ? "Confirm kick" : "Kick"}
           </button>
           <button
@@ -123,7 +144,12 @@ function SessionRow({ session, telemetry, stderr, onCancel, onKick }: SessionRow
             onClick={() => onCancel(session.sessionId)}
             type="button"
           >
-            <span className="material-symbols-outlined" style={{ fontSize: "1.1rem" }}>power_settings_new</span>
+            <span
+              className="material-symbols-outlined"
+              style={{ fontSize: "1.1rem" }}
+            >
+              power_settings_new
+            </span>
             Disconnect
           </button>
         </div>
@@ -172,7 +198,11 @@ function SessionRow({ session, telemetry, stderr, onCancel, onKick }: SessionRow
   );
 }
 
-function RecentSessionsPanel({ recent }: { recent: ReturnType<typeof useApp>["recentSessions"] }) {
+function RecentSessionsPanel({
+  recent,
+}: {
+  recent: ReturnType<typeof useApp>["recentSessions"];
+}) {
   if (recent.length === 0) {
     return (
       <div className="empty-state" style={{ marginBottom: 16 }}>
@@ -250,7 +280,13 @@ function computeStats(telemetry: SessionTelemetry[]): DerivedStats {
   for (const event of telemetry) {
     if (event.kind === "control") {
       const msg = event.msg as
-        | { RateFeedback?: { rtt_ms?: number; loss_x1000?: number; jitter_ms?: number } }
+        | {
+            RateFeedback?: {
+              rtt_ms?: number;
+              loss_x1000?: number;
+              jitter_ms?: number;
+            };
+          }
         | { StreamStats?: { frames_decoded?: number; frames_dropped?: number } }
         | { stream_count?: number };
       if ("RateFeedback" in msg && msg.RateFeedback) {
@@ -259,8 +295,10 @@ function computeStats(telemetry: SessionTelemetry[]): DerivedStats {
         stats.lossPercent = loss / 10;
         stats.jitterMs = msg.RateFeedback.jitter_ms ?? stats.jitterMs;
       } else if ("StreamStats" in msg && msg.StreamStats) {
-        stats.framesDecoded = msg.StreamStats.frames_decoded ?? stats.framesDecoded;
-        stats.framesDropped = msg.StreamStats.frames_dropped ?? stats.framesDropped;
+        stats.framesDecoded =
+          msg.StreamStats.frames_decoded ?? stats.framesDecoded;
+        stats.framesDropped =
+          msg.StreamStats.frames_dropped ?? stats.framesDropped;
       } else if ("stream_count" in msg) {
         stats.streamCount = msg.stream_count ?? stats.streamCount;
       }
@@ -269,9 +307,15 @@ function computeStats(telemetry: SessionTelemetry[]): DerivedStats {
         active_display?: number;
         stream_index?: number;
       };
-      if (Array.isArray(multi.display_labels) && multi.display_labels.length > 0) {
+      if (
+        Array.isArray(multi.display_labels) &&
+        multi.display_labels.length > 0
+      ) {
         stats.displayLabels = multi.display_labels;
-        stats.streamCount = Math.max(stats.streamCount, multi.display_labels.length);
+        stats.streamCount = Math.max(
+          stats.streamCount,
+          multi.display_labels.length,
+        );
       }
       if (typeof multi.active_display === "number") {
         stats.activeIndex = multi.active_display;
@@ -279,7 +323,10 @@ function computeStats(telemetry: SessionTelemetry[]): DerivedStats {
         stats.activeIndex = multi.stream_index;
       }
     } else if (event.kind === "frame_decoded") {
-      stats.bitrateKbps = Math.max(stats.bitrateKbps, Math.round(event.bytes * 8 / 1000));
+      stats.bitrateKbps = Math.max(
+        stats.bitrateKbps,
+        Math.round((event.bytes * 8) / 1000),
+      );
       stats.lastKeyframe = event.keyframe;
     } else if (event.kind === "frame_rendered") {
       renderedFrames = event.rendered;

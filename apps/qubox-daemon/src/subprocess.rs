@@ -150,7 +150,8 @@ impl ManagedSubprocess {
                     }
                 }
             };
-            self.current_pid.store(0, std::sync::atomic::Ordering::SeqCst);
+            self.current_pid
+                .store(0, std::sync::atomic::Ordering::SeqCst);
 
             let code = exit_result.ok().and_then(|s| s.code());
             let reason = match code {
@@ -223,7 +224,8 @@ impl ManagedSubprocess {
             match spawn_child(&self.config).await {
                 Ok(new_child) => {
                     let pid = new_child.id().expect("child should have a PID after spawn");
-                    self.current_pid.store(pid, std::sync::atomic::Ordering::SeqCst);
+                    self.current_pid
+                        .store(pid, std::sync::atomic::Ordering::SeqCst);
                     *self.child.lock().await = Some(new_child);
                     let _ = self.event_tx.send(IpcEvent::SubprocessEvent {
                         label: self.label.clone(),

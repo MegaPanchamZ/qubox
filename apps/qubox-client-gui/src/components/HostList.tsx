@@ -14,7 +14,10 @@ type ConnectPhase =
   | { kind: "launching"; hostId: string }
   | { kind: "error"; hostId: string; message: string };
 
-export function HostList({ onStartSession, onPairAndStartSession }: HostListProps) {
+export function HostList({
+  onStartSession,
+  onPairAndStartSession,
+}: HostListProps) {
   const {
     knownHosts,
     discoveredHosts,
@@ -43,9 +46,10 @@ export function HostList({ onStartSession, onPairAndStartSession }: HostListProp
     setDiscovering(true);
     setDiscoveryError(null);
     try {
-      const hosts = await invoke<
-        { peer_id: string; device_name: string; transports: string[] }[]
-      >("discover_lan_hosts");
+      const hosts =
+        await invoke<
+          { peer_id: string; device_name: string; transports: string[] }[]
+        >("discover_lan_hosts");
       setDiscoveredHosts(
         hosts.map((h) => ({
           peerId: h.peer_id,
@@ -94,7 +98,9 @@ export function HostList({ onStartSession, onPairAndStartSession }: HostListProp
   };
 
   const isBusyFor = (hostId: string) =>
-    connect.kind !== "idle" && connect.kind !== "error" && connect.hostId === hostId;
+    connect.kind !== "idle" &&
+    connect.kind !== "error" &&
+    connect.hostId === hostId;
 
   const ttlSeconds = 4 * 60;
   const loading = knownHosts.length === 0 && loadError === null;
@@ -117,7 +123,10 @@ export function HostList({ onStartSession, onPairAndStartSession }: HostListProp
             onClick={() => void discover()}
             type="button"
           >
-            <span className="material-symbols-outlined" style={{ fontSize: "1.1rem" }}>
+            <span
+              className="material-symbols-outlined"
+              style={{ fontSize: "1.1rem" }}
+            >
               {discovering ? "sync" : "search"}
             </span>
             {discovering ? "Scanning…" : "Discover LAN"}
@@ -127,20 +136,23 @@ export function HostList({ onStartSession, onPairAndStartSession }: HostListProp
 
       {loading ? (
         <p className="state">
-          <span className="material-symbols-outlined" style={{ fontSize: "1.1rem" }}>sync</span>
+          <span
+            className="material-symbols-outlined"
+            style={{ fontSize: "1.1rem" }}
+          >
+            sync
+          </span>
           Loading paired hosts…
         </p>
       ) : null}
-      {loadError ? (
-        <p className="state state--error">{loadError}</p>
-      ) : null}
+      {loadError ? <p className="state state--error">{loadError}</p> : null}
       {discoveryError ? (
         <p className="state state--error">Discovery failed: {discoveryError}</p>
       ) : null}
       {connect.kind === "waiting_for_approval" ? (
         <p className="state state--info" data-testid="pair-pending">
-          Waiting for host to accept the pairing request
-          {" "}<code>{connect.hostId.slice(0, 12)}…</code>
+          Waiting for host to accept the pairing request{" "}
+          <code>{connect.hostId.slice(0, 12)}…</code>
           <button
             className="secondary-button"
             onClick={() => cancelPendingPair(connect.hostId)}
@@ -159,7 +171,14 @@ export function HostList({ onStartSession, onPairAndStartSession }: HostListProp
         <h2 className="section__title">Paired hosts</h2>
         {!loading && combined.known.length === 0 ? (
           <div className="empty-state">
-            <span className="material-symbols-outlined" style={{ fontSize: "2.5rem", color: "var(--muted)", marginBottom: "12px" }}>
+            <span
+              className="material-symbols-outlined"
+              style={{
+                fontSize: "2.5rem",
+                color: "var(--muted)",
+                marginBottom: "12px",
+              }}
+            >
               sensors_off
             </span>
             <p className="empty-state__title">No paired hosts yet</p>
@@ -183,7 +202,8 @@ export function HostList({ onStartSession, onPairAndStartSession }: HostListProp
                     onClick={() => void handleConnect(host.hostPeerId)}
                     type="button"
                   >
-                    {connect.kind === "launching" && connect.hostId === host.hostPeerId
+                    {connect.kind === "launching" &&
+                    connect.hostId === host.hostPeerId
                       ? "Launching…"
                       : "Connect"}
                   </button>
@@ -198,9 +218,14 @@ export function HostList({ onStartSession, onPairAndStartSession }: HostListProp
         <h2 className="section__title">Discovered on LAN</h2>
         {combined.discovered.length === 0 ? (
           <p className="state">
-            <span className="material-symbols-outlined" style={{ fontSize: "1.1rem" }}>info</span>
-            Run a discovery scan to populate this list. Results expire after
-            {" "}{Math.round(ttlSeconds / 60)} minutes.
+            <span
+              className="material-symbols-outlined"
+              style={{ fontSize: "1.1rem" }}
+            >
+              info
+            </span>
+            Run a discovery scan to populate this list. Results expire after{" "}
+            {Math.round(ttlSeconds / 60)} minutes.
           </p>
         ) : (
           <div className="host-grid">
@@ -211,7 +236,10 @@ export function HostList({ onStartSession, onPairAndStartSession }: HostListProp
               );
               const waiting = isBusyFor(host.peerId);
               return (
-                <article className="host-card host-card--discovered" key={host.peerId}>
+                <article
+                  className="host-card host-card--discovered"
+                  key={host.peerId}
+                >
                   <p className="host-card__label">Discovered</p>
                   <h2>{host.deviceName || host.peerId}</h2>
                   <p className="host-card__id">{host.peerId}</p>

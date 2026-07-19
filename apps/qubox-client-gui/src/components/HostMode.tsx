@@ -59,9 +59,7 @@ export function HostModeView() {
     try {
       await invoke("set_setting", { key: "privacy_mode", value: mode });
       const flags = privacyCliFlags(mode);
-      const note = isRunning
-        ? " (applies on next Start host)"
-        : "";
+      const note = isRunning ? " (applies on next Start host)" : "";
       setStatus(
         `Privacy mode: ${flags.privacyMode} (enable on start: ${flags.enableOnSessionStart})${note}.`,
       );
@@ -121,12 +119,26 @@ export function HostModeView() {
                 color: "var(--color-error)",
               }}
             >
-              <span className="material-symbols-outlined" style={{ fontSize: "1.1rem" }}>stop</span>
+              <span
+                className="material-symbols-outlined"
+                style={{ fontSize: "1.1rem" }}
+              >
+                stop
+              </span>
               {stopArmed ? "Confirm stop host" : "Stop host"}
             </button>
           ) : (
-            <button className="primary-button" onClick={() => void start()} type="button">
-              <span className="material-symbols-outlined" style={{ fontSize: "1.1rem" }}>play_arrow</span>
+            <button
+              className="primary-button"
+              onClick={() => void start()}
+              type="button"
+            >
+              <span
+                className="material-symbols-outlined"
+                style={{ fontSize: "1.1rem" }}
+              >
+                play_arrow
+              </span>
               Start host
             </button>
           )}
@@ -134,10 +146,15 @@ export function HostModeView() {
         <div className="settings-field">
           <span>Privacy mode (host)</span>
           <p className="subtitle">
-            Applied when you Start host. Blank overlay is the portable fallback; vkms needs Linux setup.
+            Applied when you Start host. Blank overlay is the portable fallback;
+            vkms needs Linux setup.
           </p>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-            <button className="secondary-button" onClick={() => void savePrivacy("none")} type="button">
+            <button
+              className="secondary-button"
+              onClick={() => void savePrivacy("none")}
+              type="button"
+            >
               Off
             </button>
             <button
@@ -147,14 +164,20 @@ export function HostModeView() {
             >
               Blank overlay
             </button>
-            <button className="secondary-button" onClick={() => void savePrivacy("vkms")} type="button">
+            <button
+              className="secondary-button"
+              onClick={() => void savePrivacy("vkms")}
+              type="button"
+            >
               vkms (Linux)
             </button>
           </div>
         </div>
         <div className="settings-field">
           <span>Display streams</span>
-          <p className="subtitle">Single stream, multi-display, or all-display capture on the host.</p>
+          <p className="subtitle">
+            Single stream, multi-display, or all-display capture on the host.
+          </p>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             {STREAM_MODES.map((m) => (
               <button

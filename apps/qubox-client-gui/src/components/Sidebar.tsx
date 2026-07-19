@@ -1,10 +1,5 @@
 export type View =
-  | "hosts"
-  | "host"
-  | "pairing"
-  | "sessions"
-  | "sync"
-  | "settings";
+  "hosts" | "host" | "pairing" | "sessions" | "sync" | "settings";
 
 type SidebarProps = {
   view: View;
@@ -54,7 +49,10 @@ export function Sidebar({
               onClick={() => onChange(item.id)}
               type="button"
             >
-              <span className="material-symbols-outlined rail__icon" aria-hidden="true">
+              <span
+                className="material-symbols-outlined rail__icon"
+                aria-hidden="true"
+              >
                 {item.icon}
               </span>
               <span className="rail__label">{item.label}</span>

@@ -911,10 +911,10 @@ async fn main() -> anyhow::Result<()> {
                             | ServerMessage::ShareLinkCreated { .. }
                             | ServerMessage::SessionKicked { .. }
                             | ServerMessage::PairingRevoked { .. }
-                    | ServerMessage::SessionConsentPending { .. }
-                    | ServerMessage::SessionBundleAccepted(_)
-                    | ServerMessage::SignedKillReceived(_)
-                    | ServerMessage::SessionActivity { .. } => {}
+                            | ServerMessage::SessionConsentPending { .. }
+                            | ServerMessage::SessionBundleAccepted(_)
+                            | ServerMessage::SignedKillReceived(_)
+                            | ServerMessage::SessionActivity { .. } => {}
                         }
                     }
                     Message::Close(_) => break,
@@ -966,7 +966,7 @@ async fn main() -> anyhow::Result<()> {
                 video: None,
                 permissions: Default::default(),
                 sync_only,
-            consent_id: None,
+                consent_id: None,
             };
 
             send_json(&mut writer, &ClientMessage::StartSession(request)).await?;
@@ -1031,10 +1031,10 @@ async fn main() -> anyhow::Result<()> {
                             | ServerMessage::ShareLinkCreated { .. }
                             | ServerMessage::SessionKicked { .. }
                             | ServerMessage::PairingRevoked { .. }
-                    | ServerMessage::SessionConsentPending { .. }
-                    | ServerMessage::SessionBundleAccepted(_)
-                    | ServerMessage::SignedKillReceived(_)
-                    | ServerMessage::SessionActivity { .. } => {}
+                            | ServerMessage::SessionConsentPending { .. }
+                            | ServerMessage::SessionBundleAccepted(_)
+                            | ServerMessage::SignedKillReceived(_)
+                            | ServerMessage::SessionActivity { .. } => {}
                         }
                     }
                     Message::Close(_) => break,

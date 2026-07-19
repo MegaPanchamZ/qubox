@@ -9,21 +9,29 @@
   --panel-strong: rgba(10, 10, 10, 0.85);
   --text: #e5e2e3;
   --muted: #929189;
-  --primary: #ffb951;         /* Qubox Amber */
-  --primary-strong: #e69512;  /* Qubox Dark Amber */
-  --tertiary: #e9ddff;        /* Qubox Violet */
+  --primary: #ffb951; /* Qubox Amber */
+  --primary-strong: #e69512; /* Qubox Dark Amber */
+  --tertiary: #e9ddff; /* Qubox Violet */
   --danger: #ffb4ab;
   --warning: #fbbf24;
   --success: #34d399;
-  
+
   font-family: "Hanken Grotesk", "Segoe UI", sans-serif;
   line-height: 1.5;
   font-weight: 400;
   color: var(--text);
   background-color: var(--bg);
   background-image:
-    radial-gradient(ellipse at top left, rgba(90, 40, 190, 0.06), transparent 38%),
-    radial-gradient(ellipse at bottom right, rgba(255, 185, 81, 0.03), transparent 38%);
+    radial-gradient(
+      ellipse at top left,
+      rgba(90, 40, 190, 0.06),
+      transparent 38%
+    ),
+    radial-gradient(
+      ellipse at bottom right,
+      rgba(255, 185, 81, 0.03),
+      transparent 38%
+    );
   background-attachment: fixed;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
@@ -68,7 +76,10 @@ body {
 }
 
 /* ── Typography & Headings ────────────────────────────────────────── */
-h1, h2, h3, h4 {
+h1,
+h2,
+h3,
+h4 {
   font-family: "Hanken Grotesk", sans-serif;
   font-weight: 700;
   color: #ffffff;
@@ -354,7 +365,9 @@ h1 {
 }
 
 /* ── Glassmorphic Cards & Layout Containers ────────────────────────── */
-.host-grid, .pairing-grid, .settings-grid {
+.host-grid,
+.pairing-grid,
+.settings-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
   gap: 20px;
@@ -379,7 +392,9 @@ h1 {
 }
 
 /* Hover effects for interactive cards */
-.host-card:hover, .pairing-card:hover, .session-card:hover {
+.host-card:hover,
+.pairing-card:hover,
+.session-card:hover {
   border-color: rgba(255, 185, 81, 0.25);
   box-shadow: 0 12px 40px rgba(0, 0, 0, 0.6);
   transform: translateY(-2px);

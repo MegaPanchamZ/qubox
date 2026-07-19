@@ -130,8 +130,8 @@ pub async fn start_session(
         video: None,
         permissions: Default::default(),
         sync_only: false,
-            consent_id: None,
-            };
+        consent_id: None,
+    };
 
     send_json(&mut writer, &ClientMessage::StartSession(request)).await?;
 

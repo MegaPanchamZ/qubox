@@ -10,7 +10,10 @@ import {
 import type { ReactNode } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
-import { isPermissionGranted, requestPermission } from "@tauri-apps/plugin-notification";
+import {
+  isPermissionGranted,
+  requestPermission,
+} from "@tauri-apps/plugin-notification";
 
 export type KnownHost = {
   hostPeerId: string;
@@ -149,7 +152,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
     Record<string, StderrLine[]>
   >({});
   const [pendingPairings, setPendingPairings] = useState<PairingRequest[]>([]);
-  const [hostPendingPairings, setHostPendingPairings] = useState<HostPendingPairing[]>([]);
+  const [hostPendingPairings, setHostPendingPairings] = useState<
+    HostPendingPairing[]
+  >([]);
   const [lanIp, setLanIp] = useState<string | null>(null);
   const [notificationsAllowed, setNotificationsAllowed] = useState(false);
 
@@ -380,25 +385,30 @@ export function AppProvider({ children }: { children: ReactNode }) {
       });
       unlistens.push(unlistenPairing);
 
-      const unlistenStderr = await listen<StderrLine>("session://stderr", (event) => {
-        const { sessionId, line, level, receivedAt } = event.payload;
-        const bucket = pendingStderr.current.get(sessionId) ?? [];
-        bucket.push({
-          sessionId,
-          line,
-          level,
-          receivedAt: receivedAt ?? Date.now(),
-        });
-        pendingStderr.current.set(sessionId, bucket);
-        scheduleFlush();
-      });
+      const unlistenStderr = await listen<StderrLine>(
+        "session://stderr",
+        (event) => {
+          const { sessionId, line, level, receivedAt } = event.payload;
+          const bucket = pendingStderr.current.get(sessionId) ?? [];
+          bucket.push({
+            sessionId,
+            line,
+            level,
+            receivedAt: receivedAt ?? Date.now(),
+          });
+          pendingStderr.current.set(sessionId, bucket);
+          scheduleFlush();
+        },
+      );
       unlistens.push(unlistenStderr);
 
       const unlistenEnded = await listen<{ sessionId: string; reason: string }>(
         "session://ended",
         (event) => {
           const sessionId = event.payload.sessionId;
-          setActiveSessions((prev) => prev.filter((s) => s.sessionId !== sessionId));
+          setActiveSessions((prev) =>
+            prev.filter((s) => s.sessionId !== sessionId),
+          );
           setTelemetryBySession((prev) => {
             const next = { ...prev };
             delete next[sessionId];
@@ -414,25 +424,25 @@ export function AppProvider({ children }: { children: ReactNode }) {
       );
       unlistens.push(unlistenEnded);
 
-      const unlistenStarted = await listen<{ sessionId: string; hostId: string }>(
-        "session://started",
-        (event) => {
-          setActiveSessions((prev) => {
-            if (prev.some((s) => s.sessionId === event.payload.sessionId)) {
-              return prev;
-            }
-            return [
-              ...prev,
-              {
-                sessionId: event.payload.sessionId,
-                hostId: event.payload.hostId,
-                pid: null,
-                startedAt: Date.now(),
-              },
-            ];
-          });
-        },
-      );
+      const unlistenStarted = await listen<{
+        sessionId: string;
+        hostId: string;
+      }>("session://started", (event) => {
+        setActiveSessions((prev) => {
+          if (prev.some((s) => s.sessionId === event.payload.sessionId)) {
+            return prev;
+          }
+          return [
+            ...prev,
+            {
+              sessionId: event.payload.sessionId,
+              hostId: event.payload.hostId,
+              pid: null,
+              startedAt: Date.now(),
+            },
+          ];
+        });
+      });
       unlistens.push(unlistenStarted);
 
       const unlistenDaemon = await listen<{
@@ -468,26 +478,25 @@ export function AppProvider({ children }: { children: ReactNode }) {
       // Unified pairing broker: the Rust bridge polls the host-agent
       // HTTP endpoint on a 3s cadence and pushes the full snapshot here.
       // The frontend no longer runs its own setInterval.
-      const unlistenPairingBridge = await listen<{ pending: HostPendingPairing[] }>(
-        "daemon://pairing-updated",
-        (event) => {
-          const list = Array.isArray(event.payload?.pending)
-            ? event.payload.pending
-            : [];
-          setHostPendingPairings(list);
-          if (notificationsAllowed) {
-            for (const req of list) {
-              if (!notifiedHostPairings.current.has(req.request_id)) {
-                notifiedHostPairings.current.add(req.request_id);
-                void invoke("notify_user", {
-                  title: "Qubox pairing request",
-                  body: `${req.client_name || req.client_label || "A client"} wants to pair`,
-                }).catch(() => {});
-              }
+      const unlistenPairingBridge = await listen<{
+        pending: HostPendingPairing[];
+      }>("daemon://pairing-updated", (event) => {
+        const list = Array.isArray(event.payload?.pending)
+          ? event.payload.pending
+          : [];
+        setHostPendingPairings(list);
+        if (notificationsAllowed) {
+          for (const req of list) {
+            if (!notifiedHostPairings.current.has(req.request_id)) {
+              notifiedHostPairings.current.add(req.request_id);
+              void invoke("notify_user", {
+                title: "Qubox pairing request",
+                body: `${req.client_name || req.client_label || "A client"} wants to pair`,
+              }).catch(() => {});
             }
           }
-        },
-      );
+        }
+      });
       unlistens.push(unlistenPairingBridge);
     };
 
@@ -501,7 +510,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
         clearTimeout(flushTimer.current);
       }
     };
-  }, [notificationsAllowed, refreshConflictCount, refreshRecentSessions, scheduleFlush]);
+  }, [
+    notificationsAllowed,
+    refreshConflictCount,
+    refreshRecentSessions,
+    scheduleFlush,
+  ]);
 
   const value = useMemo<AppContextValue>(
     () => ({
@@ -548,7 +562,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
         );
       },
       removePairingRequest: (requestId) => {
-        setPendingPairings((prev) => prev.filter((p) => p.requestId !== requestId));
+        setPendingPairings((prev) =>
+          prev.filter((p) => p.requestId !== requestId),
+        );
       },
       removeHostPendingPairing: (requestId) => {
         setHostPendingPairings((prev) =>
@@ -591,7 +607,9 @@ export function useApp(): AppContextValue {
   return ctx;
 }
 
-function mapTelemetry(payload: { op: string } & Record<string, unknown>): SessionTelemetry {
+function mapTelemetry(
+  payload: { op: string } & Record<string, unknown>,
+): SessionTelemetry {
   switch (payload.op) {
     case "frame_decoded":
       return {

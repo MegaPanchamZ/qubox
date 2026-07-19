@@ -26,12 +26,16 @@ export function privacyCliFlags(mode: PrivacyMode): {
   };
 }
 
-export function normalizePrivacyMode(raw: string | null | undefined): PrivacyMode {
+export function normalizePrivacyMode(
+  raw: string | null | undefined,
+): PrivacyMode {
   if (raw && isPrivacyMode(raw)) return raw;
   return "none";
 }
 
-export function normalizeStreamMode(raw: string | null | undefined): StreamMode {
+export function normalizeStreamMode(
+  raw: string | null | undefined,
+): StreamMode {
   if (raw && isStreamMode(raw)) return raw;
   return "single-stream";
 }

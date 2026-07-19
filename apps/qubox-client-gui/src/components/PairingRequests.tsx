@@ -64,7 +64,11 @@ export function PairingRequests() {
     setBusy(requestId);
     try {
       await invoke("host_pairing_decide", { requestId, approved });
-      setToast(approved ? "Client approved — they can start a session" : "Request rejected");
+      setToast(
+        approved
+          ? "Client approved — they can start a session"
+          : "Request rejected",
+      );
       removeHostPendingPairing(requestId);
     } catch (e) {
       setToast(`Decision failed: ${e}`);
@@ -129,7 +133,12 @@ export function PairingRequests() {
                     onClick={() => void decideHost(r.request_id, false)}
                     type="button"
                   >
-                    <span className="material-symbols-outlined" style={{ fontSize: "1.1rem" }}>close</span>
+                    <span
+                      className="material-symbols-outlined"
+                      style={{ fontSize: "1.1rem" }}
+                    >
+                      close
+                    </span>
                     Reject
                   </button>
                   <button
@@ -138,7 +147,12 @@ export function PairingRequests() {
                     onClick={() => void decideHost(r.request_id, true)}
                     type="button"
                   >
-                    <span className="material-symbols-outlined" style={{ fontSize: "1.1rem" }}>check</span>
+                    <span
+                      className="material-symbols-outlined"
+                      style={{ fontSize: "1.1rem" }}
+                    >
+                      check
+                    </span>
                     {busy === r.request_id ? "…" : "Approve"}
                   </button>
                 </div>
@@ -171,7 +185,12 @@ export function PairingRequests() {
                     onClick={() => void rejectClient(request)}
                     type="button"
                   >
-                    <span className="material-symbols-outlined" style={{ fontSize: "1.1rem" }}>close</span>
+                    <span
+                      className="material-symbols-outlined"
+                      style={{ fontSize: "1.1rem" }}
+                    >
+                      close
+                    </span>
                     Reject
                   </button>
                   <button
@@ -179,7 +198,12 @@ export function PairingRequests() {
                     onClick={() => void acceptClient(request)}
                     type="button"
                   >
-                    <span className="material-symbols-outlined" style={{ fontSize: "1.1rem" }}>check</span>
+                    <span
+                      className="material-symbols-outlined"
+                      style={{ fontSize: "1.1rem" }}
+                    >
+                      check
+                    </span>
                     Approve
                   </button>
                 </div>

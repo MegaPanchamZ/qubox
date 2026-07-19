@@ -104,9 +104,8 @@ export function FileSyncView() {
       setConflicts(payload.conflicts ?? []);
       setRules(payload.rules ?? []);
       setConflictCount((payload.conflicts ?? []).length);
-      const mergedJobs = (payload.jobs ?? []).length > 0
-        ? payload.jobs
-        : payload.drain ?? [];
+      const mergedJobs =
+        (payload.jobs ?? []).length > 0 ? payload.jobs : (payload.drain ?? []);
       setJobs(mergedJobs);
     } catch (e) {
       setError(String(e));
@@ -294,13 +293,22 @@ export function FileSyncView() {
           <p className="eyebrow">File Sync</p>
           <h1>Context-aware sync</h1>
           <p className="subtitle">
-            Never-track patterns (defaults include <code>.git</code>), process-locked
-            rules, outbox jobs, and binary conflict resolution. Files sync over
-            paired QUIC sessions only — not the cloud.
+            Never-track patterns (defaults include <code>.git</code>),
+            process-locked rules, outbox jobs, and binary conflict resolution.
+            Files sync over paired QUIC sessions only — not the cloud.
           </p>
         </div>
-        <button className="secondary-button" onClick={() => void refresh()} type="button">
-          <span className="material-symbols-outlined" style={{ fontSize: "1.1rem" }}>refresh</span>
+        <button
+          className="secondary-button"
+          onClick={() => void refresh()}
+          type="button"
+        >
+          <span
+            className="material-symbols-outlined"
+            style={{ fontSize: "1.1rem" }}
+          >
+            refresh
+          </span>
           Refresh
         </button>
       </header>
@@ -316,13 +324,38 @@ export function FileSyncView() {
             presets for emulator saves or dev trees. Presets append to your list
             so custom rules are preserved.
           </p>
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
-            <button className="secondary-button" onClick={() => void applyPreset("default")} type="button">
-              <span className="material-symbols-outlined" style={{ fontSize: "1.1rem" }}>bookmark</span>
+          <div
+            style={{
+              display: "flex",
+              gap: 8,
+              flexWrap: "wrap",
+              marginBottom: 8,
+            }}
+          >
+            <button
+              className="secondary-button"
+              onClick={() => void applyPreset("default")}
+              type="button"
+            >
+              <span
+                className="material-symbols-outlined"
+                style={{ fontSize: "1.1rem" }}
+              >
+                bookmark
+              </span>
               Preset: default
             </button>
-            <button className="secondary-button" onClick={() => void applyPreset("git")} type="button">
-              <span className="material-symbols-outlined" style={{ fontSize: "1.1rem" }}>bookmark</span>
+            <button
+              className="secondary-button"
+              onClick={() => void applyPreset("git")}
+              type="button"
+            >
+              <span
+                className="material-symbols-outlined"
+                style={{ fontSize: "1.1rem" }}
+              >
+                bookmark
+              </span>
               Preset: git
             </button>
             <button
@@ -330,30 +363,74 @@ export function FileSyncView() {
               onClick={() => void applyPreset("emulator-saves")}
               type="button"
             >
-              <span className="material-symbols-outlined" style={{ fontSize: "1.1rem" }}>bookmark</span>
+              <span
+                className="material-symbols-outlined"
+                style={{ fontSize: "1.1rem" }}
+              >
+                bookmark
+              </span>
               Preset: emulator-saves
             </button>
-            <button className="secondary-button" onClick={() => void applyPreset("dev")} type="button">
-              <span className="material-symbols-outlined" style={{ fontSize: "1.1rem" }}>bookmark</span>
+            <button
+              className="secondary-button"
+              onClick={() => void applyPreset("dev")}
+              type="button"
+            >
+              <span
+                className="material-symbols-outlined"
+                style={{ fontSize: "1.1rem" }}
+              >
+                bookmark
+              </span>
               Preset: dev
             </button>
           </div>
-          <p className="subtitle" style={{ margin: "4px 0 12px", fontSize: "0.82rem", opacity: 0.8, lineHeight: "1.4" }}>
-            <strong>Preset contents:</strong><br />
-            • <code>default</code>: VCS paths, node_modules, target, build output, temp files.<br />
-            • <code>git</code>: Excludes only <code>.git</code> repository folders.<br />
-            • <code>emulator-saves</code>: Excludes ROMs and archives (<code>*.gba, *.nes, *.rom, *.iso</code>) but keeps saves.<br />
-            • <code>dev</code>: Excludes dependency trees and build artifacts (<code>node_modules, target, .venv, __pycache__, *.o</code>).
+          <p
+            className="subtitle"
+            style={{
+              margin: "4px 0 12px",
+              fontSize: "0.82rem",
+              opacity: 0.8,
+              lineHeight: "1.4",
+            }}
+          >
+            <strong>Preset contents:</strong>
+            <br />• <code>default</code>: VCS paths, node_modules, target, build
+            output, temp files.
+            <br />• <code>git</code>: Excludes only <code>.git</code> repository
+            folders.
+            <br />• <code>emulator-saves</code>: Excludes ROMs and archives (
+            <code>*.gba, *.nes, *.rom, *.iso</code>) but keeps saves.
+            <br />• <code>dev</code>: Excludes dependency trees and build
+            artifacts (
+            <code>node_modules, target, .venv, __pycache__, *.o</code>).
           </p>
           <ul className="host-list" style={{ marginBottom: 12 }}>
             {ignores.length === 0 ? (
               <li className="state">No global ignore patterns.</li>
             ) : (
               ignores.map((p) => (
-                <li key={p} className="host-card" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <li
+                  key={p}
+                  className="host-card"
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                  }}
+                >
                   <code>{p}</code>
-                  <button className="secondary-button" onClick={() => void removeIgnore(p)} type="button">
-                    <span className="material-symbols-outlined" style={{ fontSize: "1.1rem" }}>delete</span>
+                  <button
+                    className="secondary-button"
+                    onClick={() => void removeIgnore(p)}
+                    type="button"
+                  >
+                    <span
+                      className="material-symbols-outlined"
+                      style={{ fontSize: "1.1rem" }}
+                    >
+                      delete
+                    </span>
                     Remove
                   </button>
                 </li>
@@ -367,8 +444,17 @@ export function FileSyncView() {
               placeholder=".git, *.rom, node_modules, …"
               value={newIgnore}
             />
-            <button className="secondary-button" onClick={() => void addIgnore()} type="button">
-              <span className="material-symbols-outlined" style={{ fontSize: "1.1rem" }}>add</span>
+            <button
+              className="secondary-button"
+              onClick={() => void addIgnore()}
+              type="button"
+            >
+              <span
+                className="material-symbols-outlined"
+                style={{ fontSize: "1.1rem" }}
+              >
+                add
+              </span>
               Add
             </button>
           </div>
@@ -390,21 +476,77 @@ export function FileSyncView() {
                     ? c.remoteModifiedMs > c.localModifiedMs
                     : false;
                 return (
-                  <li key={c.conflictId} className="host-card" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                  <li
+                    key={c.conflictId}
+                    className="host-card"
+                    style={{
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: 12,
+                    }}
+                  >
                     <div>
-                      <strong style={{ fontSize: "1.05rem", color: "var(--primary)" }}>Conflict: {c.conflictId}</strong>
+                      <strong
+                        style={{ fontSize: "1.05rem", color: "var(--primary)" }}
+                      >
+                        Conflict: {c.conflictId}
+                      </strong>
                       <div className="subtitle" style={{ marginTop: 4 }}>
-                        Peer: <code>{c.peerId}</code> · Detected: {formatDate(c.createdAtMs)}
+                        Peer: <code>{c.peerId}</code> · Detected:{" "}
+                        {formatDate(c.createdAtMs)}
                       </div>
                     </div>
 
-                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, backgroundColor: "rgba(255, 255, 255, 0.02)", padding: 12, borderRadius: 6 }}>
-                      <div style={{ borderRight: "1px solid rgba(229, 226, 221, 0.08)", paddingRight: 16 }}>
-                        <span style={{ fontWeight: 600, display: "flex", alignItems: "center", gap: 6, fontSize: "0.9rem" }}>
+                    <div
+                      style={{
+                        display: "grid",
+                        gridTemplateColumns: "1fr 1fr",
+                        gap: 16,
+                        backgroundColor: "rgba(255, 255, 255, 0.02)",
+                        padding: 12,
+                        borderRadius: 6,
+                      }}
+                    >
+                      <div
+                        style={{
+                          borderRight: "1px solid rgba(229, 226, 221, 0.08)",
+                          paddingRight: 16,
+                        }}
+                      >
+                        <span
+                          style={{
+                            fontWeight: 600,
+                            display: "flex",
+                            alignItems: "center",
+                            gap: 6,
+                            fontSize: "0.9rem",
+                          }}
+                        >
                           Local Copy
-                          {localNewer ? <span style={{ fontSize: "0.7rem", backgroundColor: "var(--primary)", color: "#000", padding: "1px 5px", borderRadius: 3, fontWeight: "bold" }}>NEWER</span> : null}
+                          {localNewer ? (
+                            <span
+                              style={{
+                                fontSize: "0.7rem",
+                                backgroundColor: "var(--primary)",
+                                color: "#000",
+                                padding: "1px 5px",
+                                borderRadius: 3,
+                                fontWeight: "bold",
+                              }}
+                            >
+                              NEWER
+                            </span>
+                          ) : null}
                         </span>
-                        <div style={{ fontSize: "0.8rem", marginTop: 4, wordBreak: "break-all", opacity: 0.9, lineHeight: "1.4" }}>
+                        <div
+                          style={{
+                            fontSize: "0.8rem",
+                            marginTop: 4,
+                            wordBreak: "break-all",
+                            opacity: 0.9,
+                            lineHeight: "1.4",
+                          }}
+                        >
                           Path: <code>{c.localPath}</code>
                           <br />
                           Size: {formatBytes(c.localSize)}
@@ -414,11 +556,40 @@ export function FileSyncView() {
                       </div>
 
                       <div style={{ paddingLeft: 8 }}>
-                        <span style={{ fontWeight: 600, display: "flex", alignItems: "center", gap: 6, fontSize: "0.9rem" }}>
+                        <span
+                          style={{
+                            fontWeight: 600,
+                            display: "flex",
+                            alignItems: "center",
+                            gap: 6,
+                            fontSize: "0.9rem",
+                          }}
+                        >
                           Remote Copy (Quarantined)
-                          {remoteNewer ? <span style={{ fontSize: "0.7rem", backgroundColor: "var(--primary)", color: "#000", padding: "1px 5px", borderRadius: 3, fontWeight: "bold" }}>NEWER</span> : null}
+                          {remoteNewer ? (
+                            <span
+                              style={{
+                                fontSize: "0.7rem",
+                                backgroundColor: "var(--primary)",
+                                color: "#000",
+                                padding: "1px 5px",
+                                borderRadius: 3,
+                                fontWeight: "bold",
+                              }}
+                            >
+                              NEWER
+                            </span>
+                          ) : null}
                         </span>
-                        <div style={{ fontSize: "0.8rem", marginTop: 4, wordBreak: "break-all", opacity: 0.9, lineHeight: "1.4" }}>
+                        <div
+                          style={{
+                            fontSize: "0.8rem",
+                            marginTop: 4,
+                            wordBreak: "break-all",
+                            opacity: 0.9,
+                            lineHeight: "1.4",
+                          }}
+                        >
                           Path: <code>{c.remotePath}</code>
                           <br />
                           Size: {formatBytes(c.remoteSize)}
@@ -438,7 +609,9 @@ export function FileSyncView() {
                       </button>
                       <button
                         className="secondary-button"
-                        onClick={() => void resolve(c.conflictId, "keep-remote")}
+                        onClick={() =>
+                          void resolve(c.conflictId, "keep-remote")
+                        }
                         type="button"
                       >
                         Keep remote
@@ -453,8 +626,8 @@ export function FileSyncView() {
                     </div>
                     <p className="subtitle">
                       Keep both keeps the local file at its original path and
-                      renames the quarantined remote copy to
-                      {" "}<code>{`{name} (remote).{ext}`}</code>.
+                      renames the quarantined remote copy to{" "}
+                      <code>{`{name} (remote).{ext}`}</code>.
                     </p>
                   </li>
                 );
@@ -467,26 +640,30 @@ export function FileSyncView() {
           <span>Watch rules</span>
           <ul className="host-list">
             {rules.length === 0 ? (
-              <li className="state">No directories monitored. Browse to add one.</li>
+              <li className="state">
+                No directories monitored. Browse to add one.
+              </li>
             ) : (
               rules.map((r) => (
                 <li key={r.ruleId} className="host-card">
                   <code>{r.ruleId}</code> {r.enabled ? "on" : "off"}
                   <div className="subtitle">
-                    paths={r.paths.join(", ")} · processes={r.processNames.join(", ")} · peers=
+                    paths={r.paths.join(", ")} · processes=
+                    {r.processNames.join(", ")} · peers=
                     {r.peerIds.join(", ")}
                   </div>
                   <div className="subtitle">
-                    max file size={formatBytes(r.maxFileBytes)} · ignores={r.ignoreGlobs.join(", ") || "global only"}
+                    max file size={formatBytes(r.maxFileBytes)} · ignores=
+                    {r.ignoreGlobs.join(", ") || "global only"}
                   </div>
                 </li>
               ))
             )}
           </ul>
           <p className="subtitle">
-            Global ignore rules automatically apply to every watch rule.
-            Files larger than the rule's <code>max file size</code> are skipped
-            by the sync engine.
+            Global ignore rules automatically apply to every watch rule. Files
+            larger than the rule's <code>max file size</code> are skipped by the
+            sync engine.
           </p>
           <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
             <input
@@ -496,17 +673,36 @@ export function FileSyncView() {
               value={rulePath}
               style={{ flex: 1 }}
             />
-            <button className="secondary-button" onClick={() => void pickFolder()} type="button">
-              <span className="material-symbols-outlined" style={{ fontSize: "1.1rem" }}>folder_open</span>
+            <button
+              className="secondary-button"
+              onClick={() => void pickFolder()}
+              type="button"
+            >
+              <span
+                className="material-symbols-outlined"
+                style={{ fontSize: "1.1rem" }}
+              >
+                folder_open
+              </span>
               Browse
             </button>
           </div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 8 }}>
+          <div
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              gap: 6,
+              marginBottom: 8,
+            }}
+          >
             <select
               className="text-input"
               value={rulePeer}
               onChange={(e) => setRulePeer(e.target.value)}
-              style={{ backgroundColor: "var(--bg-accent)", color: "var(--text)" }}
+              style={{
+                backgroundColor: "var(--bg-accent)",
+                color: "var(--text)",
+              }}
             >
               <option value="">-- Select Peer ID from Paired Hosts --</option>
               {knownHosts.map((h) => (
@@ -529,8 +725,17 @@ export function FileSyncView() {
             value={ruleProcess}
             style={{ marginBottom: 8 }}
           />
-          <button className="secondary-button" onClick={() => void addRule()} type="button">
-            <span className="material-symbols-outlined" style={{ fontSize: "1.1rem" }}>add</span>
+          <button
+            className="secondary-button"
+            onClick={() => void addRule()}
+            type="button"
+          >
+            <span
+              className="material-symbols-outlined"
+              style={{ fontSize: "1.1rem" }}
+            >
+              add
+            </span>
             Add rule
           </button>
         </div>
@@ -545,8 +750,17 @@ export function FileSyncView() {
               value={pushPath}
               style={{ flex: 1 }}
             />
-            <button className="secondary-button" onClick={() => void pickFile()} type="button">
-              <span className="material-symbols-outlined" style={{ fontSize: "1.1rem" }}>file_open</span>
+            <button
+              className="secondary-button"
+              onClick={() => void pickFile()}
+              type="button"
+            >
+              <span
+                className="material-symbols-outlined"
+                style={{ fontSize: "1.1rem" }}
+              >
+                file_open
+              </span>
               Browse
             </button>
           </div>
@@ -555,12 +769,22 @@ export function FileSyncView() {
               Path does not exist on this machine.
             </p>
           ) : null}
-          <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 8 }}>
+          <div
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              gap: 6,
+              marginBottom: 8,
+            }}
+          >
             <select
               className="text-input"
               value={pushPeer}
               onChange={(e) => setPushPeer(e.target.value)}
-              style={{ backgroundColor: "var(--bg-accent)", color: "var(--text)" }}
+              style={{
+                backgroundColor: "var(--bg-accent)",
+                color: "var(--text)",
+              }}
             >
               <option value="">-- Select Target Peer ID --</option>
               {knownHosts.map((h) => (
@@ -578,11 +802,18 @@ export function FileSyncView() {
           </div>
           <button
             className="secondary-button"
-            disabled={!canQueuePush(pushPath, pushPeer) || pushPathValid === false}
+            disabled={
+              !canQueuePush(pushPath, pushPeer) || pushPathValid === false
+            }
             onClick={() => void pushNow()}
             type="button"
           >
-            <span className="material-symbols-outlined" style={{ fontSize: "1.1rem" }}>send</span>
+            <span
+              className="material-symbols-outlined"
+              style={{ fontSize: "1.1rem" }}
+            >
+              send
+            </span>
             Queue push
           </button>
         </div>
@@ -602,9 +833,22 @@ export function FileSyncView() {
                     className="host-card"
                     style={{ display: "flex", flexDirection: "column", gap: 6 }}
                   >
-                    <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
-                      <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                        <code>{j.jobId}</code> · {statusText} → {j.targetPeer} (retries {j.retryCount})
+                    <div
+                      style={{
+                        display: "flex",
+                        justifyContent: "space-between",
+                        gap: 8,
+                      }}
+                    >
+                      <span
+                        style={{
+                          overflow: "hidden",
+                          textOverflow: "ellipsis",
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        <code>{j.jobId}</code> · {statusText} → {j.targetPeer}{" "}
+                        (retries {j.retryCount})
                       </span>
                       {isTerminal ? (
                         <div style={{ display: "flex", gap: 6 }}>
@@ -626,7 +870,10 @@ export function FileSyncView() {
                       ) : null}
                     </div>
                     {j.lastError ? (
-                      <p className="state state--error" style={{ fontSize: "0.8rem" }}>
+                      <p
+                        className="state state--error"
+                        style={{ fontSize: "0.8rem" }}
+                      >
                         last error: {truncateStatus(j.lastError)}
                       </p>
                     ) : null}

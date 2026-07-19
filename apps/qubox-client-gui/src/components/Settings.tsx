@@ -39,8 +39,10 @@ export function SettingsView() {
 
   useEffect(() => {
     if (!settings) return;
-    const decoder = settings.decoderBackend === "hw-decode" ? "hw-decode" : "ffmpeg";
-    const clip = (settings.clipboardSync ?? "off") as FormState["clipboardSync"];
+    const decoder =
+      settings.decoderBackend === "hw-decode" ? "hw-decode" : "ffmpeg";
+    const clip = (settings.clipboardSync ??
+      "off") as FormState["clipboardSync"];
     setForm({
       signalingServer: settings.signalingServer ?? "",
       bitrateKbps: settings.bitrateKbps ?? 20_000,
@@ -119,8 +121,8 @@ export function SettingsView() {
           <p className="eyebrow">Settings</p>
           <h1>Client preferences</h1>
           <p className="subtitle">
-            Changes are written through the daemon IPC. The signaling server
-            and decoder backend are applied to the next launched session.
+            Changes are written through the daemon IPC. The signaling server and
+            decoder backend are applied to the next launched session.
           </p>
         </div>
       </header>
@@ -135,7 +137,10 @@ export function SettingsView() {
           <input
             className="text-input"
             onChange={(event) =>
-              setForm((prev) => ({ ...prev, signalingServer: event.target.value }))
+              setForm((prev) => ({
+                ...prev,
+                signalingServer: event.target.value,
+              }))
             }
             type="text"
             value={form.signalingServer}
@@ -147,7 +152,10 @@ export function SettingsView() {
           ) : null}
           <button
             className="secondary-button"
-            disabled={Boolean(formErrors.signaling_server) || savingKey === "signaling_server"}
+            disabled={
+              Boolean(formErrors.signaling_server) ||
+              savingKey === "signaling_server"
+            }
             onClick={() =>
               void save(
                 "signaling_server",
@@ -157,7 +165,10 @@ export function SettingsView() {
             }
             type="button"
           >
-            <span className="material-symbols-outlined" style={{ fontSize: "1.1rem" }}>
+            <span
+              className="material-symbols-outlined"
+              style={{ fontSize: "1.1rem" }}
+            >
               {savingKey === "signaling_server" ? "sync" : "save"}
             </span>
             {savingKey === "signaling_server" ? "Saving…" : "Save"}
@@ -171,7 +182,10 @@ export function SettingsView() {
             max={BITRATE_MAX}
             min={BITRATE_MIN}
             onChange={(event) =>
-              setForm((prev) => ({ ...prev, bitrateKbps: Number(event.target.value) }))
+              setForm((prev) => ({
+                ...prev,
+                bitrateKbps: Number(event.target.value),
+              }))
             }
             step={1000}
             type="number"
@@ -184,7 +198,9 @@ export function SettingsView() {
           ) : null}
           <button
             className="secondary-button"
-            disabled={Boolean(formErrors.bitrate_kbps) || savingKey === "bitrate_kbps"}
+            disabled={
+              Boolean(formErrors.bitrate_kbps) || savingKey === "bitrate_kbps"
+            }
             onClick={() =>
               void save(
                 "bitrate_kbps",
@@ -194,7 +210,10 @@ export function SettingsView() {
             }
             type="button"
           >
-            <span className="material-symbols-outlined" style={{ fontSize: "1.1rem" }}>
+            <span
+              className="material-symbols-outlined"
+              style={{ fontSize: "1.1rem" }}
+            >
               {savingKey === "bitrate_kbps" ? "sync" : "save"}
             </span>
             {savingKey === "bitrate_kbps" ? "Saving…" : "Save"}
@@ -208,7 +227,10 @@ export function SettingsView() {
             max={FPS_MAX}
             min={FPS_MIN}
             onChange={(event) =>
-              setForm((prev) => ({ ...prev, fpsCap: Number(event.target.value) }))
+              setForm((prev) => ({
+                ...prev,
+                fpsCap: Number(event.target.value),
+              }))
             }
             type="number"
             value={Number.isFinite(form.fpsCap) ? form.fpsCap : ""}
@@ -221,10 +243,15 @@ export function SettingsView() {
           <button
             className="secondary-button"
             disabled={Boolean(formErrors.fps_cap) || savingKey === "fps_cap"}
-            onClick={() => void save("fps_cap", numToString(form.fpsCap), "FPS cap")}
+            onClick={() =>
+              void save("fps_cap", numToString(form.fpsCap), "FPS cap")
+            }
             type="button"
           >
-            <span className="material-symbols-outlined" style={{ fontSize: "1.1rem" }}>
+            <span
+              className="material-symbols-outlined"
+              style={{ fontSize: "1.1rem" }}
+            >
               {savingKey === "fps_cap" ? "sync" : "save"}
             </span>
             {savingKey === "fps_cap" ? "Saving…" : "Save"}
@@ -238,7 +265,8 @@ export function SettingsView() {
             onChange={(event) =>
               setForm((prev) => ({
                 ...prev,
-                decoderBackend: event.target.value === "hw-decode" ? "hw-decode" : "ffmpeg",
+                decoderBackend:
+                  event.target.value === "hw-decode" ? "hw-decode" : "ffmpeg",
               }))
             }
             value={form.decoderBackend}
@@ -255,10 +283,19 @@ export function SettingsView() {
           <button
             className="secondary-button"
             disabled={savingKey === "decoder_backend"}
-            onClick={() => void save("decoder_backend", form.decoderBackend, "decoder backend")}
+            onClick={() =>
+              void save(
+                "decoder_backend",
+                form.decoderBackend,
+                "decoder backend",
+              )
+            }
             type="button"
           >
-            <span className="material-symbols-outlined" style={{ fontSize: "1.1rem" }}>
+            <span
+              className="material-symbols-outlined"
+              style={{ fontSize: "1.1rem" }}
+            >
               {savingKey === "decoder_backend" ? "sync" : "save"}
             </span>
             {savingKey === "decoder_backend" ? "Saving…" : "Save"}
@@ -278,11 +315,18 @@ export function SettingsView() {
             className="secondary-button"
             disabled={savingKey === "mic_enabled"}
             onClick={() =>
-              void save("mic_enabled", boolToString(form.micEnabled), "microphone forwarding")
+              void save(
+                "mic_enabled",
+                boolToString(form.micEnabled),
+                "microphone forwarding",
+              )
             }
             type="button"
           >
-            <span className="material-symbols-outlined" style={{ fontSize: "1.1rem" }}>
+            <span
+              className="material-symbols-outlined"
+              style={{ fontSize: "1.1rem" }}
+            >
               {savingKey === "mic_enabled" ? "sync" : "save"}
             </span>
             {savingKey === "mic_enabled" ? "Saving…" : "Save"}
@@ -309,10 +353,15 @@ export function SettingsView() {
           <button
             className="secondary-button"
             disabled={savingKey === "clipboard_sync"}
-            onClick={() => void save("clipboard_sync", form.clipboardSync, "clipboard sync")}
+            onClick={() =>
+              void save("clipboard_sync", form.clipboardSync, "clipboard sync")
+            }
             type="button"
           >
-            <span className="material-symbols-outlined" style={{ fontSize: "1.1rem" }}>
+            <span
+              className="material-symbols-outlined"
+              style={{ fontSize: "1.1rem" }}
+            >
               {savingKey === "clipboard_sync" ? "sync" : "save"}
             </span>
             {savingKey === "clipboard_sync" ? "Saving…" : "Save"}
@@ -323,7 +372,10 @@ export function SettingsView() {
           <input
             checked={form.statsOverlay}
             onChange={(event) =>
-              setForm((prev) => ({ ...prev, statsOverlay: event.target.checked }))
+              setForm((prev) => ({
+                ...prev,
+                statsOverlay: event.target.checked,
+              }))
             }
             type="checkbox"
           />
@@ -332,11 +384,18 @@ export function SettingsView() {
             className="secondary-button"
             disabled={savingKey === "stats_overlay"}
             onClick={() =>
-              void save("stats_overlay", boolToString(form.statsOverlay), "stats overlay")
+              void save(
+                "stats_overlay",
+                boolToString(form.statsOverlay),
+                "stats overlay",
+              )
             }
             type="button"
           >
-            <span className="material-symbols-outlined" style={{ fontSize: "1.1rem" }}>
+            <span
+              className="material-symbols-outlined"
+              style={{ fontSize: "1.1rem" }}
+            >
               {savingKey === "stats_overlay" ? "sync" : "save"}
             </span>
             {savingKey === "stats_overlay" ? "Saving…" : "Save"}
@@ -347,7 +406,10 @@ export function SettingsView() {
           <input
             checked={form.autoStartHost}
             onChange={(event) =>
-              setForm((prev) => ({ ...prev, autoStartHost: event.target.checked }))
+              setForm((prev) => ({
+                ...prev,
+                autoStartHost: event.target.checked,
+              }))
             }
             type="checkbox"
           />
@@ -364,7 +426,10 @@ export function SettingsView() {
             }
             type="button"
           >
-            <span className="material-symbols-outlined" style={{ fontSize: "1.1rem" }}>
+            <span
+              className="material-symbols-outlined"
+              style={{ fontSize: "1.1rem" }}
+            >
               {savingKey === "auto_start_host" ? "sync" : "save"}
             </span>
             {savingKey === "auto_start_host" ? "Saving…" : "Save"}

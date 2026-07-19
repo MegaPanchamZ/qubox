@@ -16,7 +16,12 @@ function Shell() {
   const [ready, setReady] = useState(false);
   const [needsOnboarding, setNeedsOnboarding] = useState(false);
   const [drainHint, setDrainHint] = useState<string | null>(null);
-  const { pendingPairings, activeSessions, conflictCount, ensureNotifications } = useApp();
+  const {
+    pendingPairings,
+    activeSessions,
+    conflictCount,
+    ensureNotifications,
+  } = useApp();
 
   useEffect(() => {
     let cancelled = false;

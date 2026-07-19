@@ -201,10 +201,7 @@ impl std::fmt::Display for BundleVerifyError {
             BundleVerifyError::Expired {
                 exp_unix_ms,
                 now_unix_ms,
-            } => write!(
-                f,
-                "bundle expired at {exp_unix_ms}, now {now_unix_ms}"
-            ),
+            } => write!(f, "bundle expired at {exp_unix_ms}, now {now_unix_ms}"),
             BundleVerifyError::Jti(e) => write!(f, "{e}"),
             BundleVerifyError::MalformedSid(s) => write!(f, "sid {s:?} is not a valid UUID"),
         }
@@ -231,13 +228,9 @@ pub fn filter_ice_servers_to_allowlist(
             .filter(|u| !allow.contains(u.as_str()))
             .collect();
         if !offending.is_empty() {
-            bail!(
-                "ICE server URL(s) not on signed allowlist: {:?}",
-                offending
-            );
+            bail!("ICE server URL(s) not on signed allowlist: {:?}", offending);
         }
-        if !qubox_proto::ice_url_is_valid(&server.urls.iter().next().cloned().unwrap_or_default())
-        {
+        if !qubox_proto::ice_url_is_valid(&server.urls.iter().next().cloned().unwrap_or_default()) {
             bail!("ICE server URL scheme is not stun:/turn:/turns:");
         }
         out.push(server.clone());
@@ -746,8 +739,7 @@ impl SignalingState {
         let Some(jwks) = self.jwks.as_ref() else {
             return Err(BundleVerifyError::JwksNotConfigured);
         };
-        jwks
-            .verify_bundle(envelope)
+        jwks.verify_bundle(envelope)
             .await
             .map_err(BundleVerifyError::Jwks)?;
         let payload: ViewerToHost = envelope
@@ -791,8 +783,7 @@ impl SignalingState {
         let Some(jwks) = self.jwks.as_ref() else {
             return Err(BundleVerifyError::JwksNotConfigured);
         };
-        jwks
-            .verify_bundle(envelope)
+        jwks.verify_bundle(envelope)
             .await
             .map_err(BundleVerifyError::Jwks)?;
         let pk = jwks
@@ -801,9 +792,7 @@ impl SignalingState {
             .map_err(BundleVerifyError::Jwks)?;
         let vk = ed25519_dalek::VerifyingKey::from_bytes(&pk)
             .map_err(|e| BundleVerifyError::BadKey(e.to_string()))?;
-        let payload: IceAllowlist = envelope
-            .decode(&vk)
-            .map_err(BundleVerifyError::Decode)?;
+        let payload: IceAllowlist = envelope.decode(&vk).map_err(BundleVerifyError::Decode)?;
         if payload.exp as u64 <= now_unix_ms {
             return Err(BundleVerifyError::Expired {
                 exp_unix_ms: payload.exp as u64,
@@ -827,8 +816,7 @@ impl SignalingState {
         let Some(jwks) = self.jwks.as_ref() else {
             return Err(BundleVerifyError::JwksNotConfigured);
         };
-        jwks
-            .verify_bundle(envelope)
+        jwks.verify_bundle(envelope)
             .await
             .map_err(BundleVerifyError::Jwks)?;
         let pk = jwks
@@ -837,9 +825,7 @@ impl SignalingState {
             .map_err(BundleVerifyError::Jwks)?;
         let vk = ed25519_dalek::VerifyingKey::from_bytes(&pk)
             .map_err(|e| BundleVerifyError::BadKey(e.to_string()))?;
-        let payload: SignedKill = envelope
-            .decode(&vk)
-            .map_err(BundleVerifyError::Decode)?;
+        let payload: SignedKill = envelope.decode(&vk).map_err(BundleVerifyError::Decode)?;
         if payload.exp as u64 <= now_unix_ms {
             return Err(BundleVerifyError::Expired {
                 exp_unix_ms: payload.exp as u64,
@@ -920,9 +906,7 @@ impl SignalingState {
         let peers = self.peers.read().await;
         peers
             .values()
-            .find(|p| {
-                p.descriptor.role == PeerRole::Host && p.descriptor.device_id == device_id
-            })
+            .find(|p| p.descriptor.role == PeerRole::Host && p.descriptor.device_id == device_id)
             .map(|p| p.descriptor.peer_id)
     }
 
@@ -1170,7 +1154,7 @@ impl SignalingState {
                 .authorize(SessionAuthzRequest {
                     client_device_id: pending.client.device_id,
                     host_device_id: host.device_id,
-            consent_id: None,
+                    consent_id: None,
                     share_link_redemption: false,
                 })
                 .await
@@ -1187,7 +1171,8 @@ impl SignalingState {
                         .await;
                     bail!("pairing denied by policy: {reason}");
                 }
-                Ok(SessionAuthzDecision::Pending { .. }) | Ok(SessionAuthzDecision::Allow { .. }) => {
+                Ok(SessionAuthzDecision::Pending { .. })
+                | Ok(SessionAuthzDecision::Allow { .. }) => {
                     // Pending still allows pair so session can re-authorize after consent.
                 }
                 Err(e) => bail!("session authorize failed: {e}"),
@@ -1454,13 +1439,18 @@ impl SignalingState {
         client_peer_id: Uuid,
     ) -> anyhow::Result<()> {
         let is_host = actor.peer_id == host_peer_id;
-        let is_device_owner = actor.role == PeerRole::Client && actor.device_id == {
-            let peers = self.peers.read().await;
-            peers.get(&host_peer_id).map(|p| p.descriptor.device_id)
-        }.unwrap_or(Uuid::nil());
+        let is_device_owner = actor.role == PeerRole::Client
+            && actor.device_id == {
+                let peers = self.peers.read().await;
+                peers.get(&host_peer_id).map(|p| p.descriptor.device_id)
+            }
+            .unwrap_or(Uuid::nil());
 
         if !is_host && !is_device_owner {
-            bail!("only host {} or authorized local client may revoke this grant", host_peer_id);
+            bail!(
+                "only host {} or authorized local client may revoke this grant",
+                host_peer_id
+            );
         }
         let removed = self
             .pairing_store
@@ -2229,9 +2219,10 @@ async fn handle_socket(socket: WebSocket, state: SignalingState) {
                     Ok(viewer) => {
                         if let Some(allow_env) = bundle_request.ice_allowlist.as_ref() {
                             if let Err(e) = state.verify_ice_allowlist(allow_env, now).await {
-                                let _ = outbound_tx.send(ServerMessage::Error(
-                                    ErrorMessage::new("ice_allowlist_rejected", e.to_string()),
-                                ));
+                                let _ = outbound_tx.send(ServerMessage::Error(ErrorMessage::new(
+                                    "ice_allowlist_rejected",
+                                    e.to_string(),
+                                )));
                                 return;
                             }
                         }
@@ -2261,8 +2252,8 @@ async fn handle_socket(socket: WebSocket, state: SignalingState) {
 
                 match state.start_session(peer.clone(), request).await {
                     Ok(plan) => {
-                        let _ = outbound_tx
-                            .send(ServerMessage::SessionBundleAccepted(info.clone()));
+                        let _ =
+                            outbound_tx.send(ServerMessage::SessionBundleAccepted(info.clone()));
                         if let Some(host_peer_id) =
                             state.find_host_peer_for_device(host_device_id).await
                         {
@@ -2345,12 +2336,10 @@ async fn handle_socket(socket: WebSocket, state: SignalingState) {
                                 let _ = state
                                     .send_to(
                                         host_peer_id,
-                                        ServerMessage::SignedKillReceived(
-                                            SignedKillEnvelope {
-                                                payload: kill_for_echo,
-                                                envelope: envelope.clone(),
-                                            },
-                                        ),
+                                        ServerMessage::SignedKillReceived(SignedKillEnvelope {
+                                            payload: kill_for_echo,
+                                            envelope: envelope.clone(),
+                                        }),
                                     )
                                     .await;
                             }
@@ -2649,11 +2638,8 @@ mod tests {
         // 1st and 2nd heartbeats: must NOT trigger a presence event.
         for n in 1..=2 {
             state.handle_heartbeat(host.peer_id).await;
-            let got = tokio::time::timeout(
-                std::time::Duration::from_millis(50),
-                client_rx.recv(),
-            )
-            .await;
+            let got =
+                tokio::time::timeout(std::time::Duration::from_millis(50), client_rx.recv()).await;
             assert!(
                 got.is_err(),
                 "unexpected presence event after heartbeat #{n}",
@@ -2662,13 +2648,11 @@ mod tests {
 
         // 3rd heartbeat: MUST trigger exactly one presence event.
         state.handle_heartbeat(host.peer_id).await;
-        let after_three = tokio::time::timeout(
-            std::time::Duration::from_millis(500),
-            client_rx.recv(),
-        )
-        .await
-        .expect("presence after 3rd heartbeat within 500ms")
-        .expect("presence channel still open");
+        let after_three =
+            tokio::time::timeout(std::time::Duration::from_millis(500), client_rx.recv())
+                .await
+                .expect("presence after 3rd heartbeat within 500ms")
+                .expect("presence channel still open");
         match after_three {
             ServerMessage::Presence(ev) => {
                 assert!(ev.connected, "presence must be connected=true");
@@ -2683,11 +2667,8 @@ mod tests {
         // 4th, 5th heartbeats: again no event.
         for n in 4..=5 {
             state.handle_heartbeat(host.peer_id).await;
-            let got = tokio::time::timeout(
-                std::time::Duration::from_millis(50),
-                client_rx.recv(),
-            )
-            .await;
+            let got =
+                tokio::time::timeout(std::time::Duration::from_millis(50), client_rx.recv()).await;
             assert!(
                 got.is_err(),
                 "unexpected presence event after heartbeat #{n}",
@@ -2696,13 +2677,11 @@ mod tests {
 
         // 6th heartbeat: another presence event (6 % 3 == 0).
         state.handle_heartbeat(host.peer_id).await;
-        let after_six = tokio::time::timeout(
-            std::time::Duration::from_millis(500),
-            client_rx.recv(),
-        )
-        .await
-        .expect("presence after 6th heartbeat within 500ms")
-        .expect("presence channel still open");
+        let after_six =
+            tokio::time::timeout(std::time::Duration::from_millis(500), client_rx.recv())
+                .await
+                .expect("presence after 6th heartbeat within 500ms")
+                .expect("presence channel still open");
         assert!(matches!(
             after_six,
             ServerMessage::Presence(ref ev) if ev.connected && ev.peer.peer_id == host.peer_id
@@ -2726,11 +2705,7 @@ mod tests {
             .await
             .unwrap();
         state.handle_heartbeat(Uuid::new_v4()).await; // unknown peer_id
-        let got = tokio::time::timeout(
-            std::time::Duration::from_millis(50),
-            rx.recv(),
-        )
-        .await;
+        let got = tokio::time::timeout(std::time::Duration::from_millis(50), rx.recv()).await;
         assert!(got.is_err(), "unknown peer must not produce events");
     }
 
@@ -2765,23 +2740,17 @@ mod tests {
             state.handle_heartbeat(host_a.peer_id).await;
         }
 
-        let saw_a = tokio::time::timeout(
-            std::time::Duration::from_millis(500),
-            client_a_rx.recv(),
-        )
-        .await
-        .expect("tenant_a observer should see re-emitted presence")
-        .expect("tenant_a channel open");
+        let saw_a = tokio::time::timeout(std::time::Duration::from_millis(500), client_a_rx.recv())
+            .await
+            .expect("tenant_a observer should see re-emitted presence")
+            .expect("tenant_a channel open");
         assert!(matches!(
             saw_a,
             ServerMessage::Presence(ref ev) if ev.peer.peer_id == host_a.peer_id
         ));
 
-        let saw_b = tokio::time::timeout(
-            std::time::Duration::from_millis(50),
-            client_b_rx.recv(),
-        )
-        .await;
+        let saw_b =
+            tokio::time::timeout(std::time::Duration::from_millis(50), client_b_rx.recv()).await;
         assert!(
             saw_b.is_err(),
             "tenant_b observer must not receive cross-tenant presence"
@@ -2846,7 +2815,7 @@ mod tests {
             permissions: Default::default(),
             sync_only: false,
             consent_id: None,
-            };
+        };
 
         assert!(state
             .start_session(client.clone(), request.clone())
@@ -2902,8 +2871,8 @@ mod tests {
                     video: None,
                     permissions: Default::default(),
                     sync_only: false,
-            consent_id: None,
-        },
+                    consent_id: None,
+                },
             )
             .await
             .unwrap();
@@ -2971,8 +2940,8 @@ mod tests {
                     video: None,
                     permissions: Default::default(),
                     sync_only: false,
-            consent_id: None,
-        },
+                    consent_id: None,
+                },
             )
             .await
             .is_err());
@@ -3053,8 +3022,8 @@ mod tests {
                     video: None,
                     permissions: Default::default(),
                     sync_only: false,
-            consent_id: None,
-        },
+                    consent_id: None,
+                },
             )
             .await
             .unwrap();
@@ -3135,8 +3104,8 @@ mod tests {
                     video: None,
                     permissions: Default::default(),
                     sync_only: false,
-            consent_id: None,
-        },
+                    consent_id: None,
+                },
             )
             .await
             .unwrap();
@@ -3821,7 +3790,9 @@ mod tests {
 
     impl jwks::JwksFetcher for FakeJwks {
         fn fetch(&self, _url: &str) -> jwks::JwksFetchFuture {
-            let fail = self.fail_next.swap(false, std::sync::atomic::Ordering::SeqCst);
+            let fail = self
+                .fail_next
+                .swap(false, std::sync::atomic::Ordering::SeqCst);
             let bytes = self.bytes.lock().ok().and_then(|g| g.clone());
             Box::pin(async move {
                 if fail {
@@ -3925,7 +3896,10 @@ mod tests {
             .verify_viewer_to_host(&env, &host_device_id, now + 1)
             .await
             .unwrap_err();
-        assert!(matches!(err, BundleVerifyError::Jti(jti_cache::JtiError::Replay)));
+        assert!(matches!(
+            err,
+            BundleVerifyError::Jti(jti_cache::JtiError::Replay)
+        ));
     }
 
     #[tokio::test]
@@ -3994,23 +3968,19 @@ mod tests {
         let host_id = Uuid::new_v4();
         let client_id = Uuid::new_v4();
         // Plant an active session with no outbound subscribers.
-        state
-            .sessions
-            .write()
-            .await
-            .insert(
-                session_id,
-                ActiveSession {
-                    host_peer_id: host_id,
-                    client_peer_id: client_id,
-                    transport: TransportKind::WebRtc,
-                    codec: VideoCodec::H264,
-                    host_credential: SessionCredential::new_legacy_token(1),
-                    client_credential: SessionCredential::new_legacy_token(1),
-                    expires_unix_millis: 1_700_000_900_000,
-                    permissions: SessionPermissions::default(),
-                },
-            );
+        state.sessions.write().await.insert(
+            session_id,
+            ActiveSession {
+                host_peer_id: host_id,
+                client_peer_id: client_id,
+                transport: TransportKind::WebRtc,
+                codec: VideoCodec::H264,
+                host_credential: SessionCredential::new_legacy_token(1),
+                client_credential: SessionCredential::new_legacy_token(1),
+                expires_unix_millis: 1_700_000_900_000,
+                permissions: SessionPermissions::default(),
+            },
+        );
 
         let kill = SignedKill {
             v: 1,
