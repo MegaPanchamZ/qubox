@@ -226,8 +226,13 @@ export function FileSyncView() {
 
   const addRule = async () => {
     try {
+      // Paths are taken as a single string to avoid breaking on commas
+      // inside real directory names ("/Users/dev/Projects/App, Final").
+      // Process names and peer IDs are domain identifiers and can still
+      // be a comma-separated list.
+      const paths = rulePath.trim() ? [rulePath.trim()] : [];
       await invoke("sync_add_rule", {
-        paths: splitCsvPaths(rulePath),
+        paths,
         processNames: splitCsvPaths(ruleProcess),
         peerIds: splitCsvPaths(rulePeer),
         ignoreGlobs: [] as string[],
