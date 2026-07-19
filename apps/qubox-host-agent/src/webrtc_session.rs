@@ -444,8 +444,27 @@ pub async fn dispatch_signal(
     session_id: Uuid,
     signal: SessionSignal,
 ) -> Result<bool> {
-    let session = registry.lock().await.get(&session_id).cloned();
+    // Retry briefly: when the host registers a session it does so after
+    // some setup latency (ffmpeg spawn, NAL parser warmup). The browser
+    // may fire the SDP offer over the relay before the registry sees the
+    // insert. Without retry we'd silently drop the offer and the peer
+    // connection would never advance past ice-connecting.
+    let mut session = registry.lock().await.get(&session_id).cloned();
+    if session.is_none() {
+        for _ in 0..50 {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            session = registry.lock().await.get(&session_id).cloned();
+            if session.is_some() {
+                break;
+            }
+        }
+    }
     let Some(session) = session else {
+        tracing::warn!(
+            %session_id,
+            ?signal,
+            "no session in registry after 1s; signaling dropped"
+        );
         return Ok(false);
     };
     match signal {
