@@ -31,13 +31,41 @@ pub struct PendingPairingView {
 pub struct PairingUiState {
     pending: Arc<Mutex<HashMap<Uuid, PendingPairingView>>>,
     decisions: mpsc::UnboundedSender<(Uuid, bool)>,
+    /// Sessions awaiting operator consent (Phase 2 toast gate).
+    /// Independent of pairing UI so the operator can approve access
+    /// without re-confirming a previously-paired device.
+    pending_sessions: Arc<Mutex<HashMap<Uuid, PendingSessionView>>>,
+    session_decisions: mpsc::UnboundedSender<(Uuid, bool)>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PendingSessionView {
+    pub session_id: Uuid,
+    pub client_peer_id: Uuid,
+    pub client_name: String,
+    pub received_at_unix_ms: u64,
 }
 
 impl PairingUiState {
     pub fn new(decisions: mpsc::UnboundedSender<(Uuid, bool)>) -> Self {
+        let (session_tx, _session_rx) = mpsc::unbounded_channel();
         Self {
             pending: Arc::new(Mutex::new(HashMap::new())),
             decisions,
+            pending_sessions: Arc::new(Mutex::new(HashMap::new())),
+            session_decisions: session_tx,
+        }
+    }
+
+    pub fn new_with_session_decisions(
+        decisions: mpsc::UnboundedSender<(Uuid, bool)>,
+        session_decisions: mpsc::UnboundedSender<(Uuid, bool)>,
+    ) -> Self {
+        Self {
+            pending: Arc::new(Mutex::new(HashMap::new())),
+            decisions,
+            pending_sessions: Arc::new(Mutex::new(HashMap::new())),
+            session_decisions,
         }
     }
 
@@ -58,6 +86,32 @@ impl PairingUiState {
 
     pub async fn remove(&self, request_id: Uuid) {
         self.pending.lock().await.remove(&request_id);
+    }
+
+    pub async fn push_session(
+        &self,
+        session_id: Uuid,
+        client_peer_id: Uuid,
+        client_name: String,
+    ) {
+        let view = PendingSessionView {
+            session_id,
+            client_peer_id,
+            client_name,
+            received_at_unix_ms: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis() as u64)
+                .unwrap_or(0),
+        };
+        self.pending_sessions.lock().await.insert(session_id, view);
+    }
+
+    pub async fn remove_session(&self, session_id: Uuid) {
+        self.pending_sessions.lock().await.remove(&session_id);
+    }
+
+    pub fn session_decisions_tx(&self) -> mpsc::UnboundedSender<(Uuid, bool)> {
+        self.session_decisions.clone()
     }
 }
 
@@ -83,11 +137,37 @@ async fn decide(
     Json(serde_json::json!({ "ok": true }))
 }
 
+async fn list_pending_sessions(
+    State(state): State<PairingUiState>,
+) -> Json<Vec<PendingSessionView>> {
+    let g = state.pending_sessions.lock().await;
+    let mut v: Vec<_> = g.values().cloned().collect();
+    v.sort_by_key(|p| p.received_at_unix_ms);
+    Json(v)
+}
+
+#[derive(Deserialize)]
+struct DecideSessionBody {
+    session_id: Uuid,
+    approved: bool,
+}
+
+async fn decide_session(
+    State(state): State<PairingUiState>,
+    Json(body): Json<DecideSessionBody>,
+) -> Json<serde_json::Value> {
+    let _ = state.session_decisions.send((body.session_id, body.approved));
+    state.pending_sessions.lock().await.remove(&body.session_id);
+    Json(serde_json::json!({ "ok": true }))
+}
+
 /// Bind loopback control server. Returns the bound port.
 pub async fn spawn_pairing_ui(state: PairingUiState, preferred_port: u16) -> anyhow::Result<u16> {
     let app = Router::new()
         .route("/pending", get(list_pending))
         .route("/decide", post(decide))
+        .route("/pending-sessions", get(list_pending_sessions))
+        .route("/decide-session", post(decide_session))
         .route("/health", get(|| async { "ok" }))
         .with_state(state);
 

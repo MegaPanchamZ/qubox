@@ -593,6 +593,12 @@ async fn main() -> anyhow::Result<()> {
             Duration::from_secs(86_400),
         ),
     ));
+
+    // Build enforcement state up-front so the pairing-UI session-decision
+    // dispatcher (loopback HTTP) can deliver operator consent decisions
+    // to the toast gate without needing the full runtime yet.
+    let enforcement =
+        enforce::EnforcementState::from_env(&descriptor.peer_id.to_string());
     let idle_timeout = Duration::from_secs(args.idle_timeout_secs);
 
     tracing::info!(
@@ -651,7 +657,8 @@ async fn main() -> anyhow::Result<()> {
     // Interactive pairing UI (loopback HTTP) unless auto-approve is on.
     let pairing_ui = if !args.auto_approve_pairing {
         let (tx, mut rx) = tokio_mpsc::unbounded_channel::<(Uuid, bool)>();
-        let ui = pairing_ui::PairingUiState::new(tx);
+        let (session_tx, mut session_rx) = tokio_mpsc::unbounded_channel::<(Uuid, bool)>();
+        let ui = pairing_ui::PairingUiState::new_with_session_decisions(tx, session_tx);
         let port = pairing_ui::spawn_pairing_ui(ui.clone(), 17443).await?;
         tracing::info!(%port, "approve pairing at http://127.0.0.1:{port}/pending (GUI polls this)");
         let writer_dec = writer.clone();
@@ -665,6 +672,25 @@ async fn main() -> anyhow::Result<()> {
                     tracing::warn!(error = %e, %request_id, approved, "pairing decision send failed");
                 } else {
                     tracing::info!(%request_id, approved, "pairing decision sent to signaling");
+                }
+            }
+        });
+        let enforcement_for_sessions = enforcement.clone();
+        let ui_for_sessions = ui.clone();
+        tokio::spawn(async move {
+            while let Some((session_id, approved)) = session_rx.recv().await {
+                if let Some(pending) =
+                    enforcement_for_sessions.take_pending_decision(session_id)
+                {
+                    let _ = pending.deliver.send(approved);
+                    ui_for_sessions.remove_session(session_id).await;
+                    tracing::info!(%session_id, approved, "session operator decision delivered");
+                } else {
+                    tracing::debug!(
+                        %session_id,
+                        approved,
+                        "session decision arrived but gate already timed out"
+                    );
                 }
             }
         });
@@ -704,7 +730,7 @@ async fn main() -> anyhow::Result<()> {
         toast_gate: toast_gate.clone(),
         idle_timeout,
         host_device_id: descriptor.peer_id.to_string(),
-        enforcement: enforce::EnforcementState::from_env(&descriptor.peer_id.to_string()),
+        enforcement: enforcement.clone(),
         webrtc_sessions: Arc::new(Mutex::new(std::collections::HashMap::new())),
     };
 
@@ -1320,6 +1346,14 @@ async fn handle_server_message(
                             requested.session_id,
                             enforce::PendingDecision { deliver: dtx },
                         );
+                        if let Some(ui) = pairing_ui.as_ref() {
+                            ui.push_session(
+                                requested.session_id,
+                                requested.client.peer_id,
+                                requested.client.device_name.clone(),
+                            )
+                            .await;
+                        }
 
                         let accept =
                             match tokio::time::timeout(enforce::OPERATOR_DECISION_TIMEOUT, drx)
