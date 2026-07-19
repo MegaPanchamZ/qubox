@@ -830,7 +830,10 @@ mod tests {
             Some("https://accounts.example"),
         )
         .unwrap();
-        assert_eq!(db.get_setting("device_name").unwrap().as_deref(), Some("device"));
+        assert_eq!(
+            db.get_setting("device_name").unwrap().as_deref(),
+            Some("device")
+        );
         assert_eq!(
             db.get_setting("signaling_server").unwrap().as_deref(),
             Some("wss://signal.example/ws")

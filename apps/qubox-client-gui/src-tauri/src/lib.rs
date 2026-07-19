@@ -600,8 +600,7 @@ async fn list_recent_sessions(
 #[tauri::command]
 async fn detect_lan_ipv4() -> Result<String, String> {
     use std::net::UdpSocket;
-    let socket = UdpSocket::bind("0.0.0.0:0")
-        .map_err(|e| format!("udp bind: {e}"))?;
+    let socket = UdpSocket::bind("0.0.0.0:0").map_err(|e| format!("udp bind: {e}"))?;
     match socket.connect("1.1.1.1:80") {
         Ok(()) => match socket.local_addr() {
             Ok(addr) => {
@@ -659,7 +658,9 @@ fn host_pairing_base_url() -> String {
             if let Ok(port) = port_str.parse::<u16>() {
                 // Verify the port is active before using it (loopback is <1ms, so 50ms is very safe).
                 let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
-                if std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(50)).is_ok() {
+                if std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(50))
+                    .is_ok()
+                {
                     return format!("http://127.0.0.1:{port}");
                 } else {
                     // Stale port file - clean it up to prevent future stale hits
@@ -1128,7 +1129,9 @@ async fn sync_list_conflicts() -> Result<Vec<serde_json::Value>, String> {
                 let (local_size, local_modified) = match local_meta {
                     Ok(m) => {
                         let size = m.len();
-                        let modified = m.modified().ok()
+                        let modified = m
+                            .modified()
+                            .ok()
                             .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
                             .map(|d| d.as_secs());
                         (Some(size), modified)
@@ -1140,7 +1143,9 @@ async fn sync_list_conflicts() -> Result<Vec<serde_json::Value>, String> {
                 let (remote_size, remote_modified) = match remote_meta {
                     Ok(m) => {
                         let size = m.len();
-                        let modified = m.modified().ok()
+                        let modified = m
+                            .modified()
+                            .ok()
                             .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
                             .map(|d| d.as_secs());
                         (Some(size), modified)
@@ -1722,7 +1727,8 @@ fn spawn_pairing_broker(app: AppHandle) {
             tokio::time::sleep(Duration::from_secs(3)).await;
             let url = format!("{}/pending", host_pairing_base_url());
             let payload = match client.get(&url).send().await {
-                Ok(res) if res.status().is_success() => match res.json::<serde_json::Value>().await {
+                Ok(res) if res.status().is_success() => match res.json::<serde_json::Value>().await
+                {
                     Ok(value) => value,
                     Err(_) => serde_json::json!([]),
                 },
@@ -1937,9 +1943,7 @@ pub fn run() {
     app.run(|app_handle, event| {
         if let tauri::RunEvent::Exit = event {
             let registry = app_handle.state::<Arc<Mutex<SessionRegistry>>>();
-            let mut guard = tauri::async_runtime::block_on(async {
-                registry.lock().await
-            });
+            let mut guard = tauri::async_runtime::block_on(async { registry.lock().await });
             for (_, mut handle) in guard.sessions.drain() {
                 if let Some(tx) = handle.kill_tx.take() {
                     let _ = tx.send(());

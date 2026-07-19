@@ -2479,9 +2479,7 @@ mod tests {
             other => panic!("expected SyncJob after retry, got {other:?}"),
         }
         let _: IpcResponse = client
-            .call(&IpcRequest::SyncDismissJob {
-                job_id: retry_id,
-            })
+            .call(&IpcRequest::SyncDismissJob { job_id: retry_id })
             .await
             .unwrap();
     }
