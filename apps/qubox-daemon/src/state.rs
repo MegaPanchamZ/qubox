@@ -559,6 +559,20 @@ impl StateDb {
         Ok(())
     }
 
+    /// Re-queue a terminal (`Failed`) outbox job. Bumps `retry_count`,
+    /// resets `last_error`, and emits a `SyncJobUpdated` event so the
+    /// UI clears its stale terminal badge.
+    pub fn retry_outbox_job(&self, job_id: &str) -> Result<OutboxJob> {
+        let mut job = self
+            .get_outbox_job(job_id)?
+            .ok_or_else(|| anyhow::anyhow!("outbox job not found"))?;
+        job.status = OutboxStatus::Queued;
+        job.retry_count = job.retry_count.saturating_add(1);
+        job.last_error = None;
+        self.put_outbox_job(&job)?;
+        Ok(job)
+    }
+
     pub fn put_sync_conflict(&self, c: &SyncConflict) -> Result<()> {
         let bytes = bincode::serialize(c)?;
         let txn = self.db.begin_write()?;
@@ -882,6 +896,27 @@ mod tests {
         let (db, _dir) = temp_db();
         db.set_setting("k", "v").unwrap();
         assert_eq!(db.get_setting("k").unwrap(), Some("v".into()));
+    }
+
+    #[test]
+    fn state_outbox_retry_roundtrip() {
+        let (db, _dir) = temp_db();
+        let dir = tempfile::tempdir().unwrap();
+        let sav = dir.path().join("game.sav");
+        std::fs::write(&sav, b"data").unwrap();
+        let mut job = db
+            .enqueue_manual_push(sav.to_str().unwrap(), "peer-a", "node-local")
+            .unwrap();
+        job.status = OutboxStatus::Failed;
+        job.last_error = Some("network reset".into());
+        job.retry_count = 2;
+        db.put_outbox_job(&job).unwrap();
+        let retried = db.retry_outbox_job(&job.job_id).unwrap();
+        assert_eq!(retried.status, OutboxStatus::Queued);
+        assert_eq!(retried.retry_count, 3);
+        assert!(retried.last_error.is_none());
+        db.delete_outbox_job(&job.job_id).unwrap();
+        assert!(db.get_outbox_job(&job.job_id).unwrap().is_none());
     }
 
     #[test]

@@ -1,42 +1,39 @@
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useApp } from "./AppContext";
 import type { PairingRequest } from "./AppContext";
 import { SharePanel } from "./SharePanel";
 
-type HostPending = {
-  request_id: string;
-  client_peer_id: string;
-  client_device_id: string;
-  client_name: string;
-  client_label: string;
-  received_at_unix_ms: number;
-};
-
 export function PairingRequests() {
-  const { pendingPairings, removePairingRequest, settings } = useApp();
-  const [hostPending, setHostPending] = useState<HostPending[]>([]);
-  const [hostErr, setHostErr] = useState<string | null>(null);
+  const {
+    pendingPairings,
+    removePairingRequest,
+    hostPendingPairings,
+    removeHostPendingPairing,
+    settings,
+    ensureNotifications,
+  } = useApp();
   const [busy, setBusy] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const cloud = settings?.cloudMode ?? false;
+  const notifiedClientPairings = useRef<Set<string>>(new Set());
 
-  const refreshHost = useCallback(async () => {
-    try {
-      const list = await invoke<HostPending[]>("list_host_pending_pairings");
-      setHostPending(Array.isArray(list) ? list : []);
-      setHostErr(null);
-    } catch (e) {
-      setHostPending([]);
-      setHostErr(String(e));
-    }
-  }, []);
-
+  // Request notification permission once the user opens the Pairing view.
   useEffect(() => {
-    void refreshHost();
-    const t = setInterval(() => void refreshHost(), 2000);
-    return () => clearInterval(t);
-  }, [refreshHost]);
+    void ensureNotifications();
+  }, [ensureNotifications]);
+
+  // Native notification on a new client-side pairing acceptance.
+  useEffect(() => {
+    if (pendingPairings.length === 0) return;
+    const last = pendingPairings[pendingPairings.length - 1];
+    if (notifiedClientPairings.current.has(last.requestId)) return;
+    notifiedClientPairings.current.add(last.requestId);
+    void invoke("notify_user", {
+      title: "Qubox pairing accepted",
+      body: `Host ${last.hostId.slice(0, 12)}… accepted your request`,
+    }).catch(() => {});
+  }, [pendingPairings]);
 
   const acceptClient = async (request: PairingRequest) => {
     setBusy(request.requestId);
@@ -68,7 +65,7 @@ export function PairingRequests() {
     try {
       await invoke("host_pairing_decide", { requestId, approved });
       setToast(approved ? "Client approved — they can start a session" : "Request rejected");
-      await refreshHost();
+      removeHostPendingPairing(requestId);
     } catch (e) {
       setToast(`Decision failed: ${e}`);
     } finally {
@@ -104,21 +101,14 @@ export function PairingRequests() {
       <section className="settings-field" style={{ marginBottom: 20 }}>
         <span>As host — approve clients</span>
         <p className="subtitle">
-          When someone pairs with this PC, requests appear here (host-agent
-          must be running).
+          Pending pairing requests appear here as soon as the daemon bridge
+          (host-agent HTTP) reports them. Live, no polling on this page.
         </p>
-        {hostErr ? (
-          <p className="state state--error" style={{ fontSize: "0.85rem" }}>
-            {hostErr.includes("unreachable")
-              ? "Host agent not running — start hosting from Host mode or tray."
-              : hostErr}
-          </p>
-        ) : null}
-        {hostPending.length === 0 ? (
+        {hostPendingPairings.length === 0 ? (
           <p className="empty-state__body">No client requests right now.</p>
         ) : (
           <div className="pairing-grid">
-            {hostPending.map((r) => (
+            {hostPendingPairings.map((r) => (
               <article className="pairing-card" key={r.request_id}>
                 <p className="host-card__label">Wants to pair</p>
                 <h2>{r.client_name || r.client_label || "Client"}</h2>

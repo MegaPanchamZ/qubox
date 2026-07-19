@@ -1,10 +1,17 @@
 import { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { shareCodeSvg, shareLinkPayload } from "../lib/qr";
 
-/** Text share code + simple QR-like block (code string). Full QR lib optional. */
+type ShareLinkPayload = {
+  code: string;
+  urlHint: string;
+  expiresUnixMs: number;
+};
+
 export function SharePanel() {
   const [code, setCode] = useState<string | null>(null);
   const [url, setUrl] = useState<string | null>(null);
+  const [expiresMs, setExpiresMs] = useState<number | null>(null);
   const [redeem, setRedeem] = useState("");
   const [msg, setMsg] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -12,12 +19,10 @@ export function SharePanel() {
   const create = async () => {
     setErr(null);
     try {
-      const raw = await invoke<string>("create_share_link", { ttlSecs: 900 });
-      // CLI prints share code=… url=…
-      const codeM = /code=(\S+)/.exec(raw) ?? /"code"\s*:\s*"([^"]+)"/.exec(raw);
-      const urlM = /url=(\S+)/.exec(raw) ?? /"url_hint"\s*:\s*"([^"]+)"/.exec(raw);
-      setCode(codeM?.[1] ?? raw);
-      setUrl(urlM?.[1] ?? null);
+      const res = await invoke<ShareLinkPayload>("create_share_link", { ttlSecs: 900 });
+      setCode(res.code);
+      setUrl(res.urlHint || null);
+      setExpiresMs(res.expiresUnixMs || null);
       setMsg("Share link created (15 min)");
     } catch (e) {
       setErr(String(e));
@@ -34,6 +39,8 @@ export function SharePanel() {
     }
   };
 
+  const qrSvg = code ? shareCodeSvg(code) : null;
+
   return (
     <div className="settings-field">
       <span>Share link</span>
@@ -46,10 +53,27 @@ export function SharePanel() {
       {code ? (
         <div className="share-code-box">
           <code className="share-code">{code}</code>
-          {url ? <p className="subtitle">{url}</p> : null}
-          <pre className="share-qr-fallback" aria-label="Share code">
-            {`┌────────────┐\n│  ${code.slice(0, 8).padEnd(8)}  │\n│  QUBOX     │\n└────────────┘`}
-          </pre>
+          {url ? (
+            <p className="subtitle">
+              <a href={shareLinkPayload(code, url)} target="_blank" rel="noreferrer">
+                {shareLinkPayload(code, url)}
+              </a>
+            </p>
+          ) : null}
+          {expiresMs ? (
+            <p className="subtitle">
+              expires {new Date(expiresMs).toLocaleTimeString()}
+            </p>
+          ) : null}
+          {qrSvg ? (
+            <div
+              className="share-qr"
+              aria-label="Share code QR"
+              role="img"
+              style={{ maxWidth: 220, marginTop: 8 }}
+              dangerouslySetInnerHTML={{ __html: qrSvg }}
+            />
+          ) : null}
           <button
             className="secondary-button"
             onClick={() => void navigator.clipboard.writeText(code)}

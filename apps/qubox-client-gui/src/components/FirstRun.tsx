@@ -1,14 +1,14 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import {
   CLOUD_ACCOUNTS,
   CLOUD_SIGNALING,
-  DEFAULT_SELFHOST_SIGNALING,
   isValidEnrollCode,
   normalizeEnrollCode,
   resolveSignalingServer,
   type SetupMode,
 } from "../lib/firstRun";
+import { useApp } from "./AppContext";
 
 type FirstRunProps = {
   onDone: () => void;
@@ -17,16 +17,24 @@ type FirstRunProps = {
 type Step = "mode" | "details";
 
 export function FirstRun({ onDone }: FirstRunProps) {
+  const { lanIp } = useApp();
   const [step, setStep] = useState<Step>("mode");
   const [mode, setMode] = useState<SetupMode>("cloud");
   const [name, setName] = useState("My laptop");
   const [enrollCode, setEnrollCode] = useState("");
-  const [selfhostServer, setSelfhostServer] = useState(
-    DEFAULT_SELFHOST_SIGNALING,
-  );
+  const [selfhostServer, setSelfhostServer] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
+
+  // Pre-fill self-host signaling URL with the detected LAN IP so users
+  // don't accidentally copy `127.0.0.1` and break pairing for other
+  // machines. Empty string falls back to "must be typed".
+  useEffect(() => {
+    if (lanIp) {
+      setSelfhostServer((prev) => (prev ? prev : `ws://${lanIp}:7000/ws`));
+    }
+  }, [lanIp]);
 
   const pickMode = (m: SetupMode) => {
     setMode(m);
@@ -35,20 +43,33 @@ export function FirstRun({ onDone }: FirstRunProps) {
   };
 
   const finish = async () => {
+    const deviceName = name.trim();
+    if (deviceName.length === 0) {
+      setError("Device display name is required.");
+      return;
+    }
+    const signaling = resolveSignalingServer(mode, selfhostServer);
+
+    if (mode === "selfhost" && signaling === "") {
+      setError("Self-host signaling server URL is required.");
+      return;
+    }
+    if (mode === "cloud") {
+      const code = normalizeEnrollCode(enrollCode);
+      if (!isValidEnrollCode(code)) {
+        setError(
+          "Enter the enroll code from qubox.app → Dashboard (Generate enroll code).",
+        );
+        return;
+      }
+    }
+
     setBusy(true);
     setError(null);
     setStatus(null);
-    const deviceName = name.trim() || "Qubox device";
-    const signaling = resolveSignalingServer(mode, selfhostServer);
-
     try {
       if (mode === "cloud") {
         const code = normalizeEnrollCode(enrollCode);
-        if (!isValidEnrollCode(code)) {
-          throw new Error(
-            "Enter the enroll code from qubox.app → Dashboard (Generate enroll code).",
-          );
-        }
         setStatus("Linking this device to Qubox Cloud…");
         await invoke("cloud_enroll", {
           code,
@@ -159,8 +180,8 @@ export function FirstRun({ onDone }: FirstRunProps) {
               </>
             ) : (
               <>
-                Enter the WebSocket URL of your signaling server (default is
-                local compose).
+                Enter the WebSocket URL of your signaling server. Leave blank
+                to type it after setup.
               </>
             )}
           </p>
@@ -218,12 +239,16 @@ export function FirstRun({ onDone }: FirstRunProps) {
             <input
               className="text-input"
               onChange={(e) => setSelfhostServer(e.target.value)}
-              placeholder={DEFAULT_SELFHOST_SIGNALING}
+              placeholder={lanIp ? `ws://${lanIp}:7000/ws` : "ws://your-host:7000/ws"}
               value={selfhostServer}
             />
             <p className="subtitle">
+              {lanIp ? (
+                <>Auto-detected LAN IP <code>{lanIp}</code>. </>)
+              : null}
               Example: <code>ws://192.168.1.10:7000/ws</code> or{" "}
-              <code>wss://signal.home.lan/ws</code>
+              <code>wss://signal.home.lan/ws</code>. Do not use{" "}
+              <code>127.0.0.1</code> for other machines.
             </p>
           </label>
         )}
@@ -231,7 +256,7 @@ export function FirstRun({ onDone }: FirstRunProps) {
         <div className="settings-field">
           <span>After continue</span>
           <ul className="subtitle">
-            <li>Daemon stores name + signaling URL</li>
+            <li>Daemon stores name + signaling URL atomically</li>
             {mode === "cloud" ? (
               <li>This device appears under your account</li>
             ) : (

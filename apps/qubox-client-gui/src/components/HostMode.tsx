@@ -5,15 +5,24 @@ import { SharePanel } from "./SharePanel";
 import {
   isPrivacyMode,
   isStreamMode,
+  normalizePrivacyMode,
+  normalizeStreamMode,
   privacyCliFlags,
   type PrivacyMode,
   type StreamMode,
 } from "../lib/hostPrefs";
 
+const STREAM_MODES: { id: StreamMode; label: string }[] = [
+  { id: "single-stream", label: "Single" },
+  { id: "multi-display", label: "Multi-display" },
+  { id: "all-displays", label: "All displays" },
+];
+
 export function HostModeView() {
-  const { hostRunning } = useApp();
+  const { hostRunning, activeSessions } = useApp();
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [stopArmed, setStopArmed] = useState(false);
   const isRunning = hostRunning === true;
 
   const start = async () => {
@@ -27,10 +36,19 @@ export function HostModeView() {
   };
 
   const stop = async () => {
+    if (activeSessions.length > 0 && !stopArmed) {
+      setStopArmed(true);
+      setError(
+        `${activeSessions.length} active session${activeSessions.length === 1 ? "" : "s"} connected. ` +
+          "Stopping the host will disconnect them. Click again to confirm.",
+      );
+      return;
+    }
     setError(null);
     try {
       await invoke("stop_host_agent");
       setStatus("Host agent stop requested");
+      setStopArmed(false);
     } catch (e) {
       setError(String(e));
     }
@@ -41,9 +59,17 @@ export function HostModeView() {
     try {
       await invoke("set_setting", { key: "privacy_mode", value: mode });
       const flags = privacyCliFlags(mode);
+      const note = isRunning
+        ? " (applies on next Start host)"
+        : "";
       setStatus(
-        `Privacy mode: ${flags.privacyMode} (enable on start: ${flags.enableOnSessionStart}). Applied on next Start host.`,
+        `Privacy mode: ${flags.privacyMode} (enable on start: ${flags.enableOnSessionStart})${note}.`,
       );
+      if (isRunning) {
+        setError(
+          "Privacy changes only take effect when the host agent is restarted.",
+        );
+      }
     } catch (e) {
       setError(String(e));
     }
@@ -53,7 +79,14 @@ export function HostModeView() {
     if (!isStreamMode(mode)) return;
     try {
       await invoke("set_setting", { key: "stream_mode", value: mode });
-      setStatus(`Stream mode: ${mode} (applied on next Start host)`);
+      setStatus(
+        `Stream mode: ${mode}${isRunning ? " (applies on next Start host)" : ""}`,
+      );
+      if (isRunning) {
+        setError(
+          "Stream mode changes only take effect when the host agent is restarted.",
+        );
+      }
     } catch (e) {
       setError(String(e));
     }
@@ -81,10 +114,15 @@ export function HostModeView() {
               className="secondary-button"
               onClick={() => void stop()}
               type="button"
-              style={{ borderColor: "var(--color-error)", color: "var(--color-error)" }}
+              style={{
+                borderColor: stopArmed
+                  ? "var(--color-error)"
+                  : "var(--color-error)",
+                color: "var(--color-error)",
+              }}
             >
               <span className="material-symbols-outlined" style={{ fontSize: "1.1rem" }}>stop</span>
-              Stop host
+              {stopArmed ? "Confirm stop host" : "Stop host"}
             </button>
           ) : (
             <button className="primary-button" onClick={() => void start()} type="button">
@@ -118,20 +156,16 @@ export function HostModeView() {
           <span>Display streams</span>
           <p className="subtitle">Single stream, multi-display, or all-display capture on the host.</p>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-            <button
-              className="secondary-button"
-              onClick={() => void saveStreamMode("single-stream")}
-              type="button"
-            >
-              Single
-            </button>
-            <button
-              className="secondary-button"
-              onClick={() => void saveStreamMode("all-displays")}
-              type="button"
-            >
-              All displays
-            </button>
+            {STREAM_MODES.map((m) => (
+              <button
+                key={m.id}
+                className="secondary-button"
+                onClick={() => void saveStreamMode(m.id)}
+                type="button"
+              >
+                {m.label}
+              </button>
+            ))}
           </div>
         </div>
         <SharePanel />
@@ -139,3 +173,6 @@ export function HostModeView() {
     </div>
   );
 }
+
+/* Re-export the normalizers for tests that consume this module. */
+export { normalizePrivacyMode, normalizeStreamMode };

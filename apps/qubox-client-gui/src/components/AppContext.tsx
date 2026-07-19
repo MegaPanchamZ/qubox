@@ -1,7 +1,16 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import type { ReactNode } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
+import { isPermissionGranted, requestPermission } from "@tauri-apps/plugin-notification";
 
 export type KnownHost = {
   hostPeerId: string;
@@ -12,6 +21,8 @@ export type DiscoveredHost = {
   peerId: string;
   deviceName: string;
   transports: string[];
+  /** Unix millis when this row was discovered. Used for TTL. */
+  discoveredAt: number;
 };
 
 export type ActiveSession = {
@@ -19,6 +30,16 @@ export type ActiveSession = {
   hostId: string;
   pid: number | null;
   startedAt: number;
+};
+
+export type RecentSession = {
+  sessionId: string;
+  hostId: string;
+  pid: number | null;
+  startedAt: number;
+  endedAt: number;
+  reason: string;
+  stderrTail: string[];
 };
 
 export type Settings = {
@@ -60,37 +81,64 @@ export type StderrLine = {
   receivedAt: number;
 };
 
+/** Host-side pairing queue item (snake_case JSON from the daemon broker). */
+export type HostPendingPairing = {
+  request_id: string;
+  client_peer_id: string;
+  client_device_id: string;
+  client_name: string;
+  client_label: string;
+  received_at_unix_ms: number;
+};
+
 type AppContextValue = {
   knownHosts: KnownHost[];
   discoveredHosts: DiscoveredHost[];
   activeSessions: ActiveSession[];
+  recentSessions: RecentSession[];
   settings: Settings | null;
   hostRunning: boolean | null;
   conflictCount: number;
   telemetryBySession: Record<string, SessionTelemetry[]>;
   stderrBySession: Record<string, StderrLine[]>;
   pendingPairings: PairingRequest[];
+  hostPendingPairings: HostPendingPairing[];
+  lanIp: string | null;
+  notificationsAllowed: boolean;
   setKnownHosts: (hosts: KnownHost[]) => void;
   setDiscoveredHosts: (hosts: DiscoveredHost[]) => void;
   setActiveSessions: (sessions: ActiveSession[]) => void;
   setSettings: (settings: Settings | null) => void;
   setConflictCount: (count: number) => void;
   refreshConflictCount: () => Promise<void>;
+  refreshRecentSessions: () => Promise<void>;
+  refreshHostStatus: () => Promise<void>;
+  refreshKnownHosts: () => Promise<void>;
+  ensureNotifications: () => Promise<boolean>;
   pushTelemetry: (sessionId: string, event: SessionTelemetry) => void;
   pushStderr: (line: StderrLine) => void;
   pushPairingRequest: (request: PairingRequest) => void;
   removePairingRequest: (requestId: string) => void;
+  removeHostPendingPairing: (requestId: string) => void;
 };
 
 const AppContext = createContext<AppContextValue | null>(null);
 
 const TELEMETRY_BUFFER = 256;
 const STDERR_BUFFER = 256;
+/** Re-flush telemetry/stderr batches at ~60Hz so React renders never
+ *  exceed a frame rate, even when the daemon fires faster. */
+const FLUSH_INTERVAL_MS = 16;
+const DISCOVERY_TTL_MS = 4 * 60 * 1000;
+
+type PendingTelemetry = Map<string, SessionTelemetry[]>;
+type PendingStderr = Map<string, StderrLine[]>;
 
 export function AppProvider({ children }: { children: ReactNode }) {
   const [knownHosts, setKnownHosts] = useState<KnownHost[]>([]);
   const [discoveredHosts, setDiscoveredHosts] = useState<DiscoveredHost[]>([]);
   const [activeSessions, setActiveSessions] = useState<ActiveSession[]>([]);
+  const [recentSessions, setRecentSessions] = useState<RecentSession[]>([]);
   const [settings, setSettings] = useState<Settings | null>(null);
   const [hostRunning, setHostRunning] = useState<boolean | null>(null);
   const [conflictCount, setConflictCount] = useState(0);
@@ -101,6 +149,48 @@ export function AppProvider({ children }: { children: ReactNode }) {
     Record<string, StderrLine[]>
   >({});
   const [pendingPairings, setPendingPairings] = useState<PairingRequest[]>([]);
+  const [hostPendingPairings, setHostPendingPairings] = useState<HostPendingPairing[]>([]);
+  const [lanIp, setLanIp] = useState<string | null>(null);
+  const [notificationsAllowed, setNotificationsAllowed] = useState(false);
+
+  // Throttled buffers: writes go to mutable refs, React state is flushed
+  // on a single 16ms timer. Stops the 60fps telemetry path from blowing
+  // the React diff budget.
+  const pendingTelemetry = useRef<PendingTelemetry>(new Map());
+  const pendingStderr = useRef<PendingStderr>(new Map());
+  const flushTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const notifiedHostPairings = useRef<Set<string>>(new Set());
+
+  const scheduleFlush = useCallback(() => {
+    if (flushTimer.current !== null) return;
+    flushTimer.current = setTimeout(() => {
+      flushTimer.current = null;
+      const t = pendingTelemetry.current;
+      const s = pendingStderr.current;
+      pendingTelemetry.current = new Map();
+      pendingStderr.current = new Map();
+      if (t.size > 0) {
+        setTelemetryBySession((prev) => {
+          const next = { ...prev };
+          for (const [sessionId, events] of t) {
+            const merged = (next[sessionId] ?? []).concat(events);
+            next[sessionId] = merged.slice(-TELEMETRY_BUFFER);
+          }
+          return next;
+        });
+      }
+      if (s.size > 0) {
+        setStderrBySession((prev) => {
+          const next = { ...prev };
+          for (const [sessionId, lines] of s) {
+            const merged = (next[sessionId] ?? []).concat(lines);
+            next[sessionId] = merged.slice(-STDERR_BUFFER);
+          }
+          return next;
+        });
+      }
+    }, FLUSH_INTERVAL_MS);
+  }, []);
 
   useEffect(() => {
     const initSettings = async () => {
@@ -115,6 +205,41 @@ export function AppProvider({ children }: { children: ReactNode }) {
       }
     };
     void initSettings();
+
+    const initLan = async () => {
+      try {
+        const ip = await invoke<string>("detect_lan_ipv4");
+        setLanIp(ip || null);
+      } catch (e) {
+        console.error("Failed to detect LAN IP", e);
+      }
+    };
+    void initLan();
+
+    const initNotifications = async () => {
+      try {
+        const granted = await isPermissionGranted();
+        if (granted) {
+          setNotificationsAllowed(true);
+          return;
+        }
+        const result = await requestPermission();
+        setNotificationsAllowed(result === "granted");
+      } catch (e) {
+        console.error("notification permission check failed", e);
+      }
+    };
+    void initNotifications();
+
+    const initHosts = async () => {
+      try {
+        const hosts = await invoke<KnownHost[]>("get_known_hosts");
+        setKnownHosts(Array.isArray(hosts) ? hosts : []);
+      } catch (e) {
+        console.error("Failed to load known hosts", e);
+      }
+    };
+    void initHosts();
   }, []);
 
   const refreshConflictCount = useCallback(async () => {
@@ -126,12 +251,66 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  const refreshRecentSessions = useCallback(async () => {
+    try {
+      const list = await invoke<RecentSession[]>("list_recent_sessions");
+      setRecentSessions(Array.isArray(list) ? list : []);
+    } catch {
+      setRecentSessions([]);
+    }
+  }, []);
+
+  const refreshHostStatus = useCallback(async () => {
+    try {
+      const running = await invoke<boolean>("get_host_status");
+      setHostRunning(running);
+    } catch {
+      setHostRunning(null);
+    }
+  }, []);
+
+  const refreshKnownHosts = useCallback(async () => {
+    try {
+      const hosts = await invoke<KnownHost[]>("get_known_hosts");
+      setKnownHosts(Array.isArray(hosts) ? hosts : []);
+    } catch {
+      // leave existing list intact on transient errors
+    }
+  }, []);
+
+  const ensureNotifications = useCallback(async () => {
+    try {
+      const granted = await isPermissionGranted();
+      if (granted) {
+        setNotificationsAllowed(true);
+        return true;
+      }
+      const result = await requestPermission();
+      const ok = result === "granted";
+      setNotificationsAllowed(ok);
+      return ok;
+    } catch {
+      return false;
+    }
+  }, []);
+
   useEffect(() => {
-    void invoke<boolean>("get_host_status")
-      .then(setHostRunning)
-      .catch(() => setHostRunning(null));
     void refreshConflictCount();
-  }, [refreshConflictCount]);
+    void refreshRecentSessions();
+    void refreshHostStatus();
+  }, [refreshConflictCount, refreshRecentSessions, refreshHostStatus]);
+
+  // TTL sweep for discovered LAN hosts: drop rows older than DISCOVERY_TTL_MS.
+  useEffect(() => {
+    const t = setInterval(() => {
+      setDiscoveredHosts((prev) => {
+        const cutoff = Date.now() - DISCOVERY_TTL_MS;
+        const next = prev.filter((host) => host.discoveredAt >= cutoff);
+        return next.length === prev.length ? prev : next;
+      });
+    }, 30_000);
+    return () => clearInterval(t);
+  }, []);
 
   useEffect(() => {
     const unlistens: UnlistenFn[] = [];
@@ -143,11 +322,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
       }>("session://telemetry", (event) => {
         const { sessionId, event: payload } = event.payload;
         const mapped = mapTelemetry(payload);
-        setTelemetryBySession((prev) => {
-          const list = prev[sessionId] ?? [];
-          const next = [...list, mapped].slice(-TELEMETRY_BUFFER);
-          return { ...prev, [sessionId]: next };
-        });
+        const bucket = pendingTelemetry.current.get(sessionId) ?? [];
+        bucket.push(mapped);
+        pendingTelemetry.current.set(sessionId, bucket);
+        scheduleFlush();
       });
       unlistens.push(unlistenTelemetry);
 
@@ -168,10 +346,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
           return;
         }
         setDiscoveredHosts((prev) => {
-          if (prev.some((host) => host.peerId === peerId)) {
-            return prev;
-          }
-          return [...prev, { peerId, deviceName, transports }];
+          const without = prev.filter((h) => h.peerId !== peerId);
+          return [
+            ...without,
+            { peerId, deviceName, transports, discoveredAt: Date.now() },
+          ];
         });
       });
       unlistens.push(unlistenDiscovered);
@@ -203,14 +382,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
       const unlistenStderr = await listen<StderrLine>("session://stderr", (event) => {
         const { sessionId, line, level, receivedAt } = event.payload;
-        setStderrBySession((prev) => {
-          const list = prev[sessionId] ?? [];
-          const next = [
-            ...list,
-            { sessionId, line, level, receivedAt: receivedAt ?? Date.now() },
-          ].slice(-STDERR_BUFFER);
-          return { ...prev, [sessionId]: next };
+        const bucket = pendingStderr.current.get(sessionId) ?? [];
+        bucket.push({
+          sessionId,
+          line,
+          level,
+          receivedAt: receivedAt ?? Date.now(),
         });
+        pendingStderr.current.set(sessionId, bucket);
+        scheduleFlush();
       });
       unlistens.push(unlistenStderr);
 
@@ -229,6 +409,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
             delete next[sessionId];
             return next;
           });
+          void refreshRecentSessions();
         },
       );
       unlistens.push(unlistenEnded);
@@ -273,8 +454,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
         const daemonEvent = payload.event as {
           HostStateChanged?: { running?: boolean };
           SyncConflict?: unknown;
+          SyncJobUpdated?: unknown;
         };
-        if (daemonEvent.SyncConflict) {
+        if (daemonEvent.SyncConflict || daemonEvent.SyncJobUpdated) {
           void refreshConflictCount();
         }
         if (typeof daemonEvent.HostStateChanged?.running === "boolean") {
@@ -282,6 +464,31 @@ export function AppProvider({ children }: { children: ReactNode }) {
         }
       });
       unlistens.push(unlistenDaemon);
+
+      // Unified pairing broker: the Rust bridge polls the host-agent
+      // HTTP endpoint on a 3s cadence and pushes the full snapshot here.
+      // The frontend no longer runs its own setInterval.
+      const unlistenPairingBridge = await listen<{ pending: HostPendingPairing[] }>(
+        "daemon://pairing-updated",
+        (event) => {
+          const list = Array.isArray(event.payload?.pending)
+            ? event.payload.pending
+            : [];
+          setHostPendingPairings(list);
+          if (notificationsAllowed) {
+            for (const req of list) {
+              if (!notifiedHostPairings.current.has(req.request_id)) {
+                notifiedHostPairings.current.add(req.request_id);
+                void invoke("notify_user", {
+                  title: "Qubox pairing request",
+                  body: `${req.client_name || req.client_label || "A client"} wants to pair`,
+                }).catch(() => {});
+              }
+            }
+          }
+        },
+      );
+      unlistens.push(unlistenPairingBridge);
     };
 
     void registerListeners();
@@ -290,39 +497,48 @@ export function AppProvider({ children }: { children: ReactNode }) {
       for (const unlisten of unlistens) {
         unlisten();
       }
+      if (flushTimer.current !== null) {
+        clearTimeout(flushTimer.current);
+      }
     };
-  }, [refreshConflictCount]);
+  }, [notificationsAllowed, refreshConflictCount, refreshRecentSessions, scheduleFlush]);
 
   const value = useMemo<AppContextValue>(
     () => ({
       knownHosts,
       discoveredHosts,
       activeSessions,
+      recentSessions,
       settings,
       hostRunning,
       conflictCount,
       telemetryBySession,
       stderrBySession,
       pendingPairings,
+      hostPendingPairings,
+      lanIp,
+      notificationsAllowed,
       setKnownHosts,
       setDiscoveredHosts,
       setActiveSessions,
       setSettings,
       setConflictCount,
       refreshConflictCount,
+      refreshRecentSessions,
+      refreshHostStatus,
+      refreshKnownHosts,
+      ensureNotifications,
       pushTelemetry: (sessionId, event) => {
-        setTelemetryBySession((prev) => {
-          const list = prev[sessionId] ?? [];
-          const next = [...list, event].slice(-TELEMETRY_BUFFER);
-          return { ...prev, [sessionId]: next };
-        });
+        const bucket = pendingTelemetry.current.get(sessionId) ?? [];
+        bucket.push(event);
+        pendingTelemetry.current.set(sessionId, bucket);
+        scheduleFlush();
       },
       pushStderr: (line) => {
-        setStderrBySession((prev) => {
-          const list = prev[line.sessionId] ?? [];
-          const next = [...list, line].slice(-STDERR_BUFFER);
-          return { ...prev, [line.sessionId]: next };
-        });
+        const bucket = pendingStderr.current.get(line.sessionId) ?? [];
+        bucket.push(line);
+        pendingStderr.current.set(line.sessionId, bucket);
+        scheduleFlush();
       },
       pushPairingRequest: (request) => {
         setPendingPairings((prev) =>
@@ -334,18 +550,33 @@ export function AppProvider({ children }: { children: ReactNode }) {
       removePairingRequest: (requestId) => {
         setPendingPairings((prev) => prev.filter((p) => p.requestId !== requestId));
       },
+      removeHostPendingPairing: (requestId) => {
+        setHostPendingPairings((prev) =>
+          prev.filter((p) => p.request_id !== requestId),
+        );
+        notifiedHostPairings.current.delete(requestId);
+      },
     }),
     [
       knownHosts,
       discoveredHosts,
       activeSessions,
+      recentSessions,
       settings,
       hostRunning,
       conflictCount,
       telemetryBySession,
       stderrBySession,
       pendingPairings,
+      hostPendingPairings,
+      lanIp,
+      notificationsAllowed,
       refreshConflictCount,
+      refreshRecentSessions,
+      refreshHostStatus,
+      refreshKnownHosts,
+      ensureNotifications,
+      scheduleFlush,
     ],
   );
 

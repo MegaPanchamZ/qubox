@@ -1,22 +1,22 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useApp } from "./AppContext";
 
 type FormState = {
   signalingServer: string;
-  bitrateKbps: string;
-  fpsCap: string;
-  decoderBackend: string;
+  bitrateKbps: number;
+  fpsCap: number;
+  decoderBackend: "ffmpeg" | "hw-decode";
   micEnabled: boolean;
-  clipboardSync: string;
+  clipboardSync: "off" | "host_to_client" | "client_to_host" | "both";
   statsOverlay: boolean;
   autoStartHost: boolean;
 };
 
 const DEFAULT_FORM: FormState = {
   signalingServer: "",
-  bitrateKbps: "20000",
-  fpsCap: "60",
+  bitrateKbps: 20_000,
+  fpsCap: 60,
   decoderBackend: "ffmpeg",
   micEnabled: false,
   clipboardSync: "off",
@@ -24,42 +24,93 @@ const DEFAULT_FORM: FormState = {
   autoStartHost: false,
 };
 
+const BITRATE_MIN = 1_000;
+const BITRATE_MAX = 200_000;
+const FPS_MIN = 15;
+const FPS_MAX = 240;
+
 export function SettingsView() {
   const { settings } = useApp();
   const [form, setForm] = useState<FormState>(DEFAULT_FORM);
   const [savingKey, setSavingKey] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saveOk, setSaveOk] = useState<string | null>(null);
+  const [formErrors, setFormErrors] = useState<Record<string, string>>({});
 
   useEffect(() => {
-    if (!settings) {
-      return;
-    }
+    if (!settings) return;
+    const decoder = settings.decoderBackend === "hw-decode" ? "hw-decode" : "ffmpeg";
+    const clip = (settings.clipboardSync ?? "off") as FormState["clipboardSync"];
     setForm({
       signalingServer: settings.signalingServer ?? "",
-      bitrateKbps: String(settings.bitrateKbps ?? 20000),
-      fpsCap: String(settings.fpsCap ?? 60),
-      decoderBackend: settings.decoderBackend ?? "ffmpeg",
+      bitrateKbps: settings.bitrateKbps ?? 20_000,
+      fpsCap: settings.fpsCap ?? 60,
+      decoderBackend: decoder,
       micEnabled: settings.micEnabled,
-      clipboardSync: settings.clipboardSync ?? "off",
+      clipboardSync: clip,
       statsOverlay: settings.statsOverlay,
       autoStartHost: settings.autoStartHost,
     });
   }, [settings]);
 
-  const save = async (key: string, value: string) => {
+  const isHwDecode = form.decoderBackend === "hw-decode";
+
+  const save = async (key: string, value: string, label: string) => {
     setSavingKey(key);
     setSaveError(null);
     setSaveOk(null);
     try {
       await invoke("set_setting", { key, value });
-      setSaveOk(`Saved ${key}`);
+      setSaveOk(`Saved ${label}`);
     } catch (error) {
       setSaveError(String(error));
     } finally {
       setSavingKey(null);
     }
   };
+
+  const boolToString = (b: boolean): string => (b ? "true" : "false");
+  const numToString = (n: number): string => n.toString(10);
+
+  const validateBitrate = (n: number): string | null => {
+    if (!Number.isFinite(n)) return "Bitrate must be a number";
+    if (n < BITRATE_MIN || n > BITRATE_MAX) {
+      return `Bitrate must be between ${BITRATE_MIN} and ${BITRATE_MAX} kbps`;
+    }
+    return null;
+  };
+
+  const validateFps = (n: number): string | null => {
+    if (!Number.isFinite(n)) return "FPS must be a number";
+    if (n < FPS_MIN || n > FPS_MAX) {
+      return `FPS cap must be between ${FPS_MIN} and ${FPS_MAX}`;
+    }
+    return null;
+  };
+
+  const validateSignaling = (raw: string): string | null => {
+    const trimmed = raw.trim();
+    if (trimmed.length === 0) return null;
+    if (!/^wss?:\/\/.+/i.test(trimmed)) {
+      return "Signaling URL must start with ws:// or wss://";
+    }
+    return null;
+  };
+
+  const summary = useMemo(() => {
+    const errs: Record<string, string> = {};
+    const sErr = validateSignaling(form.signalingServer);
+    if (sErr) errs.signaling_server = sErr;
+    const bErr = validateBitrate(form.bitrateKbps);
+    if (bErr) errs.bitrate_kbps = bErr;
+    const fErr = validateFps(form.fpsCap);
+    if (fErr) errs.fps_cap = fErr;
+    return errs;
+  }, [form]);
+
+  useEffect(() => {
+    setFormErrors(summary);
+  }, [summary]);
 
   return (
     <div className="view">
@@ -89,10 +140,21 @@ export function SettingsView() {
             type="text"
             value={form.signalingServer}
           />
+          {formErrors.signaling_server ? (
+            <p className="state state--error" style={{ fontSize: "0.8rem" }}>
+              {formErrors.signaling_server}
+            </p>
+          ) : null}
           <button
             className="secondary-button"
-            disabled={savingKey === "signaling_server"}
-            onClick={() => void save("signaling_server", form.signalingServer)}
+            disabled={Boolean(formErrors.signaling_server) || savingKey === "signaling_server"}
+            onClick={() =>
+              void save(
+                "signaling_server",
+                form.signalingServer.trim(),
+                "signaling server",
+              )
+            }
             type="button"
           >
             <span className="material-symbols-outlined" style={{ fontSize: "1.1rem" }}>
@@ -106,18 +168,30 @@ export function SettingsView() {
           <span>Bitrate cap (kbps)</span>
           <input
             className="text-input"
-            min="1000"
+            max={BITRATE_MAX}
+            min={BITRATE_MIN}
             onChange={(event) =>
-              setForm((prev) => ({ ...prev, bitrateKbps: event.target.value }))
+              setForm((prev) => ({ ...prev, bitrateKbps: Number(event.target.value) }))
             }
-            step="1000"
+            step={1000}
             type="number"
-            value={form.bitrateKbps}
+            value={Number.isFinite(form.bitrateKbps) ? form.bitrateKbps : ""}
           />
+          {formErrors.bitrate_kbps ? (
+            <p className="state state--error" style={{ fontSize: "0.8rem" }}>
+              {formErrors.bitrate_kbps}
+            </p>
+          ) : null}
           <button
             className="secondary-button"
-            disabled={savingKey === "bitrate_kbps"}
-            onClick={() => void save("bitrate_kbps", form.bitrateKbps)}
+            disabled={Boolean(formErrors.bitrate_kbps) || savingKey === "bitrate_kbps"}
+            onClick={() =>
+              void save(
+                "bitrate_kbps",
+                numToString(form.bitrateKbps),
+                "bitrate cap",
+              )
+            }
             type="button"
           >
             <span className="material-symbols-outlined" style={{ fontSize: "1.1rem" }}>
@@ -131,18 +205,23 @@ export function SettingsView() {
           <span>FPS cap</span>
           <input
             className="text-input"
-            max="240"
-            min="15"
+            max={FPS_MAX}
+            min={FPS_MIN}
             onChange={(event) =>
-              setForm((prev) => ({ ...prev, fpsCap: event.target.value }))
+              setForm((prev) => ({ ...prev, fpsCap: Number(event.target.value) }))
             }
             type="number"
-            value={form.fpsCap}
+            value={Number.isFinite(form.fpsCap) ? form.fpsCap : ""}
           />
+          {formErrors.fps_cap ? (
+            <p className="state state--error" style={{ fontSize: "0.8rem" }}>
+              {formErrors.fps_cap}
+            </p>
+          ) : null}
           <button
             className="secondary-button"
-            disabled={savingKey === "fps_cap"}
-            onClick={() => void save("fps_cap", form.fpsCap)}
+            disabled={Boolean(formErrors.fps_cap) || savingKey === "fps_cap"}
+            onClick={() => void save("fps_cap", numToString(form.fpsCap), "FPS cap")}
             type="button"
           >
             <span className="material-symbols-outlined" style={{ fontSize: "1.1rem" }}>
@@ -157,17 +236,26 @@ export function SettingsView() {
           <select
             className="text-input"
             onChange={(event) =>
-              setForm((prev) => ({ ...prev, decoderBackend: event.target.value }))
+              setForm((prev) => ({
+                ...prev,
+                decoderBackend: event.target.value === "hw-decode" ? "hw-decode" : "ffmpeg",
+              }))
             }
             value={form.decoderBackend}
           >
             <option value="ffmpeg">ffmpeg (subprocess)</option>
             <option value="hw-decode">HW decode (ffmpeg-next)</option>
           </select>
+          {isHwDecode ? (
+            <p className="state state--info" style={{ fontSize: "0.82rem" }}>
+              Hardware decode requires working GPU drivers. If a session fails
+              to start, switch back to <code>ffmpeg</code>.
+            </p>
+          ) : null}
           <button
             className="secondary-button"
             disabled={savingKey === "decoder_backend"}
-            onClick={() => void save("decoder_backend", form.decoderBackend)}
+            onClick={() => void save("decoder_backend", form.decoderBackend, "decoder backend")}
             type="button"
           >
             <span className="material-symbols-outlined" style={{ fontSize: "1.1rem" }}>
@@ -189,7 +277,9 @@ export function SettingsView() {
           <button
             className="secondary-button"
             disabled={savingKey === "mic_enabled"}
-            onClick={() => void save("mic_enabled", String(form.micEnabled))}
+            onClick={() =>
+              void save("mic_enabled", boolToString(form.micEnabled), "microphone forwarding")
+            }
             type="button"
           >
             <span className="material-symbols-outlined" style={{ fontSize: "1.1rem" }}>
@@ -204,7 +294,10 @@ export function SettingsView() {
           <select
             className="text-input"
             onChange={(event) =>
-              setForm((prev) => ({ ...prev, clipboardSync: event.target.value }))
+              setForm((prev) => ({
+                ...prev,
+                clipboardSync: event.target.value as FormState["clipboardSync"],
+              }))
             }
             value={form.clipboardSync}
           >
@@ -216,7 +309,7 @@ export function SettingsView() {
           <button
             className="secondary-button"
             disabled={savingKey === "clipboard_sync"}
-            onClick={() => void save("clipboard_sync", form.clipboardSync)}
+            onClick={() => void save("clipboard_sync", form.clipboardSync, "clipboard sync")}
             type="button"
           >
             <span className="material-symbols-outlined" style={{ fontSize: "1.1rem" }}>
@@ -238,7 +331,9 @@ export function SettingsView() {
           <button
             className="secondary-button"
             disabled={savingKey === "stats_overlay"}
-            onClick={() => void save("stats_overlay", String(form.statsOverlay))}
+            onClick={() =>
+              void save("stats_overlay", boolToString(form.statsOverlay), "stats overlay")
+            }
             type="button"
           >
             <span className="material-symbols-outlined" style={{ fontSize: "1.1rem" }}>
@@ -260,7 +355,13 @@ export function SettingsView() {
           <button
             className="secondary-button"
             disabled={savingKey === "auto_start_host"}
-            onClick={() => void save("auto_start_host", String(form.autoStartHost))}
+            onClick={() =>
+              void save(
+                "auto_start_host",
+                boolToString(form.autoStartHost),
+                "auto-start host",
+              )
+            }
             type="button"
           >
             <span className="material-symbols-outlined" style={{ fontSize: "1.1rem" }}>

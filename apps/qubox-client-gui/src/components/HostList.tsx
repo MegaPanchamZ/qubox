@@ -7,56 +7,53 @@ type HostListProps = {
   onPairAndStartSession: (hostId: string) => Promise<void>;
 };
 
-type LoadState =
-  | { kind: "loading" }
-  | { kind: "ready" }
-  | { kind: "error"; message: string };
+type ConnectPhase =
+  | { kind: "idle" }
+  | { kind: "pairing"; hostId: string }
+  | { kind: "waiting_for_approval"; hostId: string }
+  | { kind: "launching"; hostId: string }
+  | { kind: "error"; hostId: string; message: string };
 
 export function HostList({ onStartSession, onPairAndStartSession }: HostListProps) {
   const {
     knownHosts,
-    setKnownHosts,
     discoveredHosts,
     setDiscoveredHosts,
+    refreshKnownHosts,
+    ensureNotifications,
   } = useApp();
-  const [knownState, setKnownState] = useState<LoadState>({ kind: "loading" });
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [discovering, setDiscovering] = useState(false);
   const [discoveryError, setDiscoveryError] = useState<string | null>(null);
-  const [actionMessage, setActionMessage] = useState<string | null>(null);
-  const [connectingHost, setConnectingHost] = useState<string | null>(null);
+  const [connect, setConnect] = useState<ConnectPhase>({ kind: "idle" });
 
   useEffect(() => {
-    let cancelled = false;
     const load = async () => {
       try {
-        const hosts = await invoke<typeof knownHosts>("get_known_hosts");
-        if (cancelled) {
-          return;
-        }
-        setKnownHosts(hosts);
-        setKnownState({ kind: "ready" });
+        await refreshKnownHosts();
+        setLoadError(null);
       } catch (error) {
-        if (cancelled) {
-          return;
-        }
-        setKnownState({
-          kind: "error",
-          message: String(error),
-        });
+        setLoadError(String(error));
       }
     };
     void load();
-    return () => {
-      cancelled = true;
-    };
-  }, [setKnownHosts]);
+  }, [refreshKnownHosts]);
 
   const discover = async () => {
     setDiscovering(true);
     setDiscoveryError(null);
     try {
-      const hosts = await invoke<typeof discoveredHosts>("discover_lan_hosts");
-      setDiscoveredHosts(hosts);
+      const hosts = await invoke<
+        { peer_id: string; device_name: string; transports: string[] }[]
+      >("discover_lan_hosts");
+      setDiscoveredHosts(
+        hosts.map((h) => ({
+          peerId: h.peer_id,
+          deviceName: h.device_name,
+          transports: h.transports,
+          discoveredAt: Date.now(),
+        })),
+      );
     } catch (error) {
       setDiscoveryError(String(error));
     } finally {
@@ -73,21 +70,34 @@ export function HostList({ onStartSession, onPairAndStartSession }: HostListProp
   }, [knownHosts, discoveredHosts]);
 
   const handleConnect = async (hostId: string, pair = false) => {
-    setConnectingHost(hostId);
-    setActionMessage(pair ? `Pairing requested for ${hostId}` : `Launch requested for ${hostId}`);
+    setConnect(
+      pair ? { kind: "pairing", hostId } : { kind: "launching", hostId },
+    );
     try {
       if (pair) {
+        setConnect({ kind: "waiting_for_approval", hostId });
+        await ensureNotifications();
         await onPairAndStartSession(hostId);
       } else {
         await onStartSession(hostId);
       }
-      setActionMessage(pair ? `Paired and launched session for ${hostId}` : `Launch requested for ${hostId}`);
+      setConnect({ kind: "idle" });
     } catch (error) {
-      setActionMessage(String(error));
-    } finally {
-      setConnectingHost(null);
+      setConnect({ kind: "error", hostId, message: String(error) });
     }
   };
+
+  const cancelPendingPair = (hostId: string) => {
+    if (connect.kind === "waiting_for_approval" && connect.hostId === hostId) {
+      setConnect({ kind: "idle" });
+    }
+  };
+
+  const isBusyFor = (hostId: string) =>
+    connect.kind !== "idle" && connect.kind !== "error" && connect.hostId === hostId;
+
+  const ttlSeconds = 4 * 60;
+  const loading = knownHosts.length === 0 && loadError === null;
 
   return (
     <div className="view">
@@ -115,23 +125,39 @@ export function HostList({ onStartSession, onPairAndStartSession }: HostListProp
         </div>
       </header>
 
-      {knownState.kind === "loading" ? (
+      {loading ? (
         <p className="state">
           <span className="material-symbols-outlined" style={{ fontSize: "1.1rem" }}>sync</span>
           Loading paired hosts…
         </p>
       ) : null}
-      {knownState.kind === "error" ? (
-        <p className="state state--error">{knownState.message}</p>
+      {loadError ? (
+        <p className="state state--error">{loadError}</p>
       ) : null}
       {discoveryError ? (
         <p className="state state--error">Discovery failed: {discoveryError}</p>
       ) : null}
-      {actionMessage ? <p className="state">{actionMessage}</p> : null}
+      {connect.kind === "waiting_for_approval" ? (
+        <p className="state state--info" data-testid="pair-pending">
+          Waiting for host to accept the pairing request
+          {" "}<code>{connect.hostId.slice(0, 12)}…</code>
+          <button
+            className="secondary-button"
+            onClick={() => cancelPendingPair(connect.hostId)}
+            type="button"
+            style={{ marginLeft: 8 }}
+          >
+            Cancel request
+          </button>
+        </p>
+      ) : null}
+      {connect.kind === "error" ? (
+        <p className="state state--error">Connect failed: {connect.message}</p>
+      ) : null}
 
       <section className="section">
         <h2 className="section__title">Paired hosts</h2>
-        {knownState.kind === "ready" && combined.known.length === 0 ? (
+        {!loading && combined.known.length === 0 ? (
           <div className="empty-state">
             <span className="material-symbols-outlined" style={{ fontSize: "2.5rem", color: "var(--muted)", marginBottom: "12px" }}>
               sensors_off
@@ -153,11 +179,13 @@ export function HostList({ onStartSession, onPairAndStartSession }: HostListProp
                 <div className="host-card__actions">
                   <button
                     className="connect-button"
-                    disabled={connectingHost === host.hostPeerId}
+                    disabled={isBusyFor(host.hostPeerId)}
                     onClick={() => void handleConnect(host.hostPeerId)}
                     type="button"
                   >
-                    Connect
+                    {connect.kind === "launching" && connect.hostId === host.hostPeerId
+                      ? "Launching…"
+                      : "Connect"}
                   </button>
                 </div>
               </article>
@@ -171,33 +199,60 @@ export function HostList({ onStartSession, onPairAndStartSession }: HostListProp
         {combined.discovered.length === 0 ? (
           <p className="state">
             <span className="material-symbols-outlined" style={{ fontSize: "1.1rem" }}>info</span>
-            Run a discovery scan to populate this list. Results are kept until
-            the next scan.
+            Run a discovery scan to populate this list. Results expire after
+            {" "}{Math.round(ttlSeconds / 60)} minutes.
           </p>
         ) : (
           <div className="host-grid">
-            {combined.discovered.map((host) => (
-              <article className="host-card host-card--discovered" key={host.peerId}>
-                <p className="host-card__label">Discovered</p>
-                <h2>{host.deviceName || host.peerId}</h2>
-                <p className="host-card__id">{host.peerId}</p>
-                <p className="host-card__meta">
-                  {host.transports.length > 0
-                    ? host.transports.join(" · ")
-                    : "transport unknown"}
-                </p>
-                <div className="host-card__actions">
-                  <button
-                    className="connect-button"
-                    disabled={connectingHost === host.peerId}
-                    onClick={() => void handleConnect(host.peerId, true)}
-                    type="button"
-                  >
-                    Pair &amp; connect
-                  </button>
-                </div>
-              </article>
-            ))}
+            {combined.discovered.map((host) => {
+              const ageSec = Math.max(
+                0,
+                Math.round((Date.now() - host.discoveredAt) / 1000),
+              );
+              const waiting = isBusyFor(host.peerId);
+              return (
+                <article className="host-card host-card--discovered" key={host.peerId}>
+                  <p className="host-card__label">Discovered</p>
+                  <h2>{host.deviceName || host.peerId}</h2>
+                  <p className="host-card__id">{host.peerId}</p>
+                  <p className="host-card__meta">
+                    {host.transports.length > 0
+                      ? host.transports.join(" · ")
+                      : "transport unknown"}
+                  </p>
+                  <p className="host-card__meta">seen {ageSec}s ago</p>
+                  <div className="host-card__actions">
+                    {waiting ? (
+                      <>
+                        <button
+                          className="connect-button"
+                          disabled
+                          type="button"
+                        >
+                          Waiting for host…
+                        </button>
+                        <button
+                          className="secondary-button"
+                          onClick={() => cancelPendingPair(host.peerId)}
+                          type="button"
+                        >
+                          Cancel
+                        </button>
+                      </>
+                    ) : (
+                      <button
+                        className="connect-button"
+                        disabled={isBusyFor(host.peerId)}
+                        onClick={() => void handleConnect(host.peerId, true)}
+                        type="button"
+                      >
+                        Pair &amp; connect
+                      </button>
+                    )}
+                  </div>
+                </article>
+              );
+            })}
           </div>
         )}
       </section>

@@ -614,6 +614,14 @@ impl UpdateChecker {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    /// Serializes tests that mutate the global `restart-requested`
+    /// sentinel file. Two tests writing concurrently to the same
+    /// sentinel race and intermittently fail (one overwrites the
+    /// other's content before the assertion runs). Holding this mutex
+    /// keeps the sentinel-touching tests strictly sequential.
+    static SENTINEL_LOCK: Mutex<()> = Mutex::new(());
 
     /// Generate a self-signed TUF root.json via `tough`'s high-level API
     /// (which handles all the ed25519 signing, canonicalization, and
@@ -675,6 +683,7 @@ mod tests {
         if cfg!(not(target_os = "linux")) {
             return;
         }
+        let _guard = SENTINEL_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
         let dir = tempfile::tempdir().unwrap();
         let state = {
@@ -726,6 +735,7 @@ mod tests {
         if cfg!(not(target_os = "linux")) {
             return;
         }
+        let _guard = SENTINEL_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
         let dir = tempfile::tempdir().unwrap();
         let current_binary = dir.path().join("qubox");

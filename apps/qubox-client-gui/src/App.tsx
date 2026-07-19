@@ -16,7 +16,7 @@ function Shell() {
   const [ready, setReady] = useState(false);
   const [needsOnboarding, setNeedsOnboarding] = useState(false);
   const [drainHint, setDrainHint] = useState<string | null>(null);
-  const { pendingPairings, activeSessions, conflictCount } = useApp();
+  const { pendingPairings, activeSessions, conflictCount, ensureNotifications } = useApp();
 
   useEffect(() => {
     let cancelled = false;
@@ -55,6 +55,12 @@ function Shell() {
     };
   }, []);
 
+  // Ask for notification permission as soon as the main app shell loads;
+  // the user is going to need it for hidden-window pairing/conflict pings.
+  useEffect(() => {
+    void ensureNotifications();
+  }, [ensureNotifications]);
+
   const startSession = async (hostId: string) => {
     try {
       await invoke<string>("start_session_subprocess", {
@@ -82,6 +88,14 @@ function Shell() {
       await invoke("cancel_session", { sessionId });
     } catch (error) {
       console.error("cancel_session failed", error);
+    }
+  };
+
+  const kickSession = async (sessionId: string, reason: string) => {
+    try {
+      await invoke("kick_session", { sessionId, reason });
+    } catch (error) {
+      console.error("kick_session failed", error);
     }
   };
 
@@ -136,7 +150,9 @@ function Shell() {
         ) : null}
         {view === "host" ? <HostModeView /> : null}
         {view === "pairing" ? <PairingRequests /> : null}
-        {view === "sessions" ? <SessionView onCancel={cancelSession} /> : null}
+        {view === "sessions" ? (
+          <SessionView onCancel={cancelSession} onKick={kickSession} />
+        ) : null}
         {view === "sync" ? <FileSyncView /> : null}
         {view === "settings" ? <SettingsView /> : null}
       </section>

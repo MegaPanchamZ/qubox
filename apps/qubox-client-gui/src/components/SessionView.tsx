@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { useApp } from "./AppContext";
 import type {
   ActiveSession,
@@ -11,10 +11,13 @@ import { StatsOverlay } from "./StatsOverlay";
 
 type SessionViewProps = {
   onCancel: (sessionId: string) => void;
+  onKick: (sessionId: string, reason: string) => void;
 };
 
-export function SessionView({ onCancel }: SessionViewProps) {
-  const { activeSessions, telemetryBySession, stderrBySession } = useApp();
+export function SessionView({ onCancel, onKick }: SessionViewProps) {
+  const { activeSessions, recentSessions, telemetryBySession, stderrBySession } =
+    useApp();
+  const [showRecent, setShowRecent] = useState(false);
 
   const sorted = useMemo(
     () => [...activeSessions].sort((a, b) => b.startedAt - a.startedAt),
@@ -32,7 +35,22 @@ export function SessionView({ onCancel }: SessionViewProps) {
             to terminate cleanly.
           </p>
         </div>
+        <div className="view__actions">
+          <button
+            className="secondary-button"
+            onClick={() => setShowRecent((s) => !s)}
+            type="button"
+          >
+            <span className="material-symbols-outlined" style={{ fontSize: "1.1rem" }}>
+              history
+            </span>
+            {showRecent ? "Hide recent" : "Recent crashes"}
+            {recentSessions.length > 0 ? ` (${recentSessions.length})` : null}
+          </button>
+        </div>
       </header>
+
+      {showRecent ? <RecentSessionsPanel recent={recentSessions} /> : null}
 
       {sorted.length === 0 ? (
         <div className="empty-state">
@@ -53,6 +71,7 @@ export function SessionView({ onCancel }: SessionViewProps) {
               telemetry={telemetryBySession[session.sessionId] ?? []}
               stderr={stderrBySession[session.sessionId] ?? []}
               onCancel={onCancel}
+              onKick={onKick}
             />
           ))}
         </div>
@@ -66,11 +85,13 @@ type SessionRowProps = {
   telemetry: SessionTelemetry[];
   stderr: StderrLine[];
   onCancel: (sessionId: string) => void;
+  onKick: (sessionId: string, reason: string) => void;
 };
 
-function SessionRow({ session, telemetry, stderr, onCancel }: SessionRowProps) {
+function SessionRow({ session, telemetry, stderr, onCancel, onKick }: SessionRowProps) {
   const stats = useMemo(() => computeStats(telemetry), [telemetry]);
   const lastLog = stderr[stderr.length - 1];
+  const [kickArmed, setKickArmed] = useState(false);
 
   return (
     <article className="session-card">
@@ -81,6 +102,22 @@ function SessionRow({ session, telemetry, stderr, onCancel }: SessionRowProps) {
           <p className="host-card__id">host: {session.hostId}</p>
         </div>
         <div className="session-card__actions">
+          <button
+            className="secondary-button"
+            disabled={!kickArmed}
+            onClick={() => {
+              if (kickArmed) {
+                onKick(session.sessionId, "admin_kick");
+                setKickArmed(false);
+              } else {
+                setKickArmed(true);
+              }
+            }}
+            type="button"
+          >
+            <span className="material-symbols-outlined" style={{ fontSize: "1.1rem" }}>logout</span>
+            {kickArmed ? "Confirm kick" : "Kick"}
+          </button>
           <button
             className="danger-button"
             onClick={() => onCancel(session.sessionId)}
@@ -103,6 +140,7 @@ function SessionRow({ session, telemetry, stderr, onCancel }: SessionRowProps) {
           lastKeyframe={stats.lastKeyframe}
           displayLabels={stats.displayLabels}
           activeIndex={stats.activeIndex}
+          keyframeResetKey={stats.activeIndex ?? 0}
         />
         <StatsOverlay
           bitrateKbps={stats.bitrateKbps}
@@ -131,6 +169,50 @@ function SessionRow({ session, telemetry, stderr, onCancel }: SessionRowProps) {
         )}
       </section>
     </article>
+  );
+}
+
+function RecentSessionsPanel({ recent }: { recent: ReturnType<typeof useApp>["recentSessions"] }) {
+  if (recent.length === 0) {
+    return (
+      <div className="empty-state" style={{ marginBottom: 16 }}>
+        <p className="empty-state__title">No recent sessions</p>
+        <p className="empty-state__body">
+          Last 32 terminated sessions show here with their final log lines so
+          you can diagnose a crash.
+        </p>
+      </div>
+    );
+  }
+  return (
+    <section className="settings-field" style={{ marginBottom: 16 }}>
+      <span>Recent sessions</span>
+      <p className="subtitle">
+        Diagnose crashed sessions here — log tails survive after the session
+        closes.
+      </p>
+      <ul className="host-list">
+        {recent.map((r) => (
+          <li key={r.sessionId} className="host-card">
+            <strong>{r.sessionId}</strong> <code>{r.hostId.slice(0, 12)}…</code>
+            <div className="subtitle">
+              ended {new Date(r.endedAt).toLocaleString()} · reason {r.reason}
+            </div>
+            {r.stderrTail.length > 0 ? (
+              <pre className="log-view">
+                {r.stderrTail.map((line, idx) => (
+                  <span className="log-line log-line--info" key={idx}>
+                    {line}
+                  </span>
+                ))}
+              </pre>
+            ) : (
+              <p className="state">No log tail.</p>
+            )}
+          </li>
+        ))}
+      </ul>
+    </section>
   );
 }
 

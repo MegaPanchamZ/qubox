@@ -63,6 +63,21 @@ struct KnownHost {
     display_name: Option<String>,
 }
 
+/// Recent session archive entry — preserved after `session://ended` so a
+/// user can diagnose a crashed session from the UI instead of watching
+/// logs evaporate.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RecentSession {
+    session_id: String,
+    host_id: String,
+    pid: Option<u32>,
+    started_at: u64,
+    ended_at: u64,
+    reason: String,
+    stderr_tail: Vec<String>,
+}
+
 /// A host discovered via signaling, returned by `discover_lan_hosts`.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -132,6 +147,8 @@ struct SessionHandle {
 #[derive(Default)]
 struct SessionRegistry {
     sessions: HashMap<String, SessionHandle>,
+    /// Most recent N terminated sessions for crash diagnostics.
+    recent: Vec<RecentSession>,
 }
 
 /// Resolves a bundled sidecar binary (client-cli / daemon / host-agent).
@@ -564,6 +581,43 @@ async fn list_active_sessions(
         .collect())
 }
 
+/// Return the most recent terminated sessions for crash diagnostics.
+/// Bounded on the Rust side (32 entries).
+#[tauri::command]
+async fn list_recent_sessions(
+    registry: State<'_, Arc<Mutex<SessionRegistry>>>,
+) -> Result<Vec<RecentSession>, String> {
+    let guard = registry.lock().await;
+    Ok(guard.recent.clone())
+}
+
+/// Discover the host's primary routable IPv4 address (used to pre-fill
+/// the self-host signaling URL on FirstRun). Uses the standard UDP
+/// "connect" trick against a public address; no packets are actually
+/// exchanged. Falls back to an empty string when no usable interface is
+/// available so the UI can leave the field blank instead of poisoning
+/// the form with `127.0.0.1`.
+#[tauri::command]
+async fn detect_lan_ipv4() -> Result<String, String> {
+    use std::net::UdpSocket;
+    let socket = UdpSocket::bind("0.0.0.0:0")
+        .map_err(|e| format!("udp bind: {e}"))?;
+    match socket.connect("1.1.1.1:80") {
+        Ok(()) => match socket.local_addr() {
+            Ok(addr) => {
+                let ip = addr.ip();
+                if ip.is_loopback() || ip.is_unspecified() {
+                    Ok(String::new())
+                } else {
+                    Ok(ip.to_string())
+                }
+            }
+            Err(_) => Ok(String::new()),
+        },
+        Err(_) => Ok(String::new()),
+    }
+}
+
 /// Accept a pending pairing by `host_id` via the daemon IPC.
 #[tauri::command]
 async fn accept_pairing(host_id: String, public_key: Option<Vec<u8>>) -> Result<(), String> {
@@ -655,18 +709,30 @@ async fn host_pairing_decide(request_id: String, approved: bool) -> Result<(), S
     Ok(())
 }
 
-/// Create a share link via client-cli.
+/// Create a share link via the daemon IPC. The daemon parses the
+/// structured `ShareLink` response and we surface it to the UI as a
+/// single typed envelope so the React layer does not have to regex a
+/// stdout blob.
 #[tauri::command]
-fn create_share_link(ttl_secs: u64) -> Result<String, String> {
-    let cli = resolve_qubox_client_cli_path();
-    let output = std::process::Command::new(&cli)
-        .args(["create-share-link", "--ttl-secs", &ttl_secs.to_string()])
-        .output()
-        .map_err(|e| format!("spawn client-cli: {e}"))?;
-    if !output.status.success() {
-        return Err(String::from_utf8_lossy(&output.stderr).into_owned());
+async fn create_share_link(ttl_secs: u64) -> Result<serde_json::Value, String> {
+    let mut client = connect_daemon().await?;
+    match client
+        .call::<IpcResponse>(&IpcRequest::CreateShareLink { ttl_secs })
+        .await
+        .map_err(|e| e.to_string())?
+    {
+        IpcResponse::ShareLink {
+            code,
+            url_hint,
+            expires_unix_ms,
+        } => Ok(serde_json::json!({
+            "code": code,
+            "urlHint": url_hint,
+            "expiresUnixMs": expires_unix_ms,
+        })),
+        IpcResponse::Error { code, message } => Err(format!("{code}: {message}")),
+        other => Err(format!("unexpected {other:?}")),
     }
-    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
 #[tauri::command]
@@ -1230,11 +1296,204 @@ async fn sync_push_now(
     }
 }
 
+/// Aggregate File Sync dashboard state into a single IPC round trip.
+/// Reduces five concurrent commands (ignores/conflicts/rules/jobs/drain)
+/// into one envelope so the GUI does not have to fan-out and coalesce.
+#[tauri::command]
+async fn sync_get_dashboard_state() -> Result<serde_json::Value, String> {
+    let mut client = connect_daemon().await?;
+
+    let ignores = match client
+        .call::<IpcResponse>(&IpcRequest::SyncListIgnores)
+        .await
+        .map_err(|e| e.to_string())?
+    {
+        IpcResponse::SyncIgnores { patterns } => patterns,
+        IpcResponse::Error { code, message } => return Err(format!("{code}: {message}")),
+        other => return Err(format!("unexpected {other:?}")),
+    };
+
+    let conflicts = match client
+        .call::<IpcResponse>(&IpcRequest::SyncListConflicts)
+        .await
+        .map_err(|e| e.to_string())?
+    {
+        IpcResponse::SyncConflicts { conflicts } => conflicts
+            .into_iter()
+            .map(|c| {
+                let local_meta = std::fs::metadata(&c.local_path);
+                let (local_size, local_modified) = match local_meta {
+                    Ok(m) => {
+                        let size = m.len();
+                        let modified = m
+                            .modified()
+                            .ok()
+                            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                            .map(|d| d.as_millis() as u64);
+                        (Some(size), modified)
+                    }
+                    Err(_) => (None, None),
+                };
+                let remote_meta = std::fs::metadata(&c.remote_path);
+                let (remote_size, remote_modified) = match remote_meta {
+                    Ok(m) => {
+                        let size = m.len();
+                        let modified = m
+                            .modified()
+                            .ok()
+                            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                            .map(|d| d.as_millis() as u64);
+                        (Some(size), modified)
+                    }
+                    Err(_) => (None, None),
+                };
+                serde_json::json!({
+                    "conflictId": c.conflict_id,
+                    "fileId": c.file_id,
+                    "localPath": c.local_path,
+                    "remotePath": c.remote_path,
+                    "peerId": c.peer_id,
+                    "createdAtMs": c.created_at_unix.saturating_mul(1000),
+                    "localSize": local_size,
+                    "localModifiedMs": local_modified,
+                    "remoteSize": remote_size,
+                    "remoteModifiedMs": remote_modified,
+                })
+            })
+            .collect::<Vec<_>>(),
+        IpcResponse::Error { code, message } => return Err(format!("{code}: {message}")),
+        other => return Err(format!("unexpected {other:?}")),
+    };
+
+    let rules = match client
+        .call::<IpcResponse>(&IpcRequest::SyncListRules)
+        .await
+        .map_err(|e| e.to_string())?
+    {
+        IpcResponse::SyncRules { rules } => rules
+            .into_iter()
+            .map(|r| {
+                serde_json::json!({
+                    "ruleId": r.rule_id,
+                    "paths": r.paths,
+                    "processNames": r.process_names,
+                    "peerIds": r.peer_ids,
+                    "enabled": r.enabled,
+                    "maxFileBytes": r.max_file_bytes,
+                    "ignoreGlobs": r.ignore_globs,
+                })
+            })
+            .collect::<Vec<_>>(),
+        IpcResponse::Error { code, message } => return Err(format!("{code}: {message}")),
+        other => return Err(format!("unexpected {other:?}")),
+    };
+
+    let jobs = match client
+        .call::<IpcResponse>(&IpcRequest::SyncListJobs)
+        .await
+        .map_err(|e| e.to_string())?
+    {
+        IpcResponse::SyncJobs { jobs } => jobs
+            .into_iter()
+            .map(|j| {
+                serde_json::json!({
+                    "jobId": j.job_id,
+                    "fileId": j.file_id,
+                    "targetPeer": j.target_peer,
+                    "status": j.status,
+                    "retryCount": j.retry_count,
+                    "queuedAtMs": j.queued_at_unix.saturating_mul(1000),
+                    "lastError": j.last_error,
+                })
+            })
+            .collect::<Vec<_>>(),
+        IpcResponse::Error { code, message } => return Err(format!("{code}: {message}")),
+        other => return Err(format!("unexpected {other:?}")),
+    };
+
+    let drain = match client
+        .call::<IpcResponse>(&IpcRequest::SyncDrainReady)
+        .await
+        .map_err(|e| e.to_string())
+    {
+        Ok(IpcResponse::SyncJobs { jobs }) => jobs
+            .into_iter()
+            .map(|j| {
+                serde_json::json!({
+                    "jobId": j.job_id,
+                    "fileId": j.file_id,
+                    "targetPeer": j.target_peer,
+                    "status": j.status,
+                    "retryCount": j.retry_count,
+                    "queuedAtMs": j.queued_at_unix.saturating_mul(1000),
+                    "lastError": j.last_error,
+                })
+            })
+            .collect::<Vec<_>>(),
+        Ok(IpcResponse::Error { .. }) | Err(_) => Vec::new(),
+        Ok(other) => return Err(format!("unexpected {other:?}")),
+    };
+
+    Ok(serde_json::json!({
+        "ignores": ignores,
+        "conflicts": conflicts,
+        "rules": rules,
+        "jobs": jobs,
+        "drain": drain,
+    }))
+}
+
+/// Retry a stuck outbox job by re-dispatching its push. The daemon will
+/// enqueue a fresh transfer attempt; status updates arrive via
+/// `SyncJobUpdated` events.
+#[tauri::command]
+async fn sync_retry_job(job_id: String) -> Result<(), String> {
+    let mut client = connect_daemon().await?;
+    match client
+        .call::<IpcResponse>(&IpcRequest::SyncRetryJob { job_id })
+        .await
+        .map_err(|e| e.to_string())?
+    {
+        IpcResponse::Unit | IpcResponse::SyncJob { .. } => Ok(()),
+        IpcResponse::Error { code, message } => Err(format!("{code}: {message}")),
+        other => Err(format!("unexpected {other:?}")),
+    }
+}
+
+/// Drop a terminal outbox job from the daemon's persistent store.
+#[tauri::command]
+async fn sync_dismiss_job(job_id: String) -> Result<(), String> {
+    let mut client = connect_daemon().await?;
+    match client
+        .call::<IpcResponse>(&IpcRequest::SyncDismissJob { job_id })
+        .await
+        .map_err(|e| e.to_string())?
+    {
+        IpcResponse::Unit => Ok(()),
+        IpcResponse::Error { code, message } => Err(format!("{code}: {message}")),
+        other => Err(format!("unexpected {other:?}")),
+    }
+}
+
+/// Native desktop notification bridge. Called when a high-priority
+/// event arrives while the main window is hidden.
+#[tauri::command]
+async fn notify_user(app: AppHandle, title: String, body: String) -> Result<(), String> {
+    use tauri_plugin_notification::NotificationExt;
+    app.notification()
+        .builder()
+        .title(title)
+        .body(body)
+        .show()
+        .map_err(|e| format!("notification: {e}"))
+}
+
 // ── Session pipeline ────────────────────────────────────────────────
 
 /// Background task: read NDJSON from stdout, stderr from the child,
 /// and watch for cancellation. On exit, clean up the registry and
-/// emit `session://ended`.
+/// emit `session://ended`. The last 32 stderr lines are preserved in
+/// the recent-sessions archive so a user can diagnose a crash.
 async fn run_session_pipeline<R, S>(
     session_id: String,
     host_id: String,
@@ -1263,6 +1522,9 @@ async fn run_session_pipeline<R, S>(
         }
     });
 
+    // Shared bounded tail (32 lines) for the recent-sessions archive.
+    let stderr_tail: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    let stderr_tail_for_emit = stderr_tail.clone();
     let app_for_stderr = app.clone();
     let session_for_stderr = session_id.clone();
     let stderr_task = tokio::spawn(async move {
@@ -1270,6 +1532,14 @@ async fn run_session_pipeline<R, S>(
         while let Ok(Some(line)) = reader.next_line().await {
             if line.trim().is_empty() {
                 continue;
+            }
+            {
+                let mut tail = stderr_tail_for_emit.lock().await;
+                tail.push(line.clone());
+                if tail.len() > 32 {
+                    let drop = tail.len() - 32;
+                    tail.drain(0..drop);
+                }
             }
             let payload = serde_json::json!({
                 "session_id": session_for_stderr,
@@ -1299,9 +1569,29 @@ async fn run_session_pipeline<R, S>(
     let _ = stdout_task.await;
     let _ = stderr_task.await;
 
+    let ended_at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+
     {
         let mut guard = registry.lock().await;
-        guard.sessions.remove(&session_id);
+        if let Some(handle) = guard.sessions.remove(&session_id) {
+            let tail = stderr_tail.lock().await.clone();
+            let archived = RecentSession {
+                session_id: handle.session_id.clone(),
+                host_id: handle.host_id.clone(),
+                pid: handle.pid,
+                started_at: handle.started_at,
+                ended_at,
+                reason: exit_reason.clone(),
+                stderr_tail: tail,
+            };
+            guard.recent.insert(0, archived);
+            if guard.recent.len() > 32 {
+                guard.recent.truncate(32);
+            }
+        }
     }
     let payload = serde_json::json!({
         "session_id": session_id,
@@ -1417,6 +1707,43 @@ fn spawn_daemon_bridge(app: AppHandle) {
     });
 }
 
+/// Spawn a background task that polls the host-agent pairing HTTP
+/// endpoint and forwards the pending queue to the UI as
+/// `daemon://pairing-updated` events. Frontend pages listen to a single
+/// event channel rather than running their own setInterval.
+fn spawn_pairing_broker(app: AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(3))
+            .build()
+            .unwrap_or_else(|_| reqwest::Client::new());
+        let mut last_empty = false;
+        loop {
+            tokio::time::sleep(Duration::from_secs(3)).await;
+            let url = format!("{}/pending", host_pairing_base_url());
+            let payload = match client.get(&url).send().await {
+                Ok(res) if res.status().is_success() => match res.json::<serde_json::Value>().await {
+                    Ok(value) => value,
+                    Err(_) => serde_json::json!([]),
+                },
+                _ => serde_json::json!([]),
+            };
+            let arr = payload.as_array().cloned().unwrap_or_default();
+            let empty = arr.is_empty();
+            // Skip emitting identical empty payloads to keep the bridge quiet
+            // when the host agent has nothing to report.
+            if empty && last_empty {
+                continue;
+            }
+            last_empty = empty;
+            let _ = app.emit(
+                "daemon://pairing-updated",
+                serde_json::json!({ "pending": arr }),
+            );
+        }
+    });
+}
+
 fn kill_process_by_pid(pid: u32) {
     #[cfg(unix)]
     {
@@ -1476,6 +1803,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
+        .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
@@ -1494,6 +1822,7 @@ pub fn run() {
         .setup(|app| {
             let handle = app.handle().clone();
             spawn_daemon_bridge(handle.clone());
+            spawn_pairing_broker(handle.clone());
 
             let show_i = MenuItem::with_id(app, "show", "Show Qubox", true, None::<&str>)?;
             let hosts_i = MenuItem::with_id(app, "hosts", "Hosts", true, None::<&str>)?;
@@ -1569,6 +1898,9 @@ pub fn run() {
             pair_host,
             cancel_session,
             list_active_sessions,
+            list_recent_sessions,
+            detect_lan_ipv4,
+            notify_user,
             accept_pairing,
             reject_pairing,
             list_host_pending_pairings,
@@ -1593,6 +1925,9 @@ pub fn run() {
             sync_list_rules,
             sync_list_jobs,
             sync_resolve_conflict,
+            sync_retry_job,
+            sync_dismiss_job,
+            sync_get_dashboard_state,
             sync_add_rule,
             sync_push_now,
         ])

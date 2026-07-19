@@ -185,6 +185,16 @@ pub enum IpcRequest {
         status: qubox_sync::OutboxStatus,
         last_error: Option<String>,
     },
+    /// FileSync: aggregate dashboard state (single IPC round trip).
+    SyncGetDashboard,
+    /// FileSync: re-dispatch a stuck outbox job.
+    SyncRetryJob {
+        job_id: String,
+    },
+    /// FileSync: drop a terminal outbox job from persistent storage.
+    SyncDismissJob {
+        job_id: String,
+    },
 }
 
 /// Response variants sent from the daemon to the client.
@@ -251,6 +261,14 @@ pub enum IpcResponse {
         completed: bool,
         device_name: Option<String>,
         signaling_server: Option<String>,
+    },
+    /// Aggregate File Sync dashboard snapshot.
+    SyncDashboard {
+        ignores: Vec<String>,
+        conflicts: Vec<qubox_sync::SyncConflict>,
+        rules: Vec<qubox_sync::SyncRule>,
+        outbox: Vec<qubox_sync::OutboxJob>,
+        entries: std::collections::HashMap<String, String>,
     },
     Error {
         code: u32,
@@ -1466,6 +1484,85 @@ async fn dispatch_request(
             };
             send_response(stream, corr_id, &resp).await
         }
+        IpcRequest::SyncRetryJob { job_id } => {
+            let resp = match state.retry_outbox_job(&job_id) {
+                Ok(job) => {
+                    let _ = event_tx.send(IpcEvent::SyncJobUpdated { job: job.clone() });
+                    IpcResponse::SyncJob { job }
+                }
+                Err(e) => IpcResponse::Error {
+                    code: 404,
+                    message: format!("retry: {e}"),
+                },
+            };
+            send_response(stream, corr_id, &resp).await
+        }
+        IpcRequest::SyncDismissJob { job_id } => {
+            let resp = match state.delete_outbox_job(&job_id) {
+                Ok(()) => IpcResponse::Unit,
+                Err(e) => IpcResponse::Error {
+                    code: 500,
+                    message: format!("dismiss: {e}"),
+                },
+            };
+            send_response(stream, corr_id, &resp).await
+        }
+        IpcRequest::SyncGetDashboard => {
+            let resp = match (
+                state.list_settings(),
+                state.list_sync_conflicts(),
+                state.list_sync_rules(),
+                state.list_outbox_jobs(),
+            ) {
+                (Ok(settings), Ok(conflicts), Ok(rules), Ok(jobs)) => {
+                    let mut entries = std::collections::HashMap::<String, String>::new();
+                    for (k, v) in settings {
+                        entries.insert(k, v);
+                    }
+                    let ignores: Vec<String> = state
+                        .get_global_ignores()
+                        .unwrap_or_default()
+                        .into_iter()
+                        .chain(std::iter::empty::<String>())
+                        .collect();
+                    let outbox: Vec<qubox_sync::OutboxJob> = jobs
+                        .into_iter()
+                        .filter(|j| {
+                            matches!(
+                                j.status,
+                                qubox_sync::OutboxStatus::Queued
+                                    | qubox_sync::OutboxStatus::Failed
+                                    | qubox_sync::OutboxStatus::InFlight
+                            )
+                        })
+                        .collect();
+                    IpcResponse::SyncDashboard {
+                        ignores,
+                        conflicts,
+                        rules,
+                        outbox,
+                        entries,
+                    }
+                }
+                (Err(e), _, _, _) => IpcResponse::Error {
+                    code: 500,
+                    message: format!("settings: {e}"),
+                },
+                (_, Err(e), _, _) => IpcResponse::Error {
+                    code: 500,
+                    message: format!("conflicts: {e}"),
+                },
+                (_, _, Err(e), _) => IpcResponse::Error {
+                    code: 500,
+                    message: format!("rules: {e}"),
+                },
+                (_, _, _, Err(e)) => IpcResponse::Error {
+                    code: 500,
+                    message: format!("jobs: {e}"),
+                },
+            };
+            send_response(stream, corr_id, &resp).await
+        }
         IpcRequest::SyncFileChanged {
             local_path,
             rule_id,
@@ -2321,6 +2418,72 @@ mod tests {
             }
             other => panic!("expected SyncJobs, got {other:?}"),
         }
+
+        // Dashboard snapshot must aggregate ignores / outbox in one call.
+        let dashboard: IpcResponse = client.call(&IpcRequest::SyncGetDashboard).await.unwrap();
+        match dashboard {
+            IpcResponse::SyncDashboard {
+                ignores,
+                outbox,
+                conflicts,
+                rules,
+                entries,
+            } => {
+                assert!(ignores.iter().any(|p| p.contains(".git")));
+                assert!(outbox.is_empty(), "done job should be filtered out");
+                assert!(conflicts.is_empty());
+                assert!(rules.is_empty());
+                // settings are returned as a raw map; presence is enough.
+                let _ = entries;
+            }
+            other => panic!("expected SyncDashboard, got {other:?}"),
+        }
+
+        // Retry / dismiss cycle on a fresh push.
+        let payload2 = dir.path().join("retry.dat");
+        std::fs::write(&payload2, b"x").unwrap();
+        let pushed: IpcResponse = client
+            .call(&IpcRequest::SyncPushNow {
+                local_path: payload2.to_string_lossy().into_owned(),
+                target_peer: "peer-a".into(),
+                node_id: "node-1".into(),
+            })
+            .await
+            .unwrap();
+        let retry_id = match pushed {
+            IpcResponse::SyncJob { job } => {
+                let _ = client
+                    .call::<IpcResponse>(&IpcRequest::SyncUpdateJob {
+                        job_id: job.job_id.clone(),
+                        status: qubox_sync::OutboxStatus::Failed,
+                        last_error: Some("boom".into()),
+                    })
+                    .await
+                    .unwrap();
+                job.job_id
+            }
+            other => panic!("expected SyncJob, got {other:?}"),
+        };
+        let retry: IpcResponse = client
+            .call(&IpcRequest::SyncRetryJob {
+                job_id: retry_id.clone(),
+            })
+            .await
+            .unwrap();
+        match retry {
+            IpcResponse::SyncJob { job } => {
+                assert!(matches!(job.status, qubox_sync::OutboxStatus::Queued));
+                assert!(job.last_error.is_none());
+                assert!(job.retry_count >= 1);
+            }
+            other => panic!("expected SyncJob after retry, got {other:?}"),
+        }
+        let _: IpcResponse = client
+            .call(&IpcRequest::SyncDismissJob {
+                job_id: retry_id,
+            })
+            .await
+            .unwrap();
     }
 
     #[tokio::test]
