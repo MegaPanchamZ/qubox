@@ -67,7 +67,7 @@ notify-debouncer-mini = { version = "0.5", optional = true }
 uinput = "0.1"
 
 [features]
-default = ["mic-apm", "webtransport"]
+default = ["webtransport"]
 # Echo cancel / AGC via webrtc-audio-processing (not default on Windows CI).
 mic-apm = ["qubox-mic/webrtc-apm"]
 rl-abr = ["qubox-rl-policy"]

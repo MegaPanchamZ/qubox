@@ -6,10 +6,12 @@
 use std::sync::mpsc;
 use std::time::Duration;
 use tracing::info;
+use windows_service::define_windows_service;
 use windows_service::service::{
     ServiceAccess, ServiceControl, ServiceControlAccept, ServiceErrorControl, ServiceExitCode,
     ServiceInfo, ServiceStartType, ServiceState, ServiceStatus, ServiceType,
 };
+use windows_service::service_control_handler::{register, ServiceControlHandlerResult, ServiceStatusHandle};
 use windows_service::service_dispatcher;
 use windows_service::service_manager::{ServiceManager, ServiceManagerAccess};
 
@@ -35,17 +37,17 @@ fn handle_service_main(_args: Vec<std::ffi::OsString>) {
     let (ready_tx, ready_rx) = mpsc::channel();
 
     // Register the service control handler first.
-    let status_handle = match windows_service::service::ServiceControlHandler::register(
+    let status_handle: ServiceStatusHandle = match register(
         SERVICE_NAME,
-        move |control_event| -> windows_service::Result<()> {
+        move |control_event| -> ServiceControlHandlerResult {
             match control_event {
                 ServiceControl::Stop | ServiceControl::Shutdown => {
                     info!("SCM stop/shutdown received");
                     let _ = shutdown_tx.send(());
-                    Ok(())
+                    ServiceControlHandlerResult::NoError
                 }
-                ServiceControl::Interrogate => Ok(()),
-                _ => Ok(()),
+                ServiceControl::Interrogate => ServiceControlHandlerResult::NoError,
+                _ => ServiceControlHandlerResult::NotImplemented,
             }
         },
     ) {
@@ -170,8 +172,8 @@ pub fn install_service(display_name: &str, bin_path: &str) -> windows_service::R
     let manager = ServiceManager::local_computer(None::<&str>, ServiceManagerAccess::CONNECT)?;
     manager.create_service(
         &ServiceInfo {
-            name: Some(OsString::from(SERVICE_NAME)),
-            display_name: Some(OsString::from(display_name)),
+            name: OsString::from(SERVICE_NAME),
+            display_name: OsString::from(display_name),
             service_type: ServiceType::OWN_PROCESS,
             start_type: ServiceStartType::AutoStart,
             error_control: ServiceErrorControl::Normal,

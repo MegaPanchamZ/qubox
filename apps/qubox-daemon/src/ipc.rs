@@ -46,6 +46,15 @@ use crate::subprocess::{SubprocessConfig, SubprocessManager};
 use crate::tuf::{UpdateChecker, UpdateInfo, UpdateStatus};
 use crate::{DaemonConfig, DaemonError, IPC_HEADER_SIZE, IPC_MAGIC, IPC_MAX_PAYLOAD, IPC_VERSION};
 
+#[cfg(windows)]
+use interprocess::local_socket::traits::tokio::Listener;
+#[cfg(windows)]
+use interprocess::local_socket::traits::tokio::Stream;
+#[cfg(windows)]
+use interprocess::local_socket::GenericFilePath;
+#[cfg(windows)]
+use interprocess::local_socket::ToFsName;
+
 // ── Platform-specific IPC types ────────────────────────────────────────
 
 #[cfg(unix)]
@@ -575,8 +584,8 @@ impl IpcServer {
         {
             let name = config.socket_path.to_string_lossy().to_string();
             use interprocess::local_socket::ListenerOptions;
+            use interprocess::os::windows::local_socket::ListenerOptionsExt;
             use interprocess::os::windows::security_descriptor::SecurityDescriptor;
-            use interprocess::os::windows::ListenerOptionsExt;
             // Convert SDDL to a null-terminated u16 string, then
             // deserialize into a SecurityDescriptor via interprocess.
             let sddl_utf16: Vec<u16> = PIPE_SDDL.encode_utf16().chain(std::iter::once(0)).collect();
@@ -584,10 +593,14 @@ impl IpcServer {
                 .map_err(|e| DaemonError::Ipc(format!("SDDL conversion: {e}")))?;
             let sd = SecurityDescriptor::deserialize(sddl_wide)
                 .map_err(|e| DaemonError::Ipc(format!("SDDL deserialize: {e}")))?;
+            let pipe_name = name
+                .as_str()
+                .to_fs_name::<GenericFilePath>()
+                .map_err(|e| DaemonError::Ipc(format!("invalid pipe name: {e}")))?;
             let listener = ListenerOptions::new()
-                .name(&name)
+                .name(pipe_name)
                 .security_descriptor(sd)
-                .create_tokio::<IpcStream>()
+                .create_tokio_as::<IpcListener>()
                 .map_err(|e| DaemonError::Ipc(format!("bind named pipe at {name}: {e}")))?;
             info!("IPC listening on named pipe: {name} (secure DACL)");
             let sm = SubprocessManager::new(event_tx.clone());
@@ -1892,7 +1905,11 @@ pub async fn check_daemon_running(socket_path: &std::path::Path) -> bool {
     #[cfg(windows)]
     {
         let name = socket_path.to_string_lossy().to_string();
-        let connect_fut = IpcStream::connect(name.as_str());
+        let name_ref = match name.as_str().to_fs_name::<GenericFilePath>() {
+            Ok(n) => n,
+            Err(_) => return false,
+        };
+        let connect_fut = IpcStream::connect(name_ref);
         let mut stream = match tokio::time::timeout(Duration::from_millis(200), connect_fut).await {
             Ok(Ok(s)) => s,
             _ => return false,
@@ -1976,7 +1993,11 @@ pub async fn ipc_request(
     #[cfg(windows)]
     {
         let name = socket_path.to_string_lossy().to_string();
-        let mut stream = IpcStream::connect(name.as_str())
+        let name_ref = name
+            .as_str()
+            .to_fs_name::<GenericFilePath>()
+            .map_err(|e| DaemonError::Ipc(format!("invalid pipe name: {e}")))?;
+        let mut stream = IpcStream::connect(name_ref)
             .await
             .map_err(|e| DaemonError::Ipc(format!("connect to daemon: {e}")))?;
 
@@ -2033,7 +2054,11 @@ impl IpcClient {
         #[cfg(windows)]
         {
             let name = config.socket_path.to_string_lossy().to_string();
-            let stream = IpcStream::connect(name.as_str())
+            let name_ref = name
+                .as_str()
+                .to_fs_name::<GenericFilePath>()
+                .map_err(|e| DaemonError::Ipc(format!("invalid pipe name: {e}")))?;
+            let stream = IpcStream::connect(name_ref)
                 .await
                 .map_err(|e| DaemonError::Ipc(format!("connect: {e}")))?;
             Ok(Self { stream })

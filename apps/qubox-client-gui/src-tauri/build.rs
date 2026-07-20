@@ -11,6 +11,9 @@ fn ensure_external_bin_placeholders() {
     });
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
     let binaries_dir = manifest_dir.join("binaries");
+    let target_dir = env::var_os("CARGO_TARGET_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| manifest_dir.join("../../../target"));
     let _ = fs::create_dir_all(&binaries_dir);
 
     let ext = if triple.contains("windows") {
@@ -21,7 +24,11 @@ fn ensure_external_bin_placeholders() {
 
     for name in ["qubox-daemon", "qubox-host-agent", "qubox-client-cli"] {
         let path = binaries_dir.join(format!("{name}-{triple}{ext}"));
-        if !path.exists() {
+        let release_binary = target_dir.join("release").join(format!("{name}{ext}"));
+        if release_binary.is_file() {
+            fs::copy(&release_binary, &path).expect("stage release sidecar");
+            println!("cargo:rerun-if-changed={}", release_binary.display());
+        } else if !path.exists() {
             let _ = fs::write(&path, []);
             println!(
                 "cargo:warning=created placeholder sidecar {}",

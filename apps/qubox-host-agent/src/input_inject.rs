@@ -15,40 +15,63 @@
 //! this file is Linux-only. The Tauri host-agent on those platforms will
 //! dispatch via the native Tauri shell IPC instead.
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, Result};
+#[cfg(target_os = "linux")]
+use anyhow::Context;
 use qubox_proto::{InputMouseButton, RemoteInputEvent};
-use std::fs::{File, OpenOptions};
+#[cfg(target_os = "linux")]
+use std::fs::File;
+#[cfg(target_os = "linux")]
+use std::fs::OpenOptions;
+#[cfg(target_os = "linux")]
 use std::io::{IoSlice, Write};
+#[cfg(target_os = "linux")]
 use std::os::unix::fs::OpenOptionsExt;
+#[cfg(target_os = "linux")]
 use std::path::Path;
 use std::sync::Mutex;
 
 /// Maximum length of a uinput name string (including NUL).
+#[cfg(target_os = "linux")]
 const UINPUT_MAX_NAME_SIZE: usize = 80;
 
 /// Pre-defined input-event-codes constants (subset of linux/input.h).
 /// Avoids pulling in `uinput` / `input-event-codes` crates — the host-agent
 /// already has plenty of native deps.
+#[cfg(target_os = "linux")]
 const EV_SYN: u16 = 0x00;
+#[cfg(target_os = "linux")]
 const EV_KEY: u16 = 0x01;
+#[cfg(target_os = "linux")]
 const EV_REL: u16 = 0x02;
+#[cfg(target_os = "linux")]
 const EV_MSC: u16 = 0x04;
+#[cfg(target_os = "linux")]
 const EV_ABS: u16 = 0x03;
 
+#[cfg(target_os = "linux")]
 const SYN_REPORT: u16 = 0x00;
+#[cfg(target_os = "linux")]
 const MSC_SCAN: u16 = 0x04;
 
+#[cfg(target_os = "linux")]
 const REL_X: u16 = 0x00;
+#[cfg(target_os = "linux")]
 const REL_Y: u16 = 0x01;
+#[cfg(target_os = "linux")]
 const REL_WHEEL: u16 = 0x08;
+#[cfg(target_os = "linux")]
 const REL_HWHEEL: u16 = 0x06;
 
+#[cfg(target_os = "linux")]
 const ABS_X: u16 = 0x00;
+#[cfg(target_os = "linux")]
 const ABS_Y: u16 = 0x01;
 
 /// Common X11 keysyms mapped to Linux KEY_* codes. We translate the browser's
 /// `KeyboardEvent.key` strings (which are already in `KeyboardEvent.code`
 /// form like "KeyA", "Enter", "ArrowLeft") to evdev codes.
+#[cfg(target_os = "linux")]
 fn map_key(name: &str) -> Option<u16> {
     use linux_keys::*;
     match name {
@@ -125,6 +148,7 @@ fn map_key(name: &str) -> Option<u16> {
     }
 }
 
+#[cfg(target_os = "linux")]
 mod linux_keys {
     //! Subset of `<linux/input-event-codes.h>` we use.
     pub const KEY_ESC: u16 = 1;
@@ -231,10 +255,12 @@ mod linux_keys {
 }
 
 /// Linux uinput injector (real device).
+#[cfg(target_os = "linux")]
 pub struct UinputInjector {
     file: Mutex<File>,
 }
 
+#[cfg(target_os = "linux")]
 impl UinputInjector {
     /// Open `/dev/uinput` and register a virtual keyboard + mouse + touchpad.
     ///
@@ -556,6 +582,7 @@ impl UinputInjector {
     }
 }
 
+#[cfg(target_os = "linux")]
 impl Drop for UinputInjector {
     fn drop(&mut self) {
         if let Ok(mut f) = self.file.lock() {
@@ -565,6 +592,7 @@ impl Drop for UinputInjector {
     }
 }
 
+#[cfg(target_os = "linux")]
 fn write_event(file: &mut File, etype: u16, code: u16, value: i32) -> Result<()> {
     // struct input_event { struct timeval time; unsigned short type; unsigned short code; int value; }
     // timeval = 16 bytes (tv_sec: 8 + tv_usec: 8).
@@ -582,6 +610,7 @@ fn write_event(file: &mut File, etype: u16, code: u16, value: i32) -> Result<()>
     Ok(())
 }
 
+#[cfg(target_os = "linux")]
 fn write_abs_xy(file: &mut File, x: u32, y: u32) -> Result<()> {
     let x = x.min(65535) as i32;
     let y = y.min(65535) as i32;
@@ -603,6 +632,7 @@ fn normalize_wheel(delta: i32) -> i32 {
 
 // ── Minimal libc re-exports so we don't pull `nix` for two ioctls ──
 
+#[cfg(target_os = "linux")]
 mod libc_like {
     pub type Ioctl = u32;
     pub const O_NONBLOCK: i32 = 0x800;
@@ -638,6 +668,7 @@ mod libc_like {
     }
 }
 
+#[cfg(target_os = "linux")]
 fn me_set_evbit(f: &mut File, ev_type: u16) -> Result<()> {
     // UI_SET_EVBIT = _IOW('U', 100, int) = 0x40045564
     f.ioctl(0x4004_5564, ev_type as u64)
@@ -649,24 +680,28 @@ fn me_set_evbit(f: &mut File, ev_type: u16) -> Result<()> {
             )
         })
 }
+#[cfg(target_os = "linux")]
 fn me_set_keybit(f: &mut File, code: u16) -> Result<()> {
     // UI_SET_KEYBIT = _IOW('U', 101, int) = 0x40045565
     f.ioctl(0x4004_5565, code as u64)
         .map(|_| ())
         .context("UI_SET_KEYBIT")
 }
+#[cfg(target_os = "linux")]
 fn me_set_relbit(f: &mut File, code: u16) -> Result<()> {
     // UI_SET_RELBIT = _IOW('U', 102, int) = 0x40045566
     f.ioctl(0x4004_5566, code as u64)
         .map(|_| ())
         .context("UI_SET_RELBIT")
 }
+#[cfg(target_os = "linux")]
 fn me_set_absbit(f: &mut File, code: u16) -> Result<()> {
     // UI_SET_ABSBIT = _IOW('U', 103, int) = 0x40045567
     f.ioctl(0x4004_5567, code as u64)
         .map(|_| ())
         .context("UI_SET_ABSBIT")
 }
+#[cfg(target_os = "linux")]
 fn me_set_mscbit(f: &mut File, code: u16) -> Result<()> {
     // UI_SET_MSCBIT = _IOW('U', 104, int) = 0x40045568
     f.ioctl(0x4004_5568, code as u64)
@@ -674,6 +709,7 @@ fn me_set_mscbit(f: &mut File, code: u16) -> Result<()> {
         .context("UI_SET_MSCBIT")
 }
 
+#[cfg(target_os = "linux")]
 fn me_set_propbit(f: &mut File, code: u16) -> Result<()> {
     // UI_SET_PROPBIT = _IOW('U', 110, int) = 0x4004556e
     f.ioctl(0x4004_556e, code as u64)
@@ -681,6 +717,7 @@ fn me_set_propbit(f: &mut File, code: u16) -> Result<()> {
         .context("UI_SET_PROPBIT")
 }
 
+#[cfg(target_os = "linux")]
 /// UI_ABS_SETUP — set absinfo for one axis before UI_DEV_CREATE.
 /// Layout matches kernel `struct uinput_abs_setup` (28 bytes on x86_64):
 ///   u16 code; u16 pad; s32 value,minimum,maximum,fuzz,flat,resolution;
@@ -699,9 +736,11 @@ fn me_abs_setup(f: &mut File, code: u16, minimum: i32, maximum: i32) -> Result<(
 }
 
 /// Trait extension to expose a thin ioctl on `File`.
+#[cfg(target_os = "linux")]
 trait FileIoctl {
     fn ioctl(&mut self, req: u32, arg: u64) -> std::io::Result<i32>;
 }
+#[cfg(target_os = "linux")]
 impl FileIoctl for File {
     fn ioctl(&mut self, req: u32, _arg: u64) -> std::io::Result<i32> {
         libc_like::IoctlExt::ioctl(self, req, _arg)
@@ -899,10 +938,12 @@ fn map_browser_key(code: &str) -> Option<Key> {
 #[allow(clippy::large_enum_variant)] // variants are mutually-exclusive at runtime; boxing would add an extra alloc on the hot path
 pub enum HostInputInjector {
     Enigo(EnigoInjector),
+    #[cfg(target_os = "linux")]
     Uinput(UinputInjector),
 }
 
 impl HostInputInjector {
+    #[cfg(target_os = "linux")]
     pub fn open_best() -> Result<Self> {
         match EnigoInjector::open() {
             Ok(e) => Ok(Self::Enigo(e)),
@@ -916,9 +957,15 @@ impl HostInputInjector {
         }
     }
 
+    #[cfg(not(target_os = "linux"))]
+    pub fn open_best() -> Result<Self> {
+        Ok(Self::Enigo(EnigoInjector::open()?))
+    }
+
     pub fn dispatch(&self, ev: &RemoteInputEvent) -> Result<()> {
         match self {
             Self::Enigo(e) => e.dispatch(ev),
+            #[cfg(target_os = "linux")]
             Self::Uinput(u) => u.dispatch(ev),
         }
     }
@@ -926,6 +973,7 @@ impl HostInputInjector {
     pub fn backend_name(&self) -> &'static str {
         match self {
             Self::Enigo(_) => "enigo",
+            #[cfg(target_os = "linux")]
             Self::Uinput(_) => "uinput",
         }
     }

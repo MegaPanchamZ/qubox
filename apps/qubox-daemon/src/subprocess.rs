@@ -288,7 +288,7 @@ impl ManagedSubprocess {
             if let Some(handle) = child.raw_handle() {
                 unsafe {
                     let _ = windows::Win32::System::Threading::TerminateProcess(
-                        windows::Win32::Foundation::HANDLE(handle as isize),
+                        windows::Win32::Foundation::HANDLE(handle as *mut std::ffi::c_void),
                         1,
                     );
                 }
