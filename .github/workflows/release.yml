@@ -198,10 +198,15 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dist
-          # Primary: Tauri installers
-          if [ -d "apps/qubox-client-gui/src-tauri/target/release/bundle" ]; then
-            cp -r apps/qubox-client-gui/src-tauri/target/release/bundle/* dist/ 2>/dev/null || true
-          fi
+          # Primary: Tauri installers. Tauri outputs to the workspace target dir
+          # when the GUI crate is part of a Cargo workspace.
+          for bundle_dir in apps/qubox-client-gui/src-tauri/target/release/bundle apps/qubox-client-gui/target/release/bundle target/release/bundle; do
+            if [ -d "$bundle_dir" ]; then
+              cp -r "$bundle_dir"/* dist/ 2>/dev/null || true
+              echo "collected from $bundle_dir"
+              break
+            fi
+          done
           # Optional: raw sidecars + self-host signaling for power users
           mkdir -p dist/bin
           for bin in qubox-daemon qubox-host-agent qubox-client-cli qubox-signaling-server; do
@@ -216,9 +221,17 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path dist | Out-Null
-          $bundle = "apps/qubox-client-gui/src-tauri/target/release/bundle"
-          if (Test-Path $bundle) {
-            Copy-Item -Recurse -Force "$bundle\*" dist\
+          $candidates = @(
+            "apps/qubox-client-gui/src-tauri/target/release/bundle",
+            "apps/qubox-client-gui/target/release/bundle",
+            "target/release/bundle"
+          )
+          foreach ($bundle in $candidates) {
+            if (Test-Path $bundle) {
+              Copy-Item -Recurse -Force "$bundle\*" dist\
+              Write-Host "collected from $bundle"
+              break
+            }
           }
           New-Item -ItemType Directory -Force -Path dist\bin | Out-Null
           $bins = @('qubox-daemon.exe','qubox-host-agent.exe','qubox-client-cli.exe','qubox-signaling-server.exe')
