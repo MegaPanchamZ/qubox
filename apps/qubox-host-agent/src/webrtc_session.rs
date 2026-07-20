@@ -204,6 +204,25 @@ impl WebRtcSession {
             channels: 0,
             sdp_fmtp_line: "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42001f"
                 .to_string(),
+            // Declare NACK + PLI + REMB so the browser negotiates the
+            // matching RTCP feedback, sends PLI on decoder errors, and
+            // honors NACK for retransmit. Without these, decoder
+            // corruption (green blocks / half-screen artifacts) lingers
+            // until the next periodic IDR.
+            rtcp_feedback: vec![
+                RTCPFeedback {
+                    typ: "nack".to_string(),
+                    parameter: "".to_string(),
+                },
+                RTCPFeedback {
+                    typ: "nack".to_string(),
+                    parameter: "pli".to_string(),
+                },
+                RTCPFeedback {
+                    typ: "goog-remb".to_string(),
+                    parameter: "".to_string(),
+                },
+            ],
             ..Default::default()
         };
         let video_track = Arc::new(TrackLocalStaticSample::new(

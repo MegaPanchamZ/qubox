@@ -2195,7 +2195,9 @@ async fn run_webrtc_session(
                         "viewer requested an unknown display; capturing primary"
                     );
                 }
-                screen_capture::CaptureConfig::for_display(picked)
+                let mut cfg = screen_capture::CaptureConfig::for_display(picked);
+                cfg.bitrate_kbps = runtime.media_bitrate_kbps.max(200);
+                cfg
             }
             None => {
                 if selected_display_id.is_some() {
@@ -2204,7 +2206,9 @@ async fn run_webrtc_session(
                         "viewer requested a display but host has none; capturing 1280×720 fallback"
                     );
                 }
-                screen_capture::CaptureConfig::default()
+                let mut cfg = screen_capture::CaptureConfig::default();
+                cfg.bitrate_kbps = runtime.media_bitrate_kbps.max(200);
+                cfg
             }
         };
         match screen_capture::spawn_screen_capture(producer_session.clone(), cfg, cancel_rx).await {

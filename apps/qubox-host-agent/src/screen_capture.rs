@@ -28,6 +28,12 @@ pub struct CaptureConfig {
     pub height: u32,
     pub x_offset: u32,
     pub y_offset: u32,
+    /// Target H.264 bitrate in kbps. Without an explicit rate the
+    /// x264 default tracks scene complexity, which on a desktop UI
+    /// (large flat regions with sharp text) easily blows past the
+    /// TURN relay's effective bandwidth and causes the decoder to
+    /// stall on lost reference frames.
+    pub bitrate_kbps: u32,
     /// Display to capture when the viewer picked a non-primary monitor.
     /// `None` means "capture the display configured on the rest of the
     /// struct" (primary, system default).
@@ -43,6 +49,7 @@ impl Default for CaptureConfig {
             height: 720,
             x_offset: 0,
             y_offset: 0,
+            bitrate_kbps: 1_500,
             selected_display: None,
         }
     }
@@ -60,6 +67,7 @@ impl CaptureConfig {
             height: display.height,
             x_offset: display.x.max(0) as u32,
             y_offset: display.y.max(0) as u32,
+            bitrate_kbps: 1_500,
             selected_display: Some(display),
         }
     }
@@ -120,12 +128,28 @@ fn ffmpeg_argv(cfg: &CaptureConfig) -> Result<Vec<String>> {
         "-pix_fmt".into(),
         "yuv420p".into(),
         "-an".into(),
-        // Emit one access unit per `frame` (one NAL slice per IDR + slices
-        // following) so the browser decoder treats each chunk as a single
-        // complete frame. Without this, ffmpeg may concatenate multiple
-        // frames into one access unit.
+        // Constrain bitrate. x264's default is CQP (constant QP) which
+        // lets the bitrate spike to fill available bandwidth — disastrous
+        // over a TURN relay with limited uplink. Cap at `bitrate_kbps`
+        // with a reasonable buffer for scene complexity.
+        "-b:v".into(),
+        format!("{}k", cfg.bitrate_kbps.max(200)),
+        "-maxrate".into(),
+        format!("{}k", cfg.bitrate_kbps.max(200)),
+        "-bufsize".into(),
+        format!("{}k", (cfg.bitrate_kbps.max(200) * 2)),
+        // Emit one IDR every ~1 second so a lost P-frame / slice can't
+        // pin the viewer on a half-green decoder for the rest of the
+        // GOP. x264's default `keyint=250` is ~8s @ 30fps — far too
+        // slow for a remote desktop where the user notices green
+        // artifacts immediately.
         "-force_key_frames".into(),
-        format!("expr:gte(n,n_forced)"),
+        format!("expr:gte(t,prev_forced_t+{:.2})", 1.0_f64),
+        // Cap GOP distance and disable scenecut so the time-based expr
+        // stays the dominant keyframe trigger (no surprise IDRs mid-
+        // scroll).
+        "-x264-params".into(),
+        "keyint=60:min-keyint=30:scenecut=0".into(),
         "-f".into(),
         "h264".into(),
         "-".into(),
