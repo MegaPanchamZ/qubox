@@ -45,6 +45,8 @@ uuid.workspace = true
 rustls = { workspace = true }
 axum.workspace = true
 base64 = { workspace = true }
+hmac = "0.12"
+sha1 = "0.10"
 wtransport = { version = "0.7", optional = true }
 reed-solomon-erasure = { version = "6", optional = true }
 # Browser-side sessions arrive over WebRTC; the host accepts an SDP offer

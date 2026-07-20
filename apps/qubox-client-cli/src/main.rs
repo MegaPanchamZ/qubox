@@ -2723,6 +2723,8 @@ fn pump_window_input(
             let _ = input_tx.send(RemoteInputEvent::MouseButton {
                 button: mapped_button,
                 pressed,
+                x: None,
+                y: None,
             });
         }
     }

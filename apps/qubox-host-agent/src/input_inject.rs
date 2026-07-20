@@ -61,13 +61,13 @@ fn map_key(name: &str) -> Option<u16> {
                 None
             }
         }
-        // Digits 0-9 (Digit0=11..Digit9=20).
+        // Digits: KEY_1=2 .. KEY_9=10, KEY_0=11 (not sequential from KEY_0).
         s if s.starts_with("Digit") && s.len() == 6 => {
             let c = s.as_bytes()[5] as char;
-            if c.is_ascii_digit() {
-                Some(KEY_0 + (c as u16 - '0' as u16))
-            } else {
-                None
+            match c {
+                '0' => Some(KEY_0),
+                '1'..='9' => Some(KEY_1 + (c as u16 - b'1' as u16)),
+                _ => None,
             }
         }
         // Arrow keys.
@@ -261,7 +261,8 @@ impl UinputInjector {
         let mut me = Self {
             file: Mutex::new(file),
         };
-        me.register_device().context("register uinput device")?;
+        me.register_device()
+            .with_context(|| format!("register uinput device (path: {:?}, evbit_first: {:?})", path, std::io::Error::last_os_error()))?;
         Ok(Some(me))
     }
 
@@ -272,8 +273,12 @@ impl UinputInjector {
         for &ev_type in &[EV_KEY, EV_REL, EV_ABS, EV_MSC] {
             me_set_evbit(&mut f, ev_type)?;
         }
-        // UI_SET_KEYBIT — keys we may emit (full ASCII + a few extras + gamepad buttons).
+        // UI_SET_KEYBIT — keyboard + mouse buttons + gamepad.
+        // BTN_LEFT/RIGHT/MIDDLE are 0x110..=0x112 — outside 1..=127.
         for code in 1u16..=127 {
+            me_set_keybit(&mut f, code)?;
+        }
+        for code in 0x100u16..=0x14fu16 {
             me_set_keybit(&mut f, code)?;
         }
         for code in 0x130u16..=0x13fu16 {
@@ -289,30 +294,48 @@ impl UinputInjector {
         }
         // UI_SET_MSCBIT
         me_set_mscbit(&mut f, MSC_SCAN)?;
+        // INPUT_PROP_DIRECT — map ABS 0..65535 onto the full desktop
+        // (tablet-style). Without this, libinput often ignores ABS motion.
+        me_set_propbit(&mut f, 0x01)?; // INPUT_PROP_DIRECT
 
-        // UINPUT_DEV_SETUP via UI_DEV_SETUP ioctl (struct input_event).
-        // We hand-roll a `uinput_setup` to avoid depending on `uinput` crate.
+        // UI_ABS_SETUP — ABS_X/Y range must match browser coords (0..=65535).
+        // Default kernel range is 0..0 → absolute moves are no-ops.
+        me_abs_setup(&mut f, ABS_X, 0, 65535)?;
+        me_abs_setup(&mut f, ABS_Y, 0, 65535)?;
+        // Gamepad sticks / triggers (reasonable defaults).
+        me_abs_setup(&mut f, 0x02, 0, 255)?; // ABS_Z
+        me_abs_setup(&mut f, 0x03, -32768, 32767)?; // ABS_RX
+        me_abs_setup(&mut f, 0x04, -32768, 32767)?; // ABS_RY
+        me_abs_setup(&mut f, 0x05, 0, 255)?; // ABS_RZ
+        me_abs_setup(&mut f, 0x10, -1, 1)?; // ABS_HAT0X
+        me_abs_setup(&mut f, 0x11, -1, 1)?; // ABS_HAT0Y
+
+        // UI_DEV_SETUP — required before UI_DEV_CREATE on modern kernels
+        // (>= 4.5). Without this, UI_DEV_CREATE returns EINVAL.
+        // struct uinput_setup {
+        //   char name[UINPUT_MAX_NAME_SIZE];   /* 80 bytes */
+        //   struct input_id {                  /* 4 × u16 = 8 bytes */
+        //     __u16 bustype; __u16 vendor; __u16 product; __u16 version;
+        //   } id;
+        // };
+        // C sizeof(uinput_setup) = 92 (name 80 + 4-byte padding + 8 id).
+        // The kernel doesn't strictly enforce the ioctl's encoded size —
+        // it copies `sizeof(struct uinput_setup)` bytes regardless — but
+        // matching the value the kernel expects avoids any _IOC check.
+        // UI_DEV_SETUP = _IOW('U', 3, sizeof(uinput_setup)) = 0x405c5503.
+        let mut setup = [0u8; 92];
         let name_bytes = b"qubox-host-agent\0";
-        let mut buf = [0u8; UINPUT_MAX_NAME_SIZE];
-        buf[..name_bytes.len()].copy_from_slice(name_bytes);
-        // struct uinput_setup { char name[UINPUT_MAX_NAME_SIZE]; };
-        // Followed by two ioctls: UI_DEV_SETUP then UI_DEV_CREATE.
-        // We bypass them by writing the name through `UI_DEV_SETUP` via a
-        // dedicated ioctl constant — but cross-platform Linux doesn't ship
-        // those constants in libc. We sidestep by issuing the ioctl via a
-        // thin wrapper around `nix::ioctl_write_int` if nix is available;
-        // otherwise we let the registration proceed with the default name.
-        //
-        // For maximum portability we don't actually call UI_DEV_SETUP here —
-        // the kernel assigns the device name from the first user-supplied
-        // string write, which we skip. The device is still functional.
-
-        let _ = &mut buf;
+        setup[..name_bytes.len()].copy_from_slice(name_bytes);
+        // input_id at offset 80: bustype=BUS_VIRTUAL (0x06) as little-endian u16.
+        setup[80..82].copy_from_slice(&0x0006u16.to_le_bytes());
+        f.ioctl(0x405c_5503, (&setup as *const _) as u64)
+            .context("UI_DEV_SETUP ioctl failed")?;
 
         // UI_DEV_CREATE — magic constant 0x5501 on Linux x86_64 / aarch64.
         const UI_DEV_CREATE: libc_like::Ioctl = 0x5501;
         f.ioctl(UI_DEV_CREATE, 0)
             .context("UI_DEV_CREATE ioctl failed")?;
+        tracing::info!("uinput virtual pointer+keyboard registered (ABS 0..65535, PROP_DIRECT)");
         Ok(())
     }
 
@@ -320,11 +343,8 @@ impl UinputInjector {
     pub fn dispatch(&self, ev: &RemoteInputEvent) -> Result<()> {
         match ev {
             RemoteInputEvent::MouseMove { x, y } => {
-                // Absolute positioning: emit ABS_X / ABS_Y on a virtual touchpad.
                 let mut f = self.file.lock().unwrap();
-                write_event(&mut f, EV_ABS, ABS_X, *x as i32)?;
-                write_event(&mut f, EV_ABS, ABS_Y, *y as i32)?;
-                write_event(&mut f, EV_SYN, SYN_REPORT, 0)?;
+                write_abs_xy(&mut f, *x, *y)?;
             }
             RemoteInputEvent::RelativeMouseMove { dx, dy } => {
                 let mut f = self.file.lock().unwrap();
@@ -332,20 +352,37 @@ impl UinputInjector {
                 write_event(&mut f, EV_REL, REL_Y, *dy)?;
                 write_event(&mut f, EV_SYN, SYN_REPORT, 0)?;
             }
-            RemoteInputEvent::MouseButton { button, pressed } => {
+            RemoteInputEvent::MouseButton {
+                button,
+                pressed,
+                x,
+                y,
+            } => {
                 let code = match button {
                     InputMouseButton::Left => 0x110,   // BTN_LEFT
                     InputMouseButton::Right => 0x111,  // BTN_RIGHT
                     InputMouseButton::Middle => 0x112, // BTN_MIDDLE
                 };
                 let mut f = self.file.lock().unwrap();
+                // Browser often sends coords on the click itself (tap) —
+                // warp first so press lands at the right pixel.
+                if let (Some(px), Some(py)) = (*x, *y) {
+                    write_abs_xy(&mut f, px, py)?;
+                }
                 write_event(&mut f, EV_KEY, code, if *pressed { 1 } else { 0 })?;
                 write_event(&mut f, EV_SYN, SYN_REPORT, 0)?;
             }
             RemoteInputEvent::MouseWheel { dx, dy } => {
+                // Browser wheel deltas are pixel-ish; uinput wants notches.
+                let notch_y = normalize_wheel(*dy);
+                let notch_x = normalize_wheel(*dx);
                 let mut f = self.file.lock().unwrap();
-                write_event(&mut f, EV_REL, REL_WHEEL, *dy)?;
-                write_event(&mut f, EV_REL, REL_HWHEEL, *dx)?;
+                if notch_y != 0 {
+                    write_event(&mut f, EV_REL, REL_WHEEL, notch_y)?;
+                }
+                if notch_x != 0 {
+                    write_event(&mut f, EV_REL, REL_HWHEEL, notch_x)?;
+                }
                 write_event(&mut f, EV_SYN, SYN_REPORT, 0)?;
             }
             RemoteInputEvent::Keyboard { key, pressed } => {
@@ -540,6 +577,25 @@ fn write_event(file: &mut File, etype: u16, code: u16, value: i32) -> Result<()>
     Ok(())
 }
 
+fn write_abs_xy(file: &mut File, x: u32, y: u32) -> Result<()> {
+    let x = x.min(65535) as i32;
+    let y = y.min(65535) as i32;
+    write_event(file, EV_ABS, ABS_X, x)?;
+    write_event(file, EV_ABS, ABS_Y, y)?;
+    write_event(file, EV_SYN, SYN_REPORT, 0)?;
+    Ok(())
+}
+
+/// Map browser wheel delta (often ±100+ pixels) to a small number of notches.
+fn normalize_wheel(delta: i32) -> i32 {
+    if delta == 0 {
+        return 0;
+    }
+    let sign = if delta > 0 { 1 } else { -1 };
+    let mag = (delta.abs() / 40).max(1).min(5);
+    sign * mag
+}
+
 // ── Minimal libc re-exports so we don't pull `nix` for two ioctls ──
 
 mod libc_like {
@@ -551,16 +607,16 @@ mod libc_like {
     }
 
     impl IoctlExt for std::fs::File {
-        fn ioctl(&mut self, req: Ioctl, _arg: u64) -> std::io::Result<i32> {
+        fn ioctl(&mut self, req: Ioctl, arg: u64) -> std::io::Result<i32> {
             // Use the raw libc::ioctl through std::os::fd::AsRawFd.
             use std::os::fd::AsRawFd;
             extern "C" {
                 fn ioctl(fd: i32, request: u64, ...) -> i32;
             }
-            // SAFETY: ioctl is variadic but we pass no payload pointer — same as
-            // `libc::ioctl(fd, request as libc::c_ulong, 0)`.
+            // SAFETY: variadic call but we pass exactly one trailing `unsigned long`
+            // for the int/pointer-sized arg, matching `libc::ioctl(fd, req, arg)`.
             let fd = self.as_raw_fd();
-            let rc = unsafe { ioctl(fd, req as u64) };
+            let rc = unsafe { ioctl(fd, req as u64, arg) };
             if rc < 0 {
                 Err(std::io::Error::last_os_error())
             } else {
@@ -578,24 +634,53 @@ mod libc_like {
 }
 
 fn me_set_evbit(f: &mut File, ev_type: u16) -> Result<()> {
-    let req = 0x4004_55_60u32 | ev_type as u32;
-    f.ioctl(req, 0).map(|_| ()).context("UI_SET_EVBIT")
+    // UI_SET_EVBIT = _IOW('U', 100, int) = 0x40045564
+    f.ioctl(0x4004_5564, ev_type as u64).map(|_| ()).with_context(|| {
+        format!(
+            "UI_SET_EVBIT(ev_type={ev_type}, errno={})",
+            std::io::Error::last_os_error()
+        )
+    })
 }
 fn me_set_keybit(f: &mut File, code: u16) -> Result<()> {
-    let req = 0x4005_45_61u32 | code as u32;
-    f.ioctl(req, 0).map(|_| ()).context("UI_SET_KEYBIT")
+    // UI_SET_KEYBIT = _IOW('U', 101, int) = 0x40045565
+    f.ioctl(0x4004_5565, code as u64).map(|_| ()).context("UI_SET_KEYBIT")
 }
 fn me_set_relbit(f: &mut File, code: u16) -> Result<()> {
-    let req = 0x4004_55_61u32 | code as u32;
-    f.ioctl(req, 0).map(|_| ()).context("UI_SET_RELBIT")
+    // UI_SET_RELBIT = _IOW('U', 102, int) = 0x40045566
+    f.ioctl(0x4004_5566, code as u64).map(|_| ()).context("UI_SET_RELBIT")
 }
 fn me_set_absbit(f: &mut File, code: u16) -> Result<()> {
-    let req = 0x4004_55_62u32 | code as u32;
-    f.ioctl(req, 0).map(|_| ()).context("UI_SET_ABSBIT")
+    // UI_SET_ABSBIT = _IOW('U', 103, int) = 0x40045567
+    f.ioctl(0x4004_5567, code as u64).map(|_| ()).context("UI_SET_ABSBIT")
 }
 fn me_set_mscbit(f: &mut File, code: u16) -> Result<()> {
-    let req = 0x4004_55_63u32 | code as u32;
-    f.ioctl(req, 0).map(|_| ()).context("UI_SET_MSCBIT")
+    // UI_SET_MSCBIT = _IOW('U', 104, int) = 0x40045568
+    f.ioctl(0x4004_5568, code as u64).map(|_| ()).context("UI_SET_MSCBIT")
+}
+
+fn me_set_propbit(f: &mut File, code: u16) -> Result<()> {
+    // UI_SET_PROPBIT = _IOW('U', 110, int) = 0x4004556e
+    f.ioctl(0x4004_556e, code as u64)
+        .map(|_| ())
+        .context("UI_SET_PROPBIT")
+}
+
+/// UI_ABS_SETUP — set absinfo for one axis before UI_DEV_CREATE.
+/// Layout matches kernel `struct uinput_abs_setup` (28 bytes on x86_64):
+///   u16 code; u16 pad; s32 value,minimum,maximum,fuzz,flat,resolution;
+fn me_abs_setup(f: &mut File, code: u16, minimum: i32, maximum: i32) -> Result<()> {
+    let mut buf = [0u8; 28];
+    buf[0..2].copy_from_slice(&code.to_le_bytes());
+    // value at offset 4
+    buf[4..8].copy_from_slice(&0i32.to_le_bytes());
+    buf[8..12].copy_from_slice(&minimum.to_le_bytes());
+    buf[12..16].copy_from_slice(&maximum.to_le_bytes());
+    // fuzz/flat/resolution stay 0
+    // UI_ABS_SETUP = _IOW('U', 4, sizeof(uinput_abs_setup)) = 0x401c5504
+    f.ioctl(0x401c_5504, (&buf as *const _) as u64)
+        .map(|_| ())
+        .with_context(|| format!("UI_ABS_SETUP(code={code})"))
 }
 
 /// Trait extension to expose a thin ioctl on `File`.

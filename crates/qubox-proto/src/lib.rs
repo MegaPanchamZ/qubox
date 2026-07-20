@@ -1071,6 +1071,11 @@ pub enum RemoteInputEvent {
     MouseButton {
         button: InputMouseButton,
         pressed: bool,
+        /// Absolute 0..=65535 from browser taps; optional for native clients.
+        #[serde(default)]
+        x: Option<u32>,
+        #[serde(default)]
+        y: Option<u32>,
     },
     /// Vertical (dy) and horizontal (dx) scroll. dy positive = scroll up.
     MouseWheel {
@@ -1986,6 +1991,8 @@ mod tests {
         let event = RemoteInputEvent::MouseButton {
             button: InputMouseButton::Left,
             pressed: true,
+            x: None,
+            y: None,
         };
 
         let encoded = serde_json::to_string(&event).unwrap();

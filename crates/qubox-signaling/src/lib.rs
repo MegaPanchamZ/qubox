@@ -130,6 +130,11 @@ pub trait DeviceEnrollmentLookup: Send + Sync + 'static {
 #[derive(Debug, Clone)]
 pub struct SessionAuthzRequest {
     pub client_device_id: Uuid,
+    /// Enrolled account id of the pairing client (`None` for anonymous /
+    /// self-host peers). When set, the friends/grants authorize hook
+    /// can recognise browser viewers whose `descriptor.device_id` is
+    /// their account-id rather than a row in the `devices` table.
+    pub client_account_id: Option<Uuid>,
     pub host_device_id: Uuid,
     pub consent_id: Option<Uuid>,
     pub share_link_redemption: bool,
@@ -306,6 +311,14 @@ struct ConnectedPeer {
     public_key: Option<[u8; 32]>,
     /// Tenant namespace for managed isolation (`Uuid::nil()` = self-host).
     tenant_id: Uuid,
+    /// Account the peer was enrolled under (via the device-id or
+    /// account-id fallback path). `Uuid::nil()` for self-host or
+    /// anonymous peers. Used to populate
+    /// `SessionAuthzRequest.client_account_id` so the friends/grants
+    /// authorize hook can recognise browser viewers whose
+    /// `descriptor.device_id` is the account-id but who are not
+    /// enrolled in the `devices` table.
+    account_id: Uuid,
     /// Number of heartbeats received from this peer. Used to drive
     /// periodic `Presence { connected: true }` re-emissions so that
     /// consumers (e.g. cloud dashboards) can detect liveness without
@@ -326,6 +339,11 @@ struct PendingPairing {
     host_peer_id: Uuid,
     client: PeerDescriptor,
     client_label: String,
+    /// Account id of the pairing client (from the enrollment lookup).
+    /// `Uuid::nil()` for self-host or anonymous peers. Forwarded to
+    /// the friends/grants authorize hook so browser viewers whose
+    /// `device_id` is their account-id resolve to a real account.
+    client_account_id: Uuid,
 }
 
 #[derive(Debug, Clone)]
@@ -663,6 +681,7 @@ impl SignalingState {
         descriptor: PeerDescriptor,
         public_key: Option<[u8; 32]>,
         tenant_id: Uuid,
+        account_id: Uuid,
         outbound: mpsc::UnboundedSender<ServerMessage>,
     ) -> anyhow::Result<()> {
         let mut peers = self.peers.write().await;
@@ -680,6 +699,7 @@ impl SignalingState {
                 outbound,
                 public_key,
                 tenant_id,
+                account_id,
                 heartbeat_count: 0,
             },
         );
@@ -702,8 +722,22 @@ impl SignalingState {
         device_id: Uuid,
         public_key: [u8; 32],
     ) -> anyhow::Result<Uuid> {
+        self.resolve_enrollment_full(device_id, public_key)
+            .await
+            .map(|(tenant_id, _)| tenant_id)
+    }
+
+    /// Like [`resolve_enrollment`] but also returns the enrolled
+    /// account id. Used to populate `ConnectedPeer.account_id` so
+    /// later friends/grants authorize calls can recognise browser
+    /// viewers whose `descriptor.device_id` is the account-id.
+    async fn resolve_enrollment_full(
+        &self,
+        device_id: Uuid,
+        public_key: [u8; 32],
+    ) -> anyhow::Result<(Uuid, Uuid)> {
         match &self.enrollment {
-            EnrollmentPolicy::Open => Ok(Uuid::nil()),
+            EnrollmentPolicy::Open => Ok((Uuid::nil(), Uuid::nil())),
             EnrollmentPolicy::Managed { lookup } => {
                 let info = lookup
                     .lookup(device_id, public_key)
@@ -715,7 +749,7 @@ impl SignalingState {
                 if info.revoked {
                     bail!("device {device_id} has been revoked");
                 }
-                Ok(info.tenant_id)
+                Ok((info.tenant_id, info.account_id))
             }
         }
     }
@@ -897,6 +931,22 @@ impl SignalingState {
         self.peers.read().await.get(&peer_id).map(|p| p.tenant_id)
     }
 
+    async fn peer_tenant_account(&self, peer_id: Uuid) -> Option<(Uuid, Uuid)> {
+        self.peers
+            .read()
+            .await
+            .get(&peer_id)
+            .map(|p| (p.tenant_id, p.account_id))
+    }
+
+    async fn peer_account_id(&self, peer_id: Uuid) -> Option<Uuid> {
+        self.peers
+            .read()
+            .await
+            .get(&peer_id)
+            .map(|p| p.account_id)
+    }
+
     /// Resolve a connected host peer_id by the host's `device_id`.
     /// Returns `None` if no host with that device_id is currently
     /// connected (e.g., they disconnected between bundle verify and
@@ -1051,8 +1101,8 @@ impl SignalingState {
         client: PeerDescriptor,
         request: PairingRequest,
     ) -> anyhow::Result<()> {
-        let client_tenant = self
-            .peer_tenant(client.peer_id)
+        let (client_tenant, client_account_id) = self
+            .peer_tenant_account(client.peer_id)
             .await
             .ok_or_else(|| anyhow!("client {} is not connected", client.peer_id))?;
 
@@ -1093,6 +1143,7 @@ impl SignalingState {
             host_peer_id: request.host_peer_id,
             client: client.clone(),
             client_label: request.client_label,
+            client_account_id,
         };
 
         self.pending_pairings
@@ -1150,9 +1201,15 @@ impl SignalingState {
 
         // Cloud: gate pair grant on accounts friends/grants (Deny only).
         if let Some(authz) = &self.session_authorizer {
+            let client_account_id = if pending.client_account_id.is_nil() {
+                None
+            } else {
+                Some(pending.client_account_id)
+            };
             match authz
                 .authorize(SessionAuthzRequest {
                     client_device_id: pending.client.device_id,
+                    client_account_id,
                     host_device_id: host.device_id,
                     consent_id: None,
                     share_link_redemption: false,
@@ -1264,10 +1321,16 @@ impl SignalingState {
         // Cloud authorize: overwrite permissions; auto-pair anytime friends; gate deny/pending.
         let mut permissions = request.permissions.clone();
         let mut policy_auto_pair = false;
+        let client_account_id = self
+            .peer_account_id(client.peer_id)
+            .await
+            .filter(|id| !id.is_nil());
+        let _ = client_account_id; // plumbed for BFF-proxy path; gate currently off
         if let Some(authz) = &self.session_authorizer {
             match authz
                 .authorize(SessionAuthzRequest {
                     client_device_id: client.device_id,
+                    client_account_id: None,
                     host_device_id: host_descriptor.device_id,
                     consent_id: request.consent_id,
                     share_link_redemption: false,
@@ -2039,7 +2102,13 @@ async fn handle_socket(socket: WebSocket, state: SignalingState) {
                 let tenant_id = Uuid::nil();
 
                 match state
-                    .register(descriptor.clone(), None, tenant_id, outbound_tx.clone())
+                    .register(
+                        descriptor.clone(),
+                        None,
+                        tenant_id,
+                        Uuid::nil(),
+                        outbound_tx.clone(),
+                    )
                     .await
                 {
                     Ok(()) => {
@@ -2079,11 +2148,11 @@ async fn handle_socket(socket: WebSocket, state: SignalingState) {
                     break;
                 }
 
-                let tenant_id = match state
-                    .resolve_enrollment(descriptor.device_id, hello.public_key)
+                let (tenant_id, account_id) = match state
+                    .resolve_enrollment_full(descriptor.device_id, hello.public_key)
                     .await
                 {
-                    Ok(t) => t,
+                    Ok((t, a)) => (t, a),
                     Err(error) => {
                         // Clients (browser viewers) don't have an enrolled
                         // device row — they're identified by the bundle's
@@ -2093,7 +2162,7 @@ async fn handle_socket(socket: WebSocket, state: SignalingState) {
                         // the browser flow can proceed; we'll still fall
                         // back to the bundle for tenant attribution later.
                         if descriptor.role == PeerRole::Client {
-                            Uuid::nil()
+                            (Uuid::nil(), Uuid::nil())
                         } else {
                             warn!(
                                 device_id = %descriptor.device_id,
@@ -2115,6 +2184,7 @@ async fn handle_socket(socket: WebSocket, state: SignalingState) {
                         descriptor.clone(),
                         Some(hello.public_key),
                         tenant_id,
+                        account_id,
                         outbound_tx.clone(),
                     )
                     .await
@@ -2594,7 +2664,7 @@ mod tests {
         // credential/peer binding test gets a deterministic match.
         let pk = public_key;
         state
-            .register(descriptor.clone(), Some(pk), Uuid::nil(), tx.clone())
+            .register(descriptor.clone(), Some(pk), Uuid::nil(), Uuid::nil(), tx.clone())
             .await
             .expect("test peer registration");
         (descriptor, tx)
@@ -2610,11 +2680,11 @@ mod tests {
         let (tx_a, _) = mpsc::unbounded_channel();
         let (tx_b, _) = mpsc::unbounded_channel();
         state
-            .register(host_a.clone(), None, tenant_a, tx_a)
+            .register(host_a.clone(), None, tenant_a, Uuid::nil(), tx_a)
             .await
             .unwrap();
         state
-            .register(host_b.clone(), None, tenant_b, tx_b)
+            .register(host_b.clone(), None, tenant_b, Uuid::nil(), tx_b)
             .await
             .unwrap();
         let a_hosts = state.list_hosts(tenant_a).await;
@@ -2639,11 +2709,11 @@ mod tests {
         let (host_tx, _host_rx) = mpsc::unbounded_channel::<ServerMessage>();
         let (client_tx, mut client_rx) = mpsc::unbounded_channel::<ServerMessage>();
         state
-            .register(host.clone(), None, tenant, host_tx)
+            .register(host.clone(), None, tenant, Uuid::nil(), host_tx)
             .await
             .unwrap();
         state
-            .register(client.clone(), None, tenant, client_tx)
+            .register(client.clone(), None, tenant, Uuid::nil(), client_tx)
             .await
             .unwrap();
 
@@ -2712,6 +2782,7 @@ mod tests {
                 descriptor(PeerRole::Host, Uuid::new_v4()),
                 None,
                 Uuid::nil(),
+                Uuid::nil(),
                 tx,
             )
             .await
@@ -2735,11 +2806,11 @@ mod tests {
         let (client_a_tx, mut client_a_rx) = mpsc::unbounded_channel::<ServerMessage>();
         let (client_b_tx, mut client_b_rx) = mpsc::unbounded_channel::<ServerMessage>();
         state
-            .register(host_a.clone(), None, tenant_a, host_tx)
+            .register(host_a.clone(), None, tenant_a, Uuid::nil(), host_tx)
             .await
             .unwrap();
         state
-            .register(client_a.clone(), None, tenant_a, client_a_tx)
+            .register(client_a.clone(), None, tenant_a, Uuid::nil(), client_a_tx)
             .await
             .unwrap();
         state

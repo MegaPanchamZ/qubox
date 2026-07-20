@@ -24,6 +24,7 @@
 //! exchange IS the control plane; media flows over the resulting peer
 //! connection directly to the browser.
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -33,7 +34,10 @@ use uuid::Uuid;
 use webrtc::api::media_engine::{MIME_TYPE_H264, MIME_TYPE_OPUS};
 use webrtc::api::APIBuilder;
 use webrtc::data_channel::RTCDataChannel;
+use crate::turn_local;
 use webrtc::ice_transport::ice_candidate::RTCIceCandidateInit;
+use webrtc::ice_transport::ice_connection_state::RTCIceConnectionState;
+use webrtc::ice_transport::ice_credential_type::RTCIceCredentialType;
 use webrtc::ice_transport::ice_server::RTCIceServer;
 use webrtc::peer_connection::configuration::RTCConfiguration;
 use webrtc::peer_connection::peer_connection_state::RTCPeerConnectionState;
@@ -56,6 +60,17 @@ use crate::{send_client_message, SharedSignalingWriter};
 /// loop hands incoming `RelaySignal`s to the right session by id.
 pub type SessionRegistry = Arc<Mutex<std::collections::HashMap<Uuid, Arc<WebRtcSession>>>>;
 
+/// Per-session counters for input + media (log-friendly; no OTLP required).
+#[derive(Default)]
+pub struct SessionMetrics {
+    pub input_rx: AtomicU64,
+    pub input_injected: AtomicU64,
+    pub input_parse_err: AtomicU64,
+    pub input_inject_err: AtomicU64,
+    pub video_frames_written: AtomicU64,
+    pub video_bytes_written: AtomicU64,
+}
+
 /// One browser → host WebRTC session.
 pub struct WebRtcSession {
     pc: Arc<RTCPeerConnection>,
@@ -69,6 +84,7 @@ pub struct WebRtcSession {
     codec: qubox_proto::VideoCodec,
     cancel_rx: watch::Receiver<bool>,
     cancel_tx: watch::Sender<bool>,
+    pub metrics: Arc<SessionMetrics>,
 }
 
 impl WebRtcSession {
@@ -158,14 +174,23 @@ impl WebRtcSession {
 
         let api = APIBuilder::new().with_media_engine(media_engine).build();
 
+        let creds = turn_local::mint_for_session(session_id, self_peer_id, ice_servers);
+        if let Some(reason) = creds.skip_reason {
+            tracing::warn!(
+                session_id = %session_id,
+                %reason,
+                "TURN credentials missing; relay candidates will fail to authenticate"
+            );
+        }
         let config = RTCConfiguration {
-            ice_servers: ice_servers
+            ice_servers: creds
+                .servers
                 .iter()
                 .map(|s| RTCIceServer {
                     urls: s.urls.clone(),
                     username: s.username.clone().unwrap_or_default(),
                     credential: s.credential.clone().unwrap_or_default(),
-                    ..Default::default()
+                    credential_type: RTCIceCredentialType::Password,
                 })
                 .collect(),
             ..Default::default()
@@ -204,6 +229,7 @@ impl WebRtcSession {
             .await?;
 
         let (cancel_tx, cancel_rx) = watch::channel(false);
+        let metrics = Arc::new(SessionMetrics::default());
         let session = Arc::new(Self {
             pc: pc.clone(),
             video_track,
@@ -216,7 +242,15 @@ impl WebRtcSession {
             codec,
             cancel_rx: cancel_rx.clone(),
             cancel_tx,
+            metrics: metrics.clone(),
         });
+
+        tracing::info!(
+            session_id = %session_id,
+            client_peer = %session.client.peer_id,
+            codec = ?codec,
+            "session.start"
+        );
 
         // Trickle ICE: every time the host gathers a candidate, push it back to
         // the browser over the same signaling socket. The browser will call
@@ -235,6 +269,21 @@ impl WebRtcSession {
                 let Some(candidate) = candidate else {
                     return;
                 };
+                let cand_str = candidate.to_string();
+                let typ = if cand_str.contains("typ relay") {
+                    "relay"
+                } else if cand_str.contains("typ srflx") {
+                    "srflx"
+                } else if cand_str.contains("typ host") {
+                    "host"
+                } else {
+                    "other"
+                };
+                tracing::debug!(
+                    session_id = %session_id,
+                    candidate_type = typ,
+                    "webrtc local ice candidate"
+                );
                 let json = match candidate.to_json() {
                     Ok(j) => j,
                     Err(err) => {
@@ -270,7 +319,7 @@ impl WebRtcSession {
             tracing::info!(
                 session_id = %session_id_for_state,
                 state = ?state,
-                "webrtc peer connection state"
+                "webrtc.pc_state"
             );
             Box::pin(async move {
                 if state == RTCPeerConnectionState::Failed {
@@ -282,36 +331,104 @@ impl WebRtcSession {
             })
         }));
 
+        let session_id_for_ice_state = session.session_id;
+        pc.on_ice_connection_state_change(Box::new(move |state: RTCIceConnectionState| {
+            tracing::info!(
+                session_id = %session_id_for_ice_state,
+                state = ?state,
+                "webrtc.ice_state"
+            );
+            Box::pin(async {})
+        }));
+
         // The browser side creates the data channel ("qubox-input") inside the
         // SDP offer. We hook into `on_data_channel` to receive input events.
         let input_slot = Arc::new(Mutex::new(None::<Arc<RTCDataChannel>>));
         let input_slot_for_cb = input_slot.clone();
+        let metrics_for_dc = metrics.clone();
+        let session_id_for_dc = session.session_id;
         pc.on_data_channel(Box::new(move |dc: Arc<RTCDataChannel>| {
             let label = dc.label().to_string();
-            tracing::info!(label = %label, "browser opened data channel");
+            tracing::info!(
+                session_id = %session_id_for_dc,
+                label = %label,
+                "browser opened data channel"
+            );
 
             let dc_for_msg = dc.clone();
-            let injector = crate::input_inject::UinputInjector::open()
-                .ok()
-                .flatten()
-                .map(Arc::new);
-            if injector.is_none() {
-                tracing::info!("uinput not available; input events will be logged only");
-            }
+            let injector = match crate::input_inject::UinputInjector::open() {
+                Ok(Some(inj)) => {
+                    tracing::info!(
+                        session_id = %session_id_for_dc,
+                        "uinput injector ready"
+                    );
+                    Some(Arc::new(inj))
+                }
+                Ok(None) => {
+                    tracing::info!(
+                        session_id = %session_id_for_dc,
+                        "uinput not available; input events will be logged only"
+                    );
+                    None
+                }
+                Err(err) => {
+                    tracing::warn!(
+                        session_id = %session_id_for_dc,
+                        ?err,
+                        "uinput open failed; input events will be logged only"
+                    );
+                    None
+                }
+            };
             let injector_for_msg = injector.clone();
+            let metrics_for_msg = metrics_for_dc.clone();
+            let sid = session_id_for_dc;
             dc.on_message(Box::new(move |msg| {
                 let data = msg.data.clone();
+                metrics_for_msg.input_rx.fetch_add(1, Ordering::Relaxed);
                 let parsed = match serde_json::from_slice::<RemoteInputEvent>(&data) {
                     Ok(ev) => ev,
                     Err(err) => {
-                        tracing::warn!(?err, len = data.len(), "ignoring malformed input event");
+                        metrics_for_msg
+                            .input_parse_err
+                            .fetch_add(1, Ordering::Relaxed);
+                        tracing::warn!(
+                            session_id = %sid,
+                            ?err,
+                            len = data.len(),
+                            "ignoring malformed input event"
+                        );
                         return Box::pin(async {});
                     }
                 };
-                tracing::trace!(?parsed, "received remote input event");
+                let rx = metrics_for_msg.input_rx.load(Ordering::Relaxed);
+                if rx <= 5 || rx % 50 == 0 {
+                    tracing::info!(
+                        session_id = %sid,
+                        input_rx = rx,
+                        ?parsed,
+                        "received remote input event"
+                    );
+                } else {
+                    tracing::trace!(session_id = %sid, ?parsed, "received remote input event");
+                }
                 if let Some(inj) = injector_for_msg.as_ref() {
-                    if let Err(err) = inj.dispatch(&parsed) {
-                        tracing::warn!(?err, "uinput dispatch failed");
+                    match inj.dispatch(&parsed) {
+                        Ok(()) => {
+                            metrics_for_msg
+                                .input_injected
+                                .fetch_add(1, Ordering::Relaxed);
+                        }
+                        Err(err) => {
+                            metrics_for_msg
+                                .input_inject_err
+                                .fetch_add(1, Ordering::Relaxed);
+                            tracing::warn!(
+                                session_id = %sid,
+                                ?err,
+                                "uinput dispatch failed"
+                            );
+                        }
                     }
                 }
                 let _ = dc_for_msg;
@@ -327,11 +444,42 @@ impl WebRtcSession {
             })
         }));
 
-        // Stash the slot inside the session for future use.
-        // (We rebuild the mutex wiring here so the `Mutex<Option<...>>` lives
-        // on the session struct, not a separate Arc.)
-        // NOTE: in this version we accept the slight duplication — Phase B
-        // will move this into the struct.
+        // Periodic session stats (every 2s while alive).
+        let metrics_tick = metrics.clone();
+        let mut cancel_for_stats = cancel_rx.clone();
+        let sid_stats = session.session_id;
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(2));
+            loop {
+                tokio::select! {
+                    _ = cancel_for_stats.changed() => {
+                        if *cancel_for_stats.borrow() {
+                            break;
+                        }
+                    }
+                    _ = interval.tick() => {
+                        tracing::info!(
+                            session_id = %sid_stats,
+                            input_rx = metrics_tick.input_rx.load(Ordering::Relaxed),
+                            input_injected = metrics_tick.input_injected.load(Ordering::Relaxed),
+                            input_parse_err = metrics_tick.input_parse_err.load(Ordering::Relaxed),
+                            input_inject_err = metrics_tick.input_inject_err.load(Ordering::Relaxed),
+                            video_frames = metrics_tick.video_frames_written.load(Ordering::Relaxed),
+                            video_bytes = metrics_tick.video_bytes_written.load(Ordering::Relaxed),
+                            "session.stats"
+                        );
+                    }
+                }
+            }
+            tracing::info!(
+                session_id = %sid_stats,
+                input_rx = metrics_tick.input_rx.load(Ordering::Relaxed),
+                input_injected = metrics_tick.input_injected.load(Ordering::Relaxed),
+                video_frames = metrics_tick.video_frames_written.load(Ordering::Relaxed),
+                "session.end"
+            );
+        });
+
         let _ = input_slot;
 
         Ok(session)
@@ -378,6 +526,7 @@ impl WebRtcSession {
     /// Send a single H.264 access unit (Annex-B format: SPS+PPS+IDR/P slice)
     /// onto the video track. The browser's MediaStream sees it as a frame.
     pub async fn write_video(&self, annex_b: bytes::Bytes) -> Result<()> {
+        let nbytes = annex_b.len() as u64;
         let sample = webrtc::media::Sample {
             data: annex_b,
             duration: Duration::from_millis(33),
@@ -386,7 +535,14 @@ impl WebRtcSession {
         self.video_track
             .write_sample(&sample)
             .await
-            .map_err(|e| anyhow!("video_track.write_sample failed: {e}"))
+            .map_err(|e| anyhow!("video_track.write_sample failed: {e}"))?;
+        self.metrics
+            .video_frames_written
+            .fetch_add(1, Ordering::Relaxed);
+        self.metrics
+            .video_bytes_written
+            .fetch_add(nbytes, Ordering::Relaxed);
+        Ok(())
     }
 
     /// Send a 20 ms Opus frame onto the audio track.
@@ -418,6 +574,7 @@ impl WebRtcSession {
     }
 
     pub async fn close(&self) -> Result<()> {
+        let _ = self.cancel_tx.send(true);
         self.pc.close().await.ok();
         Ok(())
     }

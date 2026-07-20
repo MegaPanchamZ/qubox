@@ -61,6 +61,7 @@ mod rate_feedback;
 mod recovery;
 mod screen_capture;
 mod toast_policy;
+mod turn_local;
 mod webrtc_session;
 
 #[cfg(feature = "file-sync")]
@@ -226,6 +227,14 @@ struct Args {
     /// Toast mode override: `off`, `on`, or `new-viewers-only`.
     #[arg(long, env = "QUBOX_TOAST_MODE")]
     toast_mode: Option<String>,
+
+    /// The account_id (Better Auth user UUID) of the operator who owns
+    /// this host. Connections from a viewer whose `descriptor.device_id`
+    /// equals this value are treated as the owner and bypass both the
+    /// toast gate and the rate limiter. Other connections fall through
+    /// to the configured toast mode.
+    #[arg(long, env = "QUBOX_OWNER_ACCOUNT_ID")]
+    owner_account_id: Option<Uuid>,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -596,6 +605,7 @@ async fn main() -> anyhow::Result<()> {
             5,
             Duration::from_secs(86_400),
         ),
+        args.owner_account_id,
     ));
 
     // Build enforcement state up-front so the pairing-UI session-decision
@@ -788,6 +798,7 @@ async fn main() -> anyhow::Result<()> {
                             message,
                             writer.clone(),
                             args.auto_approve_pairing,
+                            args.owner_account_id,
                             runtime.clone(),
                             pairing_ui.clone(),
                             args.ipc_socket.clone(),
@@ -846,7 +857,20 @@ impl RemoteInputInjector {
                     .move_mouse(target_x, target_y, Coordinate::Abs)
                     .map_err(|error| anyhow::anyhow!("failed to move mouse: {error}"))?;
             }
-            RemoteInputEvent::MouseButton { button, pressed } => {
+            RemoteInputEvent::MouseButton {
+                button,
+                pressed,
+                x,
+                y,
+            } => {
+                if let (Some(px), Some(py)) = (*x, *y) {
+                    let target_x = scale_input_coordinate(px, self.stream_width, self.display_width);
+                    let target_y =
+                        scale_input_coordinate(py, self.stream_height, self.display_height);
+                    self.enigo
+                        .move_mouse(target_x, target_y, Coordinate::Abs)
+                        .map_err(|error| anyhow::anyhow!("failed to move mouse: {error}"))?;
+                }
                 self.enigo
                     .button(
                         map_mouse_button(*button),
@@ -1119,6 +1143,7 @@ async fn handle_server_message(
     message: ServerMessage,
     writer: SharedSignalingWriter,
     auto_approve_pairing: bool,
+    owner_account_id: Option<Uuid>,
     runtime: HostSessionRuntime,
     pairing_ui: Option<pairing_ui::PairingUiState>,
     ipc_socket: Option<PathBuf>,
@@ -1138,10 +1163,25 @@ async fn handle_server_message(
                 client_name = %request.client.device_name,
                 client_label = %request.client_label,
                 auto_approve_pairing,
+                owner_account_id = ?owner_account_id,
                 "pairing requested"
             );
 
-            if auto_approve_pairing {
+            // Owner bypass: the operator's own account_id should never
+            // be forced through a manual pairing approval. Mirrors the
+            // toast-gate owner check, but happens upstream so the GUI
+            // is never asked.
+            let owner_bypass = owner_account_id
+                .map(|o| o == request.client.device_id)
+                .unwrap_or(false);
+
+            if auto_approve_pairing || owner_bypass {
+                let via = if owner_bypass { "owner-bypass" } else { "auto-approve" };
+                tracing::info!(
+                    request_id = %request.request_id,
+                    via = %via,
+                    "auto-approving pairing"
+                );
                 send_client_message(
                     &writer,
                     &ClientMessage::PairingDecision(PairingDecision {

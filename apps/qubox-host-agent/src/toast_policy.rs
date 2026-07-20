@@ -22,6 +22,7 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 use qubox_proto::PeerDescriptor;
 
@@ -154,15 +155,35 @@ impl ToastRateLimiter {
 pub struct ToastGate {
     pub policy: ToastPolicy,
     pub rate_limiter: ToastRateLimiter,
+    /// The host's own stable `device_id` (from the registered Better Auth
+    /// identity). Connections from the same `device_id` are treated as the
+    /// operator accessing their own machine — they never need a toast and
+    /// are exempt from rate limiting.
+    owner_device_id: Option<Uuid>,
     known_viewers: Mutex<HashMap<String, Instant>>,
 }
 
 impl ToastGate {
-    pub fn new(policy: ToastPolicy, rate_limiter: ToastRateLimiter) -> Self {
+    pub fn new(
+        policy: ToastPolicy,
+        rate_limiter: ToastRateLimiter,
+        owner_device_id: Option<Uuid>,
+    ) -> Self {
         Self {
             policy,
             rate_limiter,
+            owner_device_id,
             known_viewers: Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// `true` when the viewer's `device_id` matches the host's own
+    /// `device_id`. `peer_id` changes per WS connection, so it can't be
+    /// used as an owner key.
+    pub fn is_owner(&self, viewer: &PeerDescriptor) -> bool {
+        match self.owner_device_id {
+            Some(owner) => owner == viewer.device_id,
+            None => false,
         }
     }
 
@@ -182,6 +203,13 @@ impl ToastGate {
 
     /// Combine policy + rate limit into a single decision.
     pub fn evaluate(&self, viewer: &PeerDescriptor, now: Instant) -> ToastDecision {
+        // The operator accessing their own device: no toast, no rate
+        // limit, no per-session ack. `peer_id` is fresh on every WS
+        // reconnect so we can't use it — `device_id` is the stable
+        // account-key from Better Auth.
+        if self.is_owner(viewer) {
+            return ToastDecision::SkipAutoAck;
+        }
         let peer_key = viewer.peer_id.to_string();
         if self.rate_limiter.is_blocked(&peer_key) {
             return ToastDecision::Block;
@@ -276,12 +304,38 @@ mod tests {
                 mode: ToastMode::NewViewersOnly,
             },
             rl,
+            None,
         );
         let v = viewer();
         // First time = unknown -> Show
         assert_eq!(gate.evaluate(&v, Instant::now()), ToastDecision::Show);
         // After mark_known -> SkipAutoAck
         gate.mark_known(&v);
+        assert_eq!(
+            gate.evaluate(&v, Instant::now()),
+            ToastDecision::SkipAutoAck
+        );
+    }
+
+    #[test]
+    fn owner_bypasses_toast_and_rate_limit() {
+        let rl = ToastRateLimiter::new(Duration::from_secs(60), 1, Duration::from_secs(86_400));
+        let device_id = Uuid::new_v4();
+        let gate = ToastGate::new(
+            ToastPolicy {
+                mode: ToastMode::On, // would normally Show for everyone
+            },
+            rl,
+            Some(device_id),
+        );
+        let mut v = viewer();
+        v.device_id = device_id;
+        // Owner: SkipAutoAck even with the strictest policy and a
+        // rate limiter that would otherwise block after one attempt.
+        assert_eq!(
+            gate.evaluate(&v, Instant::now()),
+            ToastDecision::SkipAutoAck
+        );
         assert_eq!(
             gate.evaluate(&v, Instant::now()),
             ToastDecision::SkipAutoAck
