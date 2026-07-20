@@ -48,6 +48,7 @@ use tracing_subscriber::EnvFilter;
 use uuid::Uuid;
 
 mod capture_orchestrator;
+mod browser_audio;
 mod enforce;
 mod filesync_drain;
 mod input_inject;
@@ -2133,8 +2134,40 @@ async fn run_webrtc_session(
     // or fails to spawn, so the WebRTC transport path stays alive.
     let producer_session = session.clone();
     let cancel_rx = session.cancel_rx();
-    let capture_handle = tokio::spawn(async move {
-        // Pick a display: the viewer's `selected_display_id`, else the
+
+    // Browser audio: capture the system monitor (Pulse/PipeWire loopback
+    // on Linux, WASAPI loopback on Windows) → Opus → session.write_audio.
+    // Failure is non-fatal — the viewer still gets video. We log and
+    // continue with the (empty) declared Opus track so the data channel
+    // doesn't appear broken.
+    let audio_shutdown = Arc::new(tokio::sync::Notify::new());
+    if !runtime.disable_audio {
+        match browser_audio::spawn_browser_audio_capture(
+            session.clone(),
+            Arc::clone(&audio_shutdown),
+        ) {
+            Ok(()) => {
+                tracing::info!(
+                    session_id = %requested.session_id,
+                    "browser audio capture spawned"
+                );
+            }
+            Err(err) => {
+                tracing::warn!(
+                    ?err,
+                    session_id = %requested.session_id,
+                    "browser audio capture failed to start; viewers will get no audio"
+                );
+            }
+        }
+    } else {
+        tracing::info!(
+            session_id = %requested.session_id,
+            "host audio disabled (--disable-audio); no browser audio capture"
+        );
+    }
+
+    let capture_handle = tokio::spawn(async move {        // Pick a display: the viewer's `selected_display_id`, else the
         // primary reported via X11RandR / DXGI, else the first active
         // display, else the hardcoded 1280×720 fallback in
         // `CaptureConfig::default()`. Without this fallback chain the
@@ -2192,6 +2225,10 @@ async fn run_webrtc_session(
     // session. This task just waits for the registry entry to be removed
     // (e.g., on close) or the producer to die.
     let _ = producer.await;
+
+    // Stop the browser audio capture thread before tearing down the
+    // session so the encoder doesn't try to write to a closed track.
+    audio_shutdown.notify_waiters();
 
     if let Err(err) = session.close().await {
         tracing::warn!(?err, "error closing webrtc session");

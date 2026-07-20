@@ -32,6 +32,9 @@ directories = "5"
 bytes = "1"
 clap.workspace = true
 cpal.workspace = true
+# P2: browser viewer audio capture (system monitor → Opus → WebRTC track).
+# Re-uses the same `opus` crate as qubox-mic.
+opus.workspace = true
 enigo.workspace = true
 futures.workspace = true
 serde.workspace = true

@@ -7099,6 +7099,7 @@ dependencies = [
  "hmac",
  "notify",
  "notify-debouncer-mini",
+ "opus",
  "qubox-clipboard",
  "qubox-daemon",
  "qubox-display",

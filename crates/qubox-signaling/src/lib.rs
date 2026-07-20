@@ -328,10 +328,11 @@ struct ConnectedPeer {
 
 /// How often (in heartbeats) to re-emit a `Presence { connected: true }`
 /// event for each connected peer. The host-agent sends a `Heartbeat`
-/// every 10 seconds, so a value of 3 yields a presence refresh roughly
-/// every 30 seconds — well under typical TCP keepalive defaults while
-/// keeping pubsub traffic minimal (one event per peer per 30s).
-const PRESENCE_HEARTBEAT_INTERVAL: u64 = 3;
+/// every 10 seconds, so a value of 1 yields a presence refresh every
+/// 10 seconds — matching the host heartbeat cadence so the dashboard
+/// never falls behind the freshness window even if a single publish
+/// is dropped at the pubsub layer.
+const PRESENCE_HEARTBEAT_INTERVAL: u64 = 1;
 
 #[derive(Debug, Clone)]
 struct PendingPairing {
