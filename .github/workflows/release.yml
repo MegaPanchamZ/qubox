@@ -214,7 +214,8 @@ jobs:
           done
           find dist -type f \( -name '*.deb' -o -name '*.rpm' -o -name '*.AppImage' -o -name '*.dmg' -o -name '*.app' \) -print || true
           (cd dist && find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS)
-          ls -laR dist | head -80
+          ls -laR dist > /tmp/dist-listing.txt 2>&1 || true
+          head -80 /tmp/dist-listing.txt
 
       - name: Collect artifacts (Windows)
         if: runner.os == 'Windows'
