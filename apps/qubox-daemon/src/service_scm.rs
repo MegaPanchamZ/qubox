@@ -7,8 +7,8 @@ use std::sync::mpsc;
 use std::time::Duration;
 use tracing::info;
 use windows_service::service::{
-    ServiceAccess, ServiceControl, ServiceControlAccept, ServiceErrorControl, ServiceInfo,
-    ServiceStartType, ServiceState, ServiceStatus, ServiceType,
+    ServiceAccess, ServiceControl, ServiceControlAccept, ServiceErrorControl, ServiceExitCode,
+    ServiceInfo, ServiceStartType, ServiceState, ServiceStatus, ServiceType,
 };
 use windows_service::service_dispatcher;
 use windows_service::service_manager::{ServiceManager, ServiceManagerAccess};
@@ -61,7 +61,7 @@ fn handle_service_main(_args: Vec<std::ffi::OsString>) {
         service_type: ServiceType::OWN_PROCESS,
         current_state: ServiceState::StartPending,
         controls_accepted: ServiceControlAccept::STOP,
-        exit_code: 0,
+        exit_code: ServiceExitCode::NO_ERROR,
         checkpoint: 1,
         wait_hint: Duration::from_secs(30),
         process_id: None,
@@ -87,7 +87,7 @@ fn handle_service_main(_args: Vec<std::ffi::OsString>) {
             service_type: ServiceType::OWN_PROCESS,
             current_state: ServiceState::StopPending,
             controls_accepted: ServiceControlAccept::empty(),
-            exit_code: 0,
+            exit_code: ServiceExitCode::NO_ERROR,
             checkpoint: 1,
             wait_hint: Duration::from_secs(30),
             process_id: None,
@@ -106,7 +106,7 @@ fn handle_service_main(_args: Vec<std::ffi::OsString>) {
             service_type: ServiceType::OWN_PROCESS,
             current_state: ServiceState::Running,
             controls_accepted: ServiceControlAccept::STOP,
-            exit_code: 0,
+            exit_code: ServiceExitCode::NO_ERROR,
             checkpoint: 0,
             wait_hint: Duration::from_secs(30),
             process_id: None,
@@ -118,7 +118,7 @@ fn handle_service_main(_args: Vec<std::ffi::OsString>) {
         service_type: ServiceType::OWN_PROCESS,
         current_state: ServiceState::Stopped,
         controls_accepted: ServiceControlAccept::empty(),
-        exit_code: 0,
+        exit_code: ServiceExitCode::NO_ERROR,
         checkpoint: 0,
         wait_hint: Duration::ZERO,
         process_id: None,
@@ -166,17 +166,18 @@ pub fn ensure_elevated() -> anyhow::Result<()> {
 
 /// Register the service with the SCM.
 pub fn install_service(display_name: &str, bin_path: &str) -> windows_service::Result<()> {
+    use std::ffi::OsString;
     let manager = ServiceManager::local_computer(None::<&str>, ServiceManagerAccess::CONNECT)?;
     manager.create_service(
         &ServiceInfo {
-            name: Some(SERVICE_NAME),
-            display_name: Some(display_name),
+            name: Some(OsString::from(SERVICE_NAME)),
+            display_name: Some(OsString::from(display_name)),
             service_type: ServiceType::OWN_PROCESS,
             start_type: ServiceStartType::AutoStart,
             error_control: ServiceErrorControl::Normal,
-            executable_path: std::path::Path::new(bin_path),
-            launch_arguments: &["--service-run"],
-            dependencies: &[],
+            executable_path: std::path::Path::new(bin_path).to_path_buf(),
+            launch_arguments: vec![OsString::from("--service-run")],
+            dependencies: Vec::new(),
             account_name: None, // runs as LocalSystem
             account_password: None,
         },
