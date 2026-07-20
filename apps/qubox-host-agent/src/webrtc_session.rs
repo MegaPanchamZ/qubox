@@ -356,26 +356,23 @@ impl WebRtcSession {
             );
 
             let dc_for_msg = dc.clone();
-            let injector = match crate::input_inject::UinputInjector::open() {
-                Ok(Some(inj)) => {
+            // Prefer enigo/XTEST on X11 — uinput devices often never attach
+            // to the X server (missing from `xinput list`), so ABS writes
+            // succeed but the cursor never moves.
+            let injector = match crate::input_inject::HostInputInjector::open_best() {
+                Ok(inj) => {
                     tracing::info!(
                         session_id = %session_id_for_dc,
-                        "uinput injector ready"
+                        backend = inj.backend_name(),
+                        "input injector ready"
                     );
                     Some(Arc::new(inj))
-                }
-                Ok(None) => {
-                    tracing::info!(
-                        session_id = %session_id_for_dc,
-                        "uinput not available; input events will be logged only"
-                    );
-                    None
                 }
                 Err(err) => {
                     tracing::warn!(
                         session_id = %session_id_for_dc,
                         ?err,
-                        "uinput open failed; input events will be logged only"
+                        "no input injector; events logged only"
                     );
                     None
                 }
@@ -426,7 +423,7 @@ impl WebRtcSession {
                             tracing::warn!(
                                 session_id = %sid,
                                 ?err,
-                                "uinput dispatch failed"
+                                "input dispatch failed"
                             );
                         }
                     }

@@ -2099,8 +2099,25 @@ async fn run_webrtc_session(
     // attaches `on_data_channel` in `WebRtcSession::new` so it sees the
     // channel as soon as the browser opens it.
 
+    // Tear down any prior browser sessions so we don't keep N ffmpeg
+    // capture pipelines running (causes choppy/noisy video + CPU thrash).
     {
         let mut guard = runtime.webrtc_sessions.lock().await;
+        let stale: Vec<_> = guard
+            .keys()
+            .copied()
+            .filter(|id| *id != requested.session_id)
+            .collect();
+        for sid in stale {
+            if let Some(old) = guard.remove(&sid) {
+                tracing::warn!(
+                    old_session_id = %sid,
+                    new_session_id = %requested.session_id,
+                    "closing stale webrtc session"
+                );
+                let _ = old.close().await;
+            }
+        }
         guard.insert(requested.session_id, session.clone());
     }
 

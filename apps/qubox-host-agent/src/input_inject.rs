@@ -692,3 +692,230 @@ impl FileIoctl for File {
         libc_like::IoctlExt::ioctl(self, req, _arg)
     }
 }
+
+// ── X11/Wayland enigo (XTEST) injector ──────────────────────────────
+// On this host, X11 never attaches the uinput virtual tablet (device
+// missing from `xinput list`), so ABS writes succeed but never move the
+// cursor. Enigo uses XTEST which is already in the X core pointer tree.
+
+use enigo::{
+    Button, Coordinate,
+    Direction::{Press, Release},
+    Enigo, Key, Keyboard, Mouse, Settings,
+};
+
+/// Browser coords are absolute 0..=65535; map onto the primary display.
+pub struct EnigoInjector {
+    enigo: Mutex<Enigo>,
+    display_width: i32,
+    display_height: i32,
+}
+
+impl EnigoInjector {
+    pub fn open() -> Result<Self> {
+        let settings = Settings {
+            release_keys_when_dropped: true,
+            ..Settings::default()
+        };
+        let enigo = Enigo::new(&settings)
+            .map_err(|e| anyhow!("enigo init failed: {e}"))?;
+        let (display_width, display_height) = enigo
+            .main_display()
+            .map_err(|e| anyhow!("enigo main_display failed: {e}"))?;
+        tracing::info!(
+            display_width,
+            display_height,
+            "enigo/XTEST injector ready"
+        );
+        Ok(Self {
+            enigo: Mutex::new(enigo),
+            display_width: display_width.max(1),
+            display_height: display_height.max(1),
+        })
+    }
+
+    fn scale(&self, v: u32, extent: i32) -> i32 {
+        if extent <= 1 {
+            return 0;
+        }
+        let clamped = u64::from(v.min(65535));
+        ((clamped * u64::from((extent - 1) as u32)) / 65535) as i32
+    }
+
+    pub fn dispatch(&self, ev: &RemoteInputEvent) -> Result<()> {
+        let mut enigo = self.enigo.lock().unwrap();
+        match ev {
+            RemoteInputEvent::MouseMove { x, y } => {
+                let tx = self.scale(*x, self.display_width);
+                let ty = self.scale(*y, self.display_height);
+                enigo
+                    .move_mouse(tx, ty, Coordinate::Abs)
+                    .map_err(|e| anyhow!("enigo move: {e}"))?;
+            }
+            RemoteInputEvent::RelativeMouseMove { dx, dy } => {
+                enigo
+                    .move_mouse(*dx, *dy, Coordinate::Rel)
+                    .map_err(|e| anyhow!("enigo rel move: {e}"))?;
+            }
+            RemoteInputEvent::MouseButton {
+                button,
+                pressed,
+                x,
+                y,
+            } => {
+                if let (Some(px), Some(py)) = (*x, *y) {
+                    let tx = self.scale(px, self.display_width);
+                    let ty = self.scale(py, self.display_height);
+                    enigo
+                        .move_mouse(tx, ty, Coordinate::Abs)
+                        .map_err(|e| anyhow!("enigo move before click: {e}"))?;
+                }
+                let btn = match button {
+                    InputMouseButton::Left => Button::Left,
+                    InputMouseButton::Right => Button::Right,
+                    InputMouseButton::Middle => Button::Middle,
+                };
+                enigo
+                    .button(btn, if *pressed { Press } else { Release })
+                    .map_err(|e| anyhow!("enigo button: {e}"))?;
+            }
+            RemoteInputEvent::MouseWheel { dx, dy } => {
+                // enigo scroll: positive = up
+                let notches = normalize_wheel(*dy);
+                if notches != 0 {
+                    enigo
+                        .scroll(notches, enigo::Axis::Vertical)
+                        .map_err(|e| anyhow!("enigo scroll: {e}"))?;
+                }
+                let h = normalize_wheel(*dx);
+                if h != 0 {
+                    enigo
+                        .scroll(h, enigo::Axis::Horizontal)
+                        .map_err(|e| anyhow!("enigo hscroll: {e}"))?;
+                }
+            }
+            RemoteInputEvent::Keyboard { key, pressed } => {
+                let Some(k) = map_browser_key(key) else {
+                    tracing::debug!(key, "enigo: ignoring unmapped key");
+                    return Ok(());
+                };
+                enigo
+                    .key(k, if *pressed { Press } else { Release })
+                    .map_err(|e| anyhow!("enigo key: {e}"))?;
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+}
+
+fn map_browser_key(code: &str) -> Option<Key> {
+    // KeyboardEvent.code form from browsers.
+    if let Some(rest) = code.strip_prefix("Key") {
+        if rest.len() == 1 {
+            let c = rest.chars().next()?.to_ascii_lowercase();
+            if c.is_ascii_alphabetic() {
+                return Some(Key::Unicode(c));
+            }
+        }
+    }
+    if let Some(rest) = code.strip_prefix("Digit") {
+        if rest.len() == 1 {
+            let c = rest.chars().next()?;
+            if c.is_ascii_digit() {
+                return Some(Key::Unicode(c));
+            }
+        }
+    }
+    match code {
+        "ArrowLeft" | "Left" => Some(Key::LeftArrow),
+        "ArrowRight" | "Right" => Some(Key::RightArrow),
+        "ArrowUp" | "Up" => Some(Key::UpArrow),
+        "ArrowDown" | "Down" => Some(Key::DownArrow),
+        "Enter" => Some(Key::Return),
+        "Escape" => Some(Key::Escape),
+        "Backspace" => Some(Key::Backspace),
+        "Tab" => Some(Key::Tab),
+        "Space" => Some(Key::Space),
+        "Delete" => Some(Key::Delete),
+        "Home" => Some(Key::Home),
+        "End" => Some(Key::End),
+        "PageUp" => Some(Key::PageUp),
+        "PageDown" => Some(Key::PageDown),
+        "ShiftLeft" | "LeftShift" => Some(Key::LShift),
+        "ShiftRight" | "RightShift" => Some(Key::RShift),
+        "ControlLeft" | "LeftCtrl" => Some(Key::LControl),
+        "ControlRight" | "RightCtrl" => Some(Key::RControl),
+        "AltLeft" | "LeftAlt" => Some(Key::Alt),
+        "AltRight" | "RightAlt" => Some(Key::Alt),
+        "MetaLeft" | "MetaRight" | "OSLeft" | "OSRight" => Some(Key::Meta),
+        "CapsLock" => Some(Key::CapsLock),
+        "Minus" => Some(Key::Unicode('-')),
+        "Equal" => Some(Key::Unicode('=')),
+        "BracketLeft" => Some(Key::Unicode('[')),
+        "BracketRight" => Some(Key::Unicode(']')),
+        "Backslash" => Some(Key::Unicode('\\')),
+        "Semicolon" => Some(Key::Unicode(';')),
+        "Quote" => Some(Key::Unicode('\'')),
+        "Backquote" => Some(Key::Unicode('`')),
+        "Comma" => Some(Key::Unicode(',')),
+        "Period" => Some(Key::Unicode('.')),
+        "Slash" => Some(Key::Unicode('/')),
+        "F1" => Some(Key::F1),
+        "F2" => Some(Key::F2),
+        "F3" => Some(Key::F3),
+        "F4" => Some(Key::F4),
+        "F5" => Some(Key::F5),
+        "F6" => Some(Key::F6),
+        "F7" => Some(Key::F7),
+        "F8" => Some(Key::F8),
+        "F9" => Some(Key::F9),
+        "F10" => Some(Key::F10),
+        "F11" => Some(Key::F11),
+        "F12" => Some(Key::F12),
+        s if s.len() == 1 => {
+            let c = s.chars().next()?;
+            if c.is_ascii() {
+                Some(Key::Unicode(c))
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
+/// Prefer enigo (XTEST — works on X11 today). Fall back to uinput.
+pub enum HostInputInjector {
+    Enigo(EnigoInjector),
+    Uinput(UinputInjector),
+}
+
+impl HostInputInjector {
+    pub fn open_best() -> Result<Self> {
+        match EnigoInjector::open() {
+            Ok(e) => Ok(Self::Enigo(e)),
+            Err(enigo_err) => {
+                tracing::warn!(?enigo_err, "enigo unavailable; trying uinput");
+                match UinputInjector::open()? {
+                    Some(u) => Ok(Self::Uinput(u)),
+                    None => Err(anyhow!("no input injector available (enigo+uinput failed)")),
+                }
+            }
+        }
+    }
+
+    pub fn dispatch(&self, ev: &RemoteInputEvent) -> Result<()> {
+        match self {
+            Self::Enigo(e) => e.dispatch(ev),
+            Self::Uinput(u) => u.dispatch(ev),
+        }
+    }
+
+    pub fn backend_name(&self) -> &'static str {
+        match self {
+            Self::Enigo(_) => "enigo",
+            Self::Uinput(_) => "uinput",
+        }
+    }
+}
