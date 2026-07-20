@@ -332,7 +332,7 @@ struct ConnectedPeer {
 /// 10 seconds — matching the host heartbeat cadence so the dashboard
 /// never falls behind the freshness window even if a single publish
 /// is dropped at the pubsub layer.
-const PRESENCE_HEARTBEAT_INTERVAL: u64 = 1;
+const PRESENCE_HEARTBEAT_INTERVAL: u64 = 3;
 
 #[derive(Debug, Clone)]
 struct PendingPairing {
@@ -2628,6 +2628,7 @@ mod tests {
                 encoders: vec![VideoCodec::H264, VideoCodec::Av1],
                 decoders: vec![VideoCodec::H264, VideoCodec::Av1],
                 notes: Vec::new(),
+                displays: Vec::new(),
             },
         }
     }
@@ -2817,7 +2818,7 @@ mod tests {
             .await
             .unwrap();
         state
-            .register(client_b.clone(), None, tenant_b, client_b_tx)
+            .register(client_b.clone(), None, tenant_b, Uuid::nil(), client_b_tx)
             .await
             .unwrap();
 
@@ -2851,11 +2852,11 @@ mod tests {
         let (host_tx, _) = mpsc::unbounded_channel();
         let (client_tx, _) = mpsc::unbounded_channel();
         state
-            .register(host.clone(), None, Uuid::new_v4(), host_tx)
+            .register(host.clone(), None, Uuid::new_v4(), Uuid::nil(), host_tx)
             .await
             .unwrap();
         state
-            .register(client.clone(), None, Uuid::new_v4(), client_tx)
+            .register(client.clone(), None, Uuid::new_v4(), Uuid::nil(), client_tx)
             .await
             .unwrap();
         let err = state
@@ -2884,11 +2885,11 @@ mod tests {
         let (client_tx, _client_rx) = mpsc::unbounded_channel();
 
         state
-            .register(host.clone(), None, Uuid::nil(), host_tx)
+            .register(host.clone(), None, Uuid::nil(), Uuid::nil(), host_tx)
             .await
             .unwrap();
         state
-            .register(client.clone(), None, Uuid::nil(), client_tx)
+            .register(client.clone(), None, Uuid::nil(), Uuid::nil(), client_tx)
             .await
             .unwrap();
 
@@ -2930,11 +2931,23 @@ mod tests {
         let (client_tx, _client_rx) = mpsc::unbounded_channel();
 
         state
-            .register(host.clone(), Some(host_pk), Uuid::nil(), host_tx)
+            .register(
+                host.clone(),
+                Some(host_pk),
+                Uuid::nil(),
+                Uuid::nil(),
+                host_tx,
+            )
             .await
             .unwrap();
         state
-            .register(client.clone(), Some(client_pk), Uuid::nil(), client_tx)
+            .register(
+                client.clone(),
+                Some(client_pk),
+                Uuid::nil(),
+                Uuid::nil(),
+                client_tx,
+            )
             .await
             .unwrap();
         state
@@ -2981,11 +2994,11 @@ mod tests {
         let (client_tx, _client_rx) = mpsc::unbounded_channel();
 
         state
-            .register(host.clone(), None, Uuid::nil(), host_tx)
+            .register(host.clone(), None, Uuid::nil(), Uuid::nil(), host_tx)
             .await
             .unwrap();
         state
-            .register(client.clone(), None, Uuid::nil(), client_tx)
+            .register(client.clone(), None, Uuid::nil(), Uuid::nil(), client_tx)
             .await
             .unwrap();
 
@@ -3043,11 +3056,11 @@ mod tests {
         let (client_tx, _client_rx) = mpsc::unbounded_channel();
 
         state
-            .register(host.clone(), None, Uuid::nil(), host_tx)
+            .register(host.clone(), None, Uuid::nil(), Uuid::nil(), host_tx)
             .await
             .unwrap();
         state
-            .register(client.clone(), None, Uuid::nil(), client_tx)
+            .register(client.clone(), None, Uuid::nil(), Uuid::nil(), client_tx)
             .await
             .unwrap();
         state
@@ -3080,11 +3093,23 @@ mod tests {
         let (client_tx, _client_rx) = mpsc::unbounded_channel();
 
         state
-            .register(host.clone(), Some(host_pk), Uuid::nil(), host_tx)
+            .register(
+                host.clone(),
+                Some(host_pk),
+                Uuid::nil(),
+                Uuid::nil(),
+                host_tx,
+            )
             .await
             .unwrap();
         state
-            .register(client.clone(), Some(client_pk), Uuid::nil(), client_tx)
+            .register(
+                client.clone(),
+                Some(client_pk),
+                Uuid::nil(),
+                Uuid::nil(),
+                client_tx,
+            )
             .await
             .unwrap();
         state
@@ -3163,11 +3188,23 @@ mod tests {
         let (client_tx, _client_rx) = mpsc::unbounded_channel();
 
         state
-            .register(host.clone(), Some(host_pk), Uuid::nil(), host_tx)
+            .register(
+                host.clone(),
+                Some(host_pk),
+                Uuid::nil(),
+                Uuid::nil(),
+                host_tx,
+            )
             .await
             .unwrap();
         state
-            .register(client.clone(), Some(client_pk), Uuid::nil(), client_tx)
+            .register(
+                client.clone(),
+                Some(client_pk),
+                Uuid::nil(),
+                Uuid::nil(),
+                client_tx,
+            )
             .await
             .unwrap();
         state
@@ -3916,6 +3953,7 @@ mod tests {
             exp: 1_700_000_900_000,
             caps: SessionCaps::default(),
             viewer_dtls_fp: "AA:BB:CC:DD".into(),
+            selected_display_id: None,
         }
     }
 

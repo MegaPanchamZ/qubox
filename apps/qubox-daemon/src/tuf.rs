@@ -679,6 +679,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)] // sentinel guard is intentionally held across awaits to serialize tests
     async fn tuf_apply_update_linux() {
         if cfg!(not(target_os = "linux")) {
             return;
@@ -731,6 +732,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)] // sentinel guard is intentionally held across awaits to serialize tests
     async fn tuf_rollback_restores_previous_binary() {
         if cfg!(not(target_os = "linux")) {
             return;

@@ -896,6 +896,7 @@ fn map_browser_key(code: &str) -> Option<Key> {
 }
 
 /// Prefer enigo (XTEST — works on X11 today). Fall back to uinput.
+#[allow(clippy::large_enum_variant)] // variants are mutually-exclusive at runtime; boxing would add an extra alloc on the hot path
 pub enum HostInputInjector {
     Enigo(EnigoInjector),
     Uinput(UinputInjector),

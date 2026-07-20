@@ -1,4 +1,5 @@
 use std::env;
+#[cfg(target_os = "linux")]
 use std::process::Command;
 
 use qubox_proto::{
@@ -73,7 +74,7 @@ fn capabilities_for(os: PlatformOs, role: PeerRole) -> CapabilityProfile {
                 "VM and lab environments frequently resolve to X11 even when PipeWire is installed".to_string(),
                 "Wayland and portal permissions still need explicit runtime modeling".to_string(),
             ],
-            displays: enumerate_linux_displays(),
+            displays: enumerate_displays(),
         },
         (PlatformOs::Linux, PeerRole::Client) => CapabilityProfile {
             transports: vec![

@@ -2673,6 +2673,7 @@ mod tests {
                 audio: true,
             },
             viewer_dtls_fp: "AA:BB:CC:DD".into(),
+            selected_display_id: None,
         }
     }
 

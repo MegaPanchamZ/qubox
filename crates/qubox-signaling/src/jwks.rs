@@ -583,6 +583,7 @@ mod tests {
             exp: 2_000,
             caps: SessionCaps::default(),
             viewer_dtls_fp: "AA".into(),
+            selected_display_id: None,
         };
         let env = SignedBundle::new(&payload, "kid-1", &sk).unwrap();
         client.verify_bundle(&env).await.unwrap();

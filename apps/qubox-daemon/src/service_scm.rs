@@ -11,7 +11,7 @@ use windows_service::service::{
     ServiceStartType, ServiceState, ServiceStatus, ServiceType,
 };
 use windows_service::service_dispatcher;
-use windows_service::service_manager::ServiceManager;
+use windows_service::service_manager::{ServiceManager, ServiceManagerAccess};
 
 const SERVICE_NAME: &str = "QuboxDaemon";
 const SERVICE_DISPLAY_NAME: &str = "Qubox Daemon";
@@ -166,7 +166,7 @@ pub fn ensure_elevated() -> anyhow::Result<()> {
 
 /// Register the service with the SCM.
 pub fn install_service(display_name: &str, bin_path: &str) -> windows_service::Result<()> {
-    let manager = ServiceManager::local_computer(None::<&str>, ServiceAccess::CREATE_SERVICE)?;
+    let manager = ServiceManager::local_computer(None::<&str>, ServiceManagerAccess::CONNECT)?;
     manager.create_service(
         &ServiceInfo {
             name: Some(SERVICE_NAME),
@@ -177,7 +177,7 @@ pub fn install_service(display_name: &str, bin_path: &str) -> windows_service::R
             executable_path: std::path::Path::new(bin_path),
             launch_arguments: &["--service-run"],
             dependencies: &[],
-            account_username: None, // runs as LocalSystem
+            account_name: None, // runs as LocalSystem
             account_password: None,
         },
         ServiceAccess::CHANGE_CONFIG,
@@ -187,7 +187,7 @@ pub fn install_service(display_name: &str, bin_path: &str) -> windows_service::R
 
 /// Unregister the service from the SCM.
 pub fn uninstall_service() -> windows_service::Result<()> {
-    let manager = ServiceManager::local_computer(None::<&str>, ServiceAccess::CONNECT)?;
+    let manager = ServiceManager::local_computer(None::<&str>, ServiceManagerAccess::CONNECT)?;
     let service = manager.open_service(SERVICE_NAME, ServiceAccess::DELETE)?;
     service.delete()?;
     Ok(())
@@ -195,8 +195,8 @@ pub fn uninstall_service() -> windows_service::Result<()> {
 
 /// Query whether the service is running.
 pub fn service_status() -> Option<ServiceState> {
-    use windows_service::service::ServiceAccess;
-    let manager = ServiceManager::local_computer(None::<&str>, ServiceAccess::CONNECT).ok()?;
+    let manager =
+        ServiceManager::local_computer(None::<&str>, ServiceManagerAccess::CONNECT).ok()?;
     let service = manager
         .open_service(SERVICE_NAME, ServiceAccess::QUERY_STATUS)
         .ok()?;

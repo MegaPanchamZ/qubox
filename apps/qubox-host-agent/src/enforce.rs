@@ -18,10 +18,10 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use qubox_proto::{
-    PeerDescriptor, SessionBundleInfo, SessionCaps, SignedBundle, SignedKill, SignedKillEnvelope,
+    PeerDescriptor, SessionBundleInfo, SignedBundle, SignedKill, SignedKillEnvelope,
 };
 use qubox_signaling::jti_cache::{JtiCache, JtiError};
-use qubox_signaling::jwks::{HttpJwksFetcher, JwksClient, JwksPolicy};
+use qubox_signaling::jwks::{JwksClient, JwksPolicy};
 use uuid::Uuid;
 
 /// How long the PIN gate waits for `SessionBundleAccepted` before
@@ -357,8 +357,6 @@ async fn verify_signed_kill_envelope(
     jwks: &JwksClient,
     envelope: &SignedKillEnvelope,
 ) -> Result<SignedKill, String> {
-    use qubox_signaling::jwks::JwksFetcher;
-
     // JWKS first — verify the envelope signature against the public
     // key matching `envelope.envelope.kid`.
     jwks.verify_bundle(&envelope.envelope)
@@ -421,6 +419,7 @@ pub fn verify_pin_proof(
 /// by tests + the relay's PIN-gate path.
 #[cfg(test)]
 pub fn bundle_with_pin_proof(jti: &str, sub: &str) -> SessionBundleInfo {
+    use qubox_proto::SessionCaps;
     SessionBundleInfo {
         session_id: Uuid::new_v4(),
         jti: jti.to_string(),
@@ -433,6 +432,7 @@ pub fn bundle_with_pin_proof(jti: &str, sub: &str) -> SessionBundleInfo {
         pin_proof: Some(qubox_proto::PinProof {
             pin_hash_match: true,
         }),
+        selected_display_id: None,
     }
 }
 
@@ -457,6 +457,7 @@ fn _ensure_signed_bundle_in_scope(_: SignedBundle) {}
 mod tests {
     use super::*;
     use crate::pin::PinStore;
+    use qubox_proto::SessionCaps;
     use std::sync::Arc as StdArc;
 
     #[test]
@@ -474,6 +475,7 @@ mod tests {
             pin_proof: Some(qubox_proto::PinProof {
                 pin_hash_match: true,
             }),
+            selected_display_id: None,
         };
         let descriptor = make_peer_descriptor_shell();
         assert!(!verify_pin_proof(&bundle, &store, &descriptor));

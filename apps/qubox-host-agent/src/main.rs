@@ -1877,7 +1877,6 @@ async fn run_webtransport_input_loop(
     mut recv: wtransport::RecvStream,
     input_tx: tokio_mpsc::UnboundedSender<RemoteInputEvent>,
 ) -> anyhow::Result<()> {
-    use tokio::io::AsyncReadExt;
     loop {
         let mut op = [0u8; 1];
         recv.read_exact(&mut op).await?;
