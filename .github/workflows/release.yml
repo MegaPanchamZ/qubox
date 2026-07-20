@@ -278,7 +278,7 @@ jobs:
         run: cargo install cargo-cyclonedx
 
       - name: Generate CycloneDX SBOM
-        run: cargo cyclonedx --override-filename-suffix .cdx.json
+        run: cargo cyclonedx --override-filename qubox.cdx.json
 
       - name: Upload SBOM
         uses: actions/upload-artifact@v4
