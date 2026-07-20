@@ -15,9 +15,9 @@
 //! this file is Linux-only. The Tauri host-agent on those platforms will
 //! dispatch via the native Tauri shell IPC instead.
 
-use anyhow::{anyhow, Result};
 #[cfg(target_os = "linux")]
 use anyhow::Context;
+use anyhow::{anyhow, Result};
 use qubox_proto::{InputMouseButton, RemoteInputEvent};
 #[cfg(target_os = "linux")]
 use std::fs::File;
