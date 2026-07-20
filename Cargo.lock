@@ -6940,7 +6940,7 @@ checksum = "d55d956fa96f5ec02be2e13af0e20391a5aa83d6a074e3ad368959d0fab299ea"
 
 [[package]]
 name = "qubox-client-cli"
-version = "0.1.0"
+version = "0.1.3"
 dependencies = [
  "anyhow",
  "bytes 1.12.1",
@@ -6982,7 +6982,7 @@ dependencies = [
 
 [[package]]
 name = "qubox-client-gui"
-version = "0.1.0"
+version = "0.1.3"
 dependencies = [
  "anyhow",
  "directories",
@@ -7013,7 +7013,7 @@ dependencies = [
 
 [[package]]
 name = "qubox-clipboard"
-version = "0.1.0"
+version = "0.1.3"
 dependencies = [
  "arboard",
  "blake3",
@@ -7027,7 +7027,7 @@ dependencies = [
 
 [[package]]
 name = "qubox-daemon"
-version = "0.1.0"
+version = "0.1.3"
 dependencies = [
  "anyhow",
  "bincode",
@@ -7081,7 +7081,7 @@ dependencies = [
 
 [[package]]
 name = "qubox-host-agent"
-version = "0.1.0"
+version = "0.1.3"
 dependencies = [
  "anyhow",
  "argon2",
@@ -7136,7 +7136,7 @@ dependencies = [
 
 [[package]]
 name = "qubox-identity"
-version = "0.1.0"
+version = "0.1.3"
 dependencies = [
  "anyhow",
  "argon2",
@@ -7155,7 +7155,7 @@ dependencies = [
 
 [[package]]
 name = "qubox-media"
-version = "0.1.0"
+version = "0.1.3"
 dependencies = [
  "qubox-display",
  "qubox-proto",
@@ -7166,7 +7166,7 @@ dependencies = [
 
 [[package]]
 name = "qubox-mic"
-version = "0.1.0"
+version = "0.1.3"
 dependencies = [
  "anyhow",
  "bytes 1.12.1",
@@ -7187,7 +7187,7 @@ dependencies = [
 
 [[package]]
 name = "qubox-pen"
-version = "0.1.0"
+version = "0.1.3"
 dependencies = [
  "crossbeam-channel",
  "input",
@@ -7205,7 +7205,7 @@ dependencies = [
 
 [[package]]
 name = "qubox-platform"
-version = "0.1.0"
+version = "0.1.3"
 dependencies = [
  "qubox-proto",
  "uuid",
@@ -7213,7 +7213,7 @@ dependencies = [
 
 [[package]]
 name = "qubox-proto"
-version = "0.1.0"
+version = "0.1.3"
 dependencies = [
  "base64 0.22.1",
  "bitflags 2.13.0",
@@ -7232,7 +7232,7 @@ dependencies = [
 
 [[package]]
 name = "qubox-rl-policy"
-version = "0.1.0"
+version = "0.1.3"
 dependencies = [
  "bincode",
  "candle-core",
@@ -7245,7 +7245,7 @@ dependencies = [
 
 [[package]]
 name = "qubox-signaling"
-version = "0.1.0"
+version = "0.1.3"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -7271,7 +7271,7 @@ dependencies = [
 
 [[package]]
 name = "qubox-signaling-server"
-version = "0.1.0"
+version = "0.1.3"
 dependencies = [
  "anyhow",
  "axum",
@@ -7293,7 +7293,7 @@ dependencies = [
 
 [[package]]
 name = "qubox-sync"
-version = "0.1.0"
+version = "0.1.3"
 dependencies = [
  "anyhow",
  "blake3",
@@ -7305,7 +7305,7 @@ dependencies = [
 
 [[package]]
 name = "qubox-transport"
-version = "0.1.0"
+version = "0.1.3"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -7340,7 +7340,7 @@ dependencies = [
 
 [[package]]
 name = "qubox-webtransport"
-version = "0.1.0"
+version = "0.1.3"
 dependencies = [
  "anyhow",
  "hex",
