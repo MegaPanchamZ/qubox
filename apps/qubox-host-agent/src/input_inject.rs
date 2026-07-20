@@ -261,8 +261,13 @@ impl UinputInjector {
         let mut me = Self {
             file: Mutex::new(file),
         };
-        me.register_device()
-            .with_context(|| format!("register uinput device (path: {:?}, evbit_first: {:?})", path, std::io::Error::last_os_error()))?;
+        me.register_device().with_context(|| {
+            format!(
+                "register uinput device (path: {:?}, evbit_first: {:?})",
+                path,
+                std::io::Error::last_os_error()
+            )
+        })?;
         Ok(Some(me))
     }
 
@@ -635,28 +640,38 @@ mod libc_like {
 
 fn me_set_evbit(f: &mut File, ev_type: u16) -> Result<()> {
     // UI_SET_EVBIT = _IOW('U', 100, int) = 0x40045564
-    f.ioctl(0x4004_5564, ev_type as u64).map(|_| ()).with_context(|| {
-        format!(
-            "UI_SET_EVBIT(ev_type={ev_type}, errno={})",
-            std::io::Error::last_os_error()
-        )
-    })
+    f.ioctl(0x4004_5564, ev_type as u64)
+        .map(|_| ())
+        .with_context(|| {
+            format!(
+                "UI_SET_EVBIT(ev_type={ev_type}, errno={})",
+                std::io::Error::last_os_error()
+            )
+        })
 }
 fn me_set_keybit(f: &mut File, code: u16) -> Result<()> {
     // UI_SET_KEYBIT = _IOW('U', 101, int) = 0x40045565
-    f.ioctl(0x4004_5565, code as u64).map(|_| ()).context("UI_SET_KEYBIT")
+    f.ioctl(0x4004_5565, code as u64)
+        .map(|_| ())
+        .context("UI_SET_KEYBIT")
 }
 fn me_set_relbit(f: &mut File, code: u16) -> Result<()> {
     // UI_SET_RELBIT = _IOW('U', 102, int) = 0x40045566
-    f.ioctl(0x4004_5566, code as u64).map(|_| ()).context("UI_SET_RELBIT")
+    f.ioctl(0x4004_5566, code as u64)
+        .map(|_| ())
+        .context("UI_SET_RELBIT")
 }
 fn me_set_absbit(f: &mut File, code: u16) -> Result<()> {
     // UI_SET_ABSBIT = _IOW('U', 103, int) = 0x40045567
-    f.ioctl(0x4004_5567, code as u64).map(|_| ()).context("UI_SET_ABSBIT")
+    f.ioctl(0x4004_5567, code as u64)
+        .map(|_| ())
+        .context("UI_SET_ABSBIT")
 }
 fn me_set_mscbit(f: &mut File, code: u16) -> Result<()> {
     // UI_SET_MSCBIT = _IOW('U', 104, int) = 0x40045568
-    f.ioctl(0x4004_5568, code as u64).map(|_| ()).context("UI_SET_MSCBIT")
+    f.ioctl(0x4004_5568, code as u64)
+        .map(|_| ())
+        .context("UI_SET_MSCBIT")
 }
 
 fn me_set_propbit(f: &mut File, code: u16) -> Result<()> {
@@ -717,16 +732,11 @@ impl EnigoInjector {
             release_keys_when_dropped: true,
             ..Settings::default()
         };
-        let enigo = Enigo::new(&settings)
-            .map_err(|e| anyhow!("enigo init failed: {e}"))?;
+        let enigo = Enigo::new(&settings).map_err(|e| anyhow!("enigo init failed: {e}"))?;
         let (display_width, display_height) = enigo
             .main_display()
             .map_err(|e| anyhow!("enigo main_display failed: {e}"))?;
-        tracing::info!(
-            display_width,
-            display_height,
-            "enigo/XTEST injector ready"
-        );
+        tracing::info!(display_width, display_height, "enigo/XTEST injector ready");
         Ok(Self {
             enigo: Mutex::new(enigo),
             display_width: display_width.max(1),

@@ -47,8 +47,8 @@ use tokio_tungstenite::{connect_async, tungstenite::Message, MaybeTlsStream, Web
 use tracing_subscriber::EnvFilter;
 use uuid::Uuid;
 
-mod capture_orchestrator;
 mod browser_audio;
+mod capture_orchestrator;
 mod enforce;
 mod filesync_drain;
 mod input_inject;
@@ -865,7 +865,8 @@ impl RemoteInputInjector {
                 y,
             } => {
                 if let (Some(px), Some(py)) = (*x, *y) {
-                    let target_x = scale_input_coordinate(px, self.stream_width, self.display_width);
+                    let target_x =
+                        scale_input_coordinate(px, self.stream_width, self.display_width);
                     let target_y =
                         scale_input_coordinate(py, self.stream_height, self.display_height);
                     self.enigo
@@ -1177,7 +1178,11 @@ async fn handle_server_message(
                 .unwrap_or(false);
 
             if auto_approve_pairing || owner_bypass {
-                let via = if owner_bypass { "owner-bypass" } else { "auto-approve" };
+                let via = if owner_bypass {
+                    "owner-bypass"
+                } else {
+                    "auto-approve"
+                };
                 tracing::info!(
                     request_id = %request.request_id,
                     via = %via,
@@ -2167,7 +2172,8 @@ async fn run_webrtc_session(
         );
     }
 
-    let capture_handle = tokio::spawn(async move {        // Pick a display: the viewer's `selected_display_id`, else the
+    let capture_handle = tokio::spawn(async move {
+        // Pick a display: the viewer's `selected_display_id`, else the
         // primary reported via X11RandR / DXGI, else the first active
         // display, else the hardcoded 1280×720 fallback in
         // `CaptureConfig::default()`. Without this fallback chain the

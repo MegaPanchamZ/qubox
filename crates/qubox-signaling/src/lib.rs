@@ -941,11 +941,7 @@ impl SignalingState {
     }
 
     async fn peer_account_id(&self, peer_id: Uuid) -> Option<Uuid> {
-        self.peers
-            .read()
-            .await
-            .get(&peer_id)
-            .map(|p| p.account_id)
+        self.peers.read().await.get(&peer_id).map(|p| p.account_id)
     }
 
     /// Resolve a connected host peer_id by the host's `device_id`.
@@ -2665,7 +2661,13 @@ mod tests {
         // credential/peer binding test gets a deterministic match.
         let pk = public_key;
         state
-            .register(descriptor.clone(), Some(pk), Uuid::nil(), Uuid::nil(), tx.clone())
+            .register(
+                descriptor.clone(),
+                Some(pk),
+                Uuid::nil(),
+                Uuid::nil(),
+                tx.clone(),
+            )
             .await
             .expect("test peer registration");
         (descriptor, tx)

@@ -36,11 +36,7 @@ pub struct ResolvedIce {
 
 /// Inject HMAC credentials into any `turn:` URL that arrives without
 /// them. STUN URLs and pre-minted static creds pass through unchanged.
-pub fn mint_for_session(
-    session_id: Uuid,
-    peer_id: Uuid,
-    servers: &[IceServer],
-) -> ResolvedIce {
+pub fn mint_for_session(session_id: Uuid, peer_id: Uuid, servers: &[IceServer]) -> ResolvedIce {
     let secret = match std::env::var("QUBOX_TURN_SECRET")
         .ok()
         .filter(|s| !s.is_empty())

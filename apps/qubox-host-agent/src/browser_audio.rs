@@ -67,8 +67,7 @@ pub fn spawn_browser_audio_capture(
     // Shared buffer between cpal callback (real-time) and the encode
     // thread. `Mutex<Vec<f32>>` is fine here — cpal callbacks are
     // serialized per-stream and the encoder is single-threaded.
-    let buffer: Arc<std::sync::Mutex<Vec<f32>>> =
-        Arc::new(std::sync::Mutex::new(Vec::new()));
+    let buffer: Arc<std::sync::Mutex<Vec<f32>>> = Arc::new(std::sync::Mutex::new(Vec::new()));
     let buffer_for_callback = Arc::clone(&buffer);
 
     let err_fn = |err| warn!(?err, "browser audio cpal stream error");
@@ -77,8 +76,9 @@ pub fn spawn_browser_audio_capture(
         SampleFormat::F32 => device.build_input_stream(
             &stream_config,
             move |data: &[f32], _| {
-                let mut buf =
-                    buffer_for_callback.lock().unwrap_or_else(|p| p.into_inner());
+                let mut buf = buffer_for_callback
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner());
                 if capture_channels == 1 {
                     buf.extend_from_slice(data);
                 } else {
@@ -97,8 +97,9 @@ pub fn spawn_browser_audio_capture(
         SampleFormat::I16 => device.build_input_stream(
             &stream_config,
             move |data: &[i16], _| {
-                let mut buf =
-                    buffer_for_callback.lock().unwrap_or_else(|p| p.into_inner());
+                let mut buf = buffer_for_callback
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner());
                 if capture_channels == 1 {
                     buf.extend(data.iter().map(|&s| s as f32 / 32_768.0));
                 } else {
@@ -117,12 +118,11 @@ pub fn spawn_browser_audio_capture(
         SampleFormat::U16 => device.build_input_stream(
             &stream_config,
             move |data: &[u16], _| {
-                let mut buf =
-                    buffer_for_callback.lock().unwrap_or_else(|p| p.into_inner());
+                let mut buf = buffer_for_callback
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner());
                 if capture_channels == 1 {
-                    buf.extend(
-                        data.iter().map(|&s| (s as f32 - 32_768.0) / 32_768.0),
-                    );
+                    buf.extend(data.iter().map(|&s| (s as f32 - 32_768.0) / 32_768.0));
                 } else {
                     for frame in data.chunks_exact(capture_channels) {
                         let mut acc = 0.0_f32;
@@ -190,14 +190,12 @@ pub fn spawn_browser_audio_capture(
                     let frame = &leftover[..OPUS_FRAME_SAMPLES];
                     match encoder.encode_float(frame, &mut opus_buf) {
                         Ok(n) if n > 0 => {
-                            let pkt =
-                                bytes::Bytes::copy_from_slice(&opus_buf[..n]);
+                            let pkt = bytes::Bytes::copy_from_slice(&opus_buf[..n]);
                             let session_clone = Arc::clone(&session);
                             // Spawn short task so we don't block the
                             // encode loop on the webrtc-rs write mutex.
                             tokio::spawn(async move {
-                                if let Err(err) = session_clone.write_audio(pkt).await
-                                {
+                                if let Err(err) = session_clone.write_audio(pkt).await {
                                     warn!(?err, "browser audio: write_audio failed");
                                 }
                             });
@@ -236,7 +234,11 @@ struct LinearResampler {
 
 impl LinearResampler {
     fn new(from: u32, to: u32) -> Self {
-        Self { from, to, carry: 0.0 }
+        Self {
+            from,
+            to,
+            carry: 0.0,
+        }
     }
 
     fn resample(&mut self, input: &[f32], out: &mut Vec<f32>) {
