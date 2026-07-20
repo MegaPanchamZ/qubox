@@ -282,7 +282,8 @@ fn default_linux_display() -> Vec<DisplayDescriptor> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    #[cfg(target_os = "linux")]
+    use super::default_linux_display;
 
     #[test]
     fn parses_xrandr_line() {
@@ -295,18 +296,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_os = "linux")]
     fn enumerates_default_when_xrandr_missing() {
-        // Don't actually shell out in tests; trust the fallback path.
-        let displays = if cfg!(target_os = "linux") {
-            // Force fallback by referencing a nonexistent binary path
-            // would require restructuring; just assert the default shape.
-            default_linux_display()
-        } else {
-            Vec::new()
-        };
-        if cfg!(target_os = "linux") {
-            assert_eq!(displays.len(), 1);
-            assert!(displays[0].primary);
-        }
+        let displays = default_linux_display();
+        assert_eq!(displays.len(), 1);
+        assert!(displays[0].primary);
     }
 }

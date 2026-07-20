@@ -57,11 +57,6 @@ jobs:
             librsvg2-dev patchelf libsystemd-dev libudev-dev \
             libopus-dev cmake pkg-config x11-utils
 
-      - name: Install macOS system deps (homebrew)
-        if: runner.os == 'macOS'
-        run: |
-          brew install ffmpeg
-
       - name: Install Windows dependencies
         if: runner.os == 'Windows'
         run: |
