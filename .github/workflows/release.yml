@@ -284,8 +284,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: sbom
-          path: "*.cdx.json"
+          path: "**/*.cdx.json"
           retention-days: 5
+          if-no-files-found: error
 
   release:
     needs: [build, sbom]
@@ -305,9 +306,12 @@ jobs:
           name: "Qubox ${{ needs.resolve-ref.outputs.tag }}"
           body_path: .github/release-template.md
           files: |
-            artifacts/release-linux/**
-            artifacts/release-macos/**
-            artifacts/release-windows/**
-            artifacts/sbom/*
+            artifacts/release-linux/**/*.AppImage
+            artifacts/release-linux/**/*.deb
+            artifacts/release-linux/**/*.rpm
+            artifacts/release-macos/**/*.dmg
+            artifacts/release-windows/**/*-setup.exe
+            artifacts/release-windows/**/*.msi
+            artifacts/sbom/**/*.cdx.json
           generate_release_notes: true
           fail_on_unmatched_files: false
