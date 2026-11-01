@@ -22,6 +22,20 @@ type ShareLinkPayload = {
   expiresUnixMs: number;
 };
 
+type PeerPermissionEntry = {
+  gamepad: boolean;
+  keyboard: boolean;
+  mouse: boolean;
+  autoApprove: boolean;
+};
+
+const DEFAULT_PEER_PERMS: PeerPermissionEntry = {
+  gamepad: true,
+  keyboard: false,
+  mouse: false,
+  autoApprove: false,
+};
+
 const iconBtnStyle = (active = false, danger = false): React.CSSProperties => ({
   display: "inline-flex",
   alignItems: "center",
@@ -77,26 +91,91 @@ export function HostList({
   const [shareCode, setShareCode] = useState<string | null>(null);
   const [approvingId, setApprovingId] = useState<string | null>(null);
   const [thisComputerName, setThisComputerName] = useState<string>("This Computer");
+  const [peerPerms, setPeerPerms] = useState<Record<string, PeerPermissionEntry>>({});
   const [sessionPerms, setSessionPerms] = useState<
     Record<string, { gamepad: boolean; keyboard: boolean; mouse: boolean }>
   >({});
 
   const isSharing = hostRunning === true;
 
-  const getPermsForSession = (sessionId: string) =>
-    sessionPerms[sessionId] ?? {
-      gamepad: true,
-      keyboard: false,
-      mouse: false,
+  const getPermsForPeer = (peerId: string): PeerPermissionEntry =>
+    peerPerms[peerId] ?? DEFAULT_PEER_PERMS;
+
+  const getPermsForSession = (sessionId: string, peerId?: string) => {
+    if (sessionPerms[sessionId]) return sessionPerms[sessionId];
+    if (peerId && peerPerms[peerId]) {
+      const p = peerPerms[peerId];
+      return { gamepad: p.gamepad, keyboard: p.keyboard, mouse: p.mouse };
+    }
+    return {
+      gamepad: DEFAULT_PEER_PERMS.gamepad,
+      keyboard: DEFAULT_PEER_PERMS.keyboard,
+      mouse: DEFAULT_PEER_PERMS.mouse,
     };
+  };
+
+  const togglePeerPerm = async (
+    peerId: string,
+    field: keyof PeerPermissionEntry,
+  ) => {
+    const current = getPermsForPeer(peerId);
+    const updated: PeerPermissionEntry = {
+      ...current,
+      [field]: !current[field],
+    };
+    setPeerPerms((prev) => ({ ...prev, [peerId]: updated }));
+    try {
+      await invoke("set_peer_permissions", {
+        peerId,
+        gamepad: updated.gamepad,
+        keyboard: updated.keyboard,
+        mouse: updated.mouse,
+        autoApprove: updated.autoApprove,
+      });
+    } catch {
+      // ignore in mock mode
+    }
+    // Also sync to any active sessions for this peer
+    for (const s of activeSessions) {
+      if (s.hostId === peerId) {
+        setSessionPerms((prev) => ({
+          ...prev,
+          [s.sessionId]: {
+            gamepad: updated.gamepad,
+            keyboard: updated.keyboard,
+            mouse: updated.mouse,
+          },
+        }));
+        try {
+          await invoke("set_session_permissions", {
+            sessionId: s.sessionId,
+            gamepad: updated.gamepad,
+            keyboard: updated.keyboard,
+            mouse: updated.mouse,
+          });
+        } catch {
+          // ignore
+        }
+      }
+    }
+  };
 
   const toggleSessionPerm = async (
     sessionId: string,
+    peerId: string,
     field: "gamepad" | "keyboard" | "mouse",
   ) => {
-    const current = getPermsForSession(sessionId);
+    const current = getPermsForSession(sessionId, peerId);
     const updated = { ...current, [field]: !current[field] };
     setSessionPerms((prev) => ({ ...prev, [sessionId]: updated }));
+    const existingPeer = getPermsForPeer(peerId);
+    const updatedPeer: PeerPermissionEntry = {
+      ...existingPeer,
+      gamepad: updated.gamepad,
+      keyboard: updated.keyboard,
+      mouse: updated.mouse,
+    };
+    setPeerPerms((prev) => ({ ...prev, [peerId]: updatedPeer }));
     try {
       await invoke("set_session_permissions", {
         sessionId,
@@ -104,8 +183,34 @@ export function HostList({
         keyboard: updated.keyboard,
         mouse: updated.mouse,
       });
+      await invoke("set_peer_permissions", {
+        peerId,
+        gamepad: updatedPeer.gamepad,
+        keyboard: updatedPeer.keyboard,
+        mouse: updatedPeer.mouse,
+        autoApprove: updatedPeer.autoApprove,
+      });
     } catch {
       // ignore if daemon/host does not support live RPC in mock mode
+    }
+  };
+
+  const removeSavedHost = async (peerId: string) => {
+    try {
+      await invoke("reject_pairing", { hostId: peerId });
+      await refreshKnownHosts();
+    } catch (error) {
+      setLoadError(`Remove failed: ${String(error)}`);
+    }
+  };
+
+  const kickAllSessions = async () => {
+    for (const s of activeSessions) {
+      if (onCancelSession) {
+        await onCancelSession(s.sessionId);
+      } else if (onKickSession) {
+        await onKickSession(s.sessionId, "disconnected by host");
+      }
     }
   };
 
@@ -129,6 +234,26 @@ export function HostList({
           }
         } catch {
           // ignore if onboarding query fails in mock environments
+        }
+        try {
+          const savedPerms =
+            await invoke<Record<string, Partial<PeerPermissionEntry>>>(
+              "get_peer_permissions",
+            );
+          if (savedPerms && typeof savedPerms === "object") {
+            const normalized: Record<string, PeerPermissionEntry> = {};
+            for (const [k, v] of Object.entries(savedPerms)) {
+              normalized[k] = {
+                gamepad: v?.gamepad ?? true,
+                keyboard: v?.keyboard ?? false,
+                mouse: v?.mouse ?? false,
+                autoApprove: v?.autoApprove ?? false,
+              };
+            }
+            setPeerPerms(normalized);
+          }
+        } catch {
+          // ignore
         }
         setLoadError(null);
       } catch (error) {
@@ -363,7 +488,7 @@ export function HostList({
         </section>
       ) : null}
 
-      {/* 2. Active Sessions (Compact Icon-Driven Rows) */}
+      {/* 2. Active Sessions (Parsec-Style Compact Icon Rows) */}
       {activeSessions.length > 0 ? (
         <section
           className="host-card"
@@ -379,7 +504,7 @@ export function HostList({
         >
           {activeSessions.map((session, idx) => {
             const computerName = resolveComputerName(session.hostId);
-            const perms = getPermsForSession(session.sessionId);
+            const perms = getPermsForSession(session.sessionId, session.hostId);
             const playerSlot = (idx % 4) + 1;
             return (
               <div
@@ -421,13 +546,17 @@ export function HostList({
                   </span>
                 </div>
 
-                {/* Compact Icon Input & Disconnect Controls */}
+                {/* Parsec-Style Per-Person Input & Kick Icons */}
                 <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                   <button
                     aria-label="Controller"
                     data-testid={`toggle-perm-gamepad-${session.sessionId}`}
                     onClick={() =>
-                      void toggleSessionPerm(session.sessionId, "gamepad")
+                      void toggleSessionPerm(
+                        session.sessionId,
+                        session.hostId,
+                        "gamepad",
+                      )
                     }
                     style={iconBtnStyle(perms.gamepad)}
                     title={`Controller: ${perms.gamepad ? "On" : "Off"}`}
@@ -445,7 +574,11 @@ export function HostList({
                     aria-label="Keyboard"
                     data-testid={`toggle-perm-keyboard-${session.sessionId}`}
                     onClick={() =>
-                      void toggleSessionPerm(session.sessionId, "keyboard")
+                      void toggleSessionPerm(
+                        session.sessionId,
+                        session.hostId,
+                        "keyboard",
+                      )
                     }
                     style={iconBtnStyle(perms.keyboard)}
                     title={`Keyboard: ${perms.keyboard ? "On" : "Off"}`}
@@ -463,7 +596,11 @@ export function HostList({
                     aria-label="Mouse"
                     data-testid={`toggle-perm-mouse-${session.sessionId}`}
                     onClick={() =>
-                      void toggleSessionPerm(session.sessionId, "mouse")
+                      void toggleSessionPerm(
+                        session.sessionId,
+                        session.hostId,
+                        "mouse",
+                      )
                     }
                     style={iconBtnStyle(perms.mouse)}
                     title={`Mouse: ${perms.mouse ? "On" : "Off"}`}
@@ -492,7 +629,7 @@ export function HostList({
                         }
                       }}
                       style={iconBtnStyle(false, true)}
-                      title="Disconnect"
+                      title="Kick / Disconnect"
                       type="button"
                     >
                       <span
@@ -562,6 +699,23 @@ export function HostList({
           </div>
 
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            {activeSessions.length > 0 ? (
+              <button
+                data-testid="kick-all-button"
+                onClick={() => void kickAllSessions()}
+                style={iconBtnStyle(false, true)}
+                title="Kick all guests"
+                type="button"
+              >
+                <span
+                  className="material-symbols-outlined"
+                  style={{ fontSize: "1.1rem" }}
+                >
+                  group_off
+                </span>
+              </button>
+            ) : null}
+
             {settings?.hostPeerId ? (
               <button
                 data-testid="copy-host-id"
@@ -682,7 +836,7 @@ export function HostList({
         ) : null}
       </div>
 
-      {/* 4. OTHER COMPUTERS (Quick Connect + Compact List) */}
+      {/* 4. OTHER COMPUTERS (Quick Connect + Parsec Access Control Rows) */}
       <div
         className="host-card"
         style={{
@@ -733,42 +887,137 @@ export function HostList({
           data-testid="computers-grid"
           style={{ display: "flex", flexDirection: "column", gap: 8 }}
         >
-          {combined.known.map((host) => (
-            <article
-              className="host-card"
-              key={host.hostPeerId}
-              style={{
-                padding: "10px 16px",
-                display: "flex",
-                flexDirection: "row",
-                alignItems: "center",
-                justifyContent: "space-between",
-                gap: 12,
-              }}
-            >
-              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                <strong style={{ fontSize: "0.95rem", color: "#fff" }}>
-                  {host.displayName ?? "Paired Computer"}
-                </strong>
-                <span style={{ color: "var(--muted)", fontSize: "0.82rem" }}>
-                  Saved
-                </span>
-              </div>
-              <button
-                className="connect-button"
-                data-testid={`connect-known-${host.hostPeerId}`}
-                disabled={isBusyFor(host.hostPeerId)}
-                onClick={() => void handleConnect(host.hostPeerId, false)}
-                style={{ padding: "7px 16px" }}
-                type="button"
+          {combined.known.map((host) => {
+            const perms = getPermsForPeer(host.hostPeerId);
+            return (
+              <article
+                className="host-card"
+                key={host.hostPeerId}
+                style={{
+                  padding: "10px 16px",
+                  display: "flex",
+                  flexDirection: "row",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  gap: 12,
+                }}
               >
-                {connect.kind === "launching" &&
-                connect.hostId === host.hostPeerId
-                  ? "Connecting…"
-                  : "Connect"}
-              </button>
-            </article>
-          ))}
+                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                  <strong style={{ fontSize: "0.95rem", color: "#fff" }}>
+                    {host.displayName ?? "Paired Computer"}
+                  </strong>
+                  <span style={{ color: "var(--muted)", fontSize: "0.82rem" }}>
+                    Saved
+                  </span>
+                </div>
+
+                {/* Parsec-Style Persistent Per-Friend Access Control Icons + Connect */}
+                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  <button
+                    aria-label="Controller permission"
+                    data-testid={`peer-perm-gamepad-${host.hostPeerId}`}
+                    onClick={() =>
+                      void togglePeerPerm(host.hostPeerId, "gamepad")
+                    }
+                    style={iconBtnStyle(perms.gamepad)}
+                    title={`Controller: ${perms.gamepad ? "Allowed" : "Blocked"}`}
+                    type="button"
+                  >
+                    <span
+                      className="material-symbols-outlined"
+                      style={{ fontSize: "1.05rem" }}
+                    >
+                      sports_esports
+                    </span>
+                  </button>
+
+                  <button
+                    aria-label="Keyboard permission"
+                    data-testid={`peer-perm-keyboard-${host.hostPeerId}`}
+                    onClick={() =>
+                      void togglePeerPerm(host.hostPeerId, "keyboard")
+                    }
+                    style={iconBtnStyle(perms.keyboard)}
+                    title={`Keyboard: ${perms.keyboard ? "Allowed" : "Blocked"}`}
+                    type="button"
+                  >
+                    <span
+                      className="material-symbols-outlined"
+                      style={{ fontSize: "1.05rem" }}
+                    >
+                      keyboard
+                    </span>
+                  </button>
+
+                  <button
+                    aria-label="Mouse permission"
+                    data-testid={`peer-perm-mouse-${host.hostPeerId}`}
+                    onClick={() =>
+                      void togglePeerPerm(host.hostPeerId, "mouse")
+                    }
+                    style={iconBtnStyle(perms.mouse)}
+                    title={`Mouse: ${perms.mouse ? "Allowed" : "Blocked"}`}
+                    type="button"
+                  >
+                    <span
+                      className="material-symbols-outlined"
+                      style={{ fontSize: "1.05rem" }}
+                    >
+                      mouse
+                    </span>
+                  </button>
+
+                  <button
+                    aria-label="Connect without approval"
+                    data-testid={`peer-perm-auto-${host.hostPeerId}`}
+                    onClick={() =>
+                      void togglePeerPerm(host.hostPeerId, "autoApprove")
+                    }
+                    style={iconBtnStyle(perms.autoApprove)}
+                    title={`Connect without approval: ${perms.autoApprove ? "On" : "Off"}`}
+                    type="button"
+                  >
+                    <span
+                      className="material-symbols-outlined"
+                      style={{ fontSize: "1.05rem" }}
+                    >
+                      lock_open
+                    </span>
+                  </button>
+
+                  <button
+                    aria-label="Remove"
+                    data-testid={`remove-known-${host.hostPeerId}`}
+                    onClick={() => void removeSavedHost(host.hostPeerId)}
+                    style={iconBtnStyle(false, true)}
+                    title="Remove computer"
+                    type="button"
+                  >
+                    <span
+                      className="material-symbols-outlined"
+                      style={{ fontSize: "1.05rem" }}
+                    >
+                      person_remove
+                    </span>
+                  </button>
+
+                  <button
+                    className="connect-button"
+                    data-testid={`connect-known-${host.hostPeerId}`}
+                    disabled={isBusyFor(host.hostPeerId)}
+                    onClick={() => void handleConnect(host.hostPeerId, false)}
+                    style={{ padding: "7px 16px", marginLeft: 4 }}
+                    type="button"
+                  >
+                    {connect.kind === "launching" &&
+                    connect.hostId === host.hostPeerId
+                      ? "Connecting…"
+                      : "Connect"}
+                  </button>
+                </div>
+              </article>
+            );
+          })}
 
           {combined.discovered.map((host) => {
             const waiting = isBusyFor(host.peerId);

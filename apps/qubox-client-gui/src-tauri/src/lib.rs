@@ -916,6 +916,49 @@ async fn set_session_permissions(
 }
 
 #[tauri::command]
+async fn get_peer_permissions() -> Result<serde_json::Value, String> {
+    let mut map = serde_json::Map::new();
+    if let Ok(mut client) = connect_daemon().await {
+        if let Ok(IpcResponse::SettingsMap { entries }) =
+            client.call::<IpcResponse>(&IpcRequest::ListSettings).await
+        {
+            for (k, v) in entries {
+                if let Some(peer_id) = k.strip_prefix("peer_perms.") {
+                    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&v) {
+                        map.insert(peer_id.to_string(), parsed);
+                    }
+                }
+            }
+        }
+    }
+    Ok(serde_json::Value::Object(map))
+}
+
+#[tauri::command]
+async fn set_peer_permissions(
+    peer_id: String,
+    gamepad: bool,
+    keyboard: bool,
+    mouse: bool,
+    auto_approve: bool,
+) -> Result<(), String> {
+    if let Ok(mut client) = connect_daemon().await {
+        let key = format!("peer_perms.{peer_id}");
+        let value = serde_json::json!({
+            "gamepad": gamepad,
+            "keyboard": keyboard,
+            "mouse": mouse,
+            "autoApprove": auto_approve,
+        })
+        .to_string();
+        let _ = client
+            .call::<IpcResponse>(&IpcRequest::SetSetting { key, value })
+            .await;
+    }
+    Ok(())
+}
+
+#[tauri::command]
 async fn get_settings() -> Result<Settings, String> {
     let mut settings = Settings {
         signaling_server: Some(
@@ -1900,7 +1943,29 @@ fn spawn_pairing_broker(app: AppHandle) {
                 },
                 _ => serde_json::json!([]),
             };
-            let arr = payload.as_array().cloned().unwrap_or_default();
+            let raw_arr = payload.as_array().cloned().unwrap_or_default();
+            let peer_perms = get_peer_permissions().await.unwrap_or_default();
+            let mut arr = Vec::new();
+            for item in raw_arr {
+                let req_id = item
+                    .get("request_id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                let client_peer = item
+                    .get("client_peer_id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                let auto_approve = peer_perms
+                    .get(client_peer)
+                    .and_then(|p| p.get("autoApprove"))
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                if auto_approve && !req_id.is_empty() {
+                    let _ = host_pairing_decide(req_id.to_string(), true).await;
+                } else {
+                    arr.push(item);
+                }
+            }
             let empty = arr.is_empty();
             // Skip emitting identical empty payloads to keep the bridge quiet
             // when the host agent has nothing to report.
@@ -2083,6 +2148,8 @@ pub fn run() {
             redeem_share_link,
             kick_session,
             set_session_permissions,
+            get_peer_permissions,
+            set_peer_permissions,
             set_setting,
             get_onboarding,
             complete_onboarding,
