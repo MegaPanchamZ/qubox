@@ -662,6 +662,8 @@ async fn main() -> anyhow::Result<()> {
         tracing::warn!("enable_file_sync_sensors ignored: build without feature file-sync");
     }
 
+    qubox_transport::configure_default_relay_from_signaling_url(&args.server);
+
     let (stream, _) = connect_async(&args.server)
         .await
         .with_context(|| format!("failed to connect to {}", args.server))?;
@@ -2254,12 +2256,13 @@ async fn run_webrtc_session(
 /// Captures display 0 (primary) via the ffmpeg pipeline and sends over a single QUIC stream.
 async fn run_single_stream_session(requested: SessionRequested, runtime: HostSessionRuntime) {
     let result = async {
-        let host = NativeQuicHost::bind(
+        let host = NativeQuicHost::bind_async(
             runtime.native_quic_bind,
             runtime.native_quic_advertise_ip,
             requested.session_id,
             requested.client_credential.clone(),
-        )?;
+        )
+        .await?;
         let ticket_b64 = encode_ticket_b64(host.ticket())?;
 
         send_client_message(
@@ -2387,64 +2390,87 @@ async fn run_single_stream_session(requested: SessionRequested, runtime: HostSes
         let plan = plan_ffmpeg_h264(&config)?;
         let mut pipeline = spawn_ffmpeg_pipeline(&plan)?;
         let mut framer = H264AnnexBStreamFramer::new(config.framerate)?;
-        let mut scratch = vec![0_u8; 64 * 1024];
+        let (au_tx, mut au_rx) = tokio::sync::mpsc::unbounded_channel();
+        std::thread::Builder::new()
+            .name(format!(
+                "bp-ffmpeg-read-{}",
+                requested.session_id.as_simple()
+            ))
+            .spawn(move || {
+                let mut scratch = vec![0_u8; 64 * 1024];
+                loop {
+                    match read_h264_access_units(pipeline.stdout_mut(), &mut framer, &mut scratch) {
+                        Ok(MediaPipelineRead::AccessUnits(access_units)) => {
+                            for au in access_units {
+                                if au_tx.send(Ok(au)).is_err() {
+                                    let _ = pipeline.kill();
+                                    return;
+                                }
+                            }
+                        }
+                        Ok(MediaPipelineRead::EndOfStream(access_units)) => {
+                            for au in access_units {
+                                if au_tx.send(Ok(au)).is_err() {
+                                    break;
+                                }
+                            }
+                            return;
+                        }
+                        Err(e) => {
+                            let _ = au_tx.send(Err(anyhow::Error::from(e)));
+                            return;
+                        }
+                    }
+                }
+            })
+            .context("failed to spawn ffmpeg stdout reader thread")?;
+
         let mut frames = 0_u64;
         let mut bytes = 0_u64;
 
-        loop {
-            match read_h264_access_units(pipeline.stdout_mut(), &mut framer, &mut scratch)? {
-                MediaPipelineRead::AccessUnits(access_units) => {
-                    for access_unit in access_units {
-                        if frames == 0 {
-                            tracing::info!(
-                                session_id = %requested.session_id,
-                                frame_id = access_unit.frame_id,
-                                timestamp_micros = access_unit.timestamp_micros,
-                                keyframe = access_unit.keyframe,
-                                bytes = access_unit.bytes.len(),
-                                nal_units = access_unit.nal_units.len(),
-                                "sending first native QUIC video access unit"
-                            );
-                        }
-                        sender.send_access_unit(&access_unit).await?;
-                        frames += 1;
-                        bytes += access_unit.bytes.len() as u64;
-                    }
-                }
-                MediaPipelineRead::EndOfStream(access_units) => {
-                    for access_unit in access_units {
-                        if frames == 0 {
-                            tracing::info!(
-                                session_id = %requested.session_id,
-                                frame_id = access_unit.frame_id,
-                                timestamp_micros = access_unit.timestamp_micros,
-                                keyframe = access_unit.keyframe,
-                                bytes = access_unit.bytes.len(),
-                                nal_units = access_unit.nal_units.len(),
-                                "sending first native QUIC video access unit"
-                            );
-                        }
-                        sender.send_access_unit(&access_unit).await?;
-                        frames += 1;
-                        bytes += access_unit.bytes.len() as u64;
-                    }
-                    sender.finish().await?;
-                    tracing::info!(
-                        session_id = %requested.session_id,
-                        frames,
-                        bytes,
-                        "native QUIC media session finished"
-                    );
-                    drop(audio_stream);
-                    let _ = tokio::time::timeout(Duration::from_secs(1), audio_task).await;
-                    let _ = tokio::time::timeout(Duration::from_millis(250), input_task).await;
-                    clip_mic_task.abort();
-                    if let Some(task) = pen_inject_task {
-                        task.abort();
-                    }
-                    break;
-                }
+        while let Some(res) = au_rx.recv().await {
+            let access_unit = res?;
+            let send_unix_micros = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_micros() as u64)
+                .unwrap_or(0);
+            tracing::debug!(
+                session_id = %requested.session_id,
+                frame_id = access_unit.frame_id,
+                timestamp_micros = access_unit.timestamp_micros,
+                send_unix_micros,
+                keyframe = access_unit.keyframe,
+                bytes = access_unit.bytes.len(),
+                "host sending native QUIC video access unit"
+            );
+            if frames == 0 {
+                tracing::info!(
+                    session_id = %requested.session_id,
+                    frame_id = access_unit.frame_id,
+                    timestamp_micros = access_unit.timestamp_micros,
+                    keyframe = access_unit.keyframe,
+                    bytes = access_unit.bytes.len(),
+                    nal_units = access_unit.nal_units.len(),
+                    "sending first native QUIC video access unit"
+                );
             }
+            sender.send_access_unit(&access_unit).await?;
+            frames += 1;
+            bytes += access_unit.bytes.len() as u64;
+        }
+        sender.finish().await?;
+        tracing::info!(
+            session_id = %requested.session_id,
+            frames,
+            bytes,
+            "native QUIC media session finished"
+        );
+        drop(audio_stream);
+        let _ = tokio::time::timeout(Duration::from_secs(1), audio_task).await;
+        let _ = tokio::time::timeout(Duration::from_millis(250), input_task).await;
+        clip_mic_task.abort();
+        if let Some(task) = pen_inject_task {
+            task.abort();
         }
 
         Ok::<(), anyhow::Error>(())
@@ -2465,12 +2491,13 @@ async fn run_single_stream_session(requested: SessionRequested, runtime: HostSes
 /// ffmpeg x11grab pipeline setup and read/send loop.
 async fn run_multi_display_session(requested: SessionRequested, runtime: HostSessionRuntime) {
     let result = async {
-        let host = NativeQuicHost::bind(
+        let host = NativeQuicHost::bind_async(
             runtime.native_quic_bind,
             runtime.native_quic_advertise_ip,
             requested.session_id,
             requested.client_credential.clone(),
-        )?;
+        )
+        .await?;
         let ticket_b64 = encode_ticket_b64(host.ticket())?;
 
         send_client_message(
@@ -2828,13 +2855,27 @@ fn spawn_remote_input_worker(
 
             while let Some(event) = next_injected_input_event(&mut pending_event, &mut input_rx) {
                 if let Some(injector) = injector.as_mut() {
-                    if let Err(error) = injector.apply(&event) {
-                        tracing::warn!(
-                            session_id = %session_id,
-                            ?error,
-                            ?event,
-                            "failed to inject remote input event"
-                        );
+                    match injector.apply(&event) {
+                        Ok(()) => {
+                            let inject_unix_micros = std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .map(|d| d.as_micros() as u64)
+                                .unwrap_or(0);
+                            tracing::debug!(
+                                session_id = %session_id,
+                                ?event,
+                                inject_unix_micros,
+                                "host injected remote input event"
+                            );
+                        }
+                        Err(error) => {
+                            tracing::warn!(
+                                session_id = %session_id,
+                                ?error,
+                                ?event,
+                                "failed to inject remote input event"
+                            );
+                        }
                     }
                 }
             }

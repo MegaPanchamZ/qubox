@@ -44,6 +44,8 @@ nnnoiseless = "0.5"
 opus = "0.3"
 pipewire = "0.10"
 png = "0.18"
+iroh = { version = "1.4.1", default-features = false, features = ["tls-ring", "portmapper"] }
+iroh-relay = { version = "1.4.1", default-features = false, features = ["server"] }
 quinn = "0.11"
 rcgen = "0.13"
 raw-window-handle = "0.6"

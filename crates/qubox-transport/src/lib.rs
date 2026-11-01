@@ -1,22 +1,24 @@
 use std::{
     net::{IpAddr, Ipv4Addr, SocketAddr},
-    sync::{Arc, OnceLock},
+    sync::Arc,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use crate::media::ControlChannel;
 use anyhow::{anyhow, Context};
 use base64::{engine::general_purpose::STANDARD, Engine as _};
+use iroh::{
+    endpoint::{
+        presets, AckFrequencyConfig, Connection, QuicTransportConfig, RecvStream, SendStream,
+        VarInt,
+    },
+    Endpoint, EndpointAddr, EndpointId, RelayMap, RelayMode, RelayUrl, SecretKey,
+};
 use qubox_media::{inspect_h264_annex_b_nal_units, EncodedVideoAccessUnit};
 use qubox_proto::{
     AudioStreamParams, ControlMsg, RemoteInputEvent, SessionCredential, VideoCodec,
     VideoStreamParams,
 };
-use quinn::{
-    Connection, Endpoint, EndpointConfig, RecvStream, SendStream, TransportConfig, VarInt,
-};
-use rcgen::generate_simple_self_signed;
-use rustls::{pki_types::CertificateDer, RootCertStore};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tracing::{debug, info, trace};
@@ -25,7 +27,6 @@ use uuid::Uuid;
 pub mod congestion;
 pub mod filesync;
 pub mod media;
-pub mod turn;
 
 pub const NATIVE_QUIC_ALPN: &str = "qubox-native-quic/0";
 /// ALPN for QUIC v2 (RFC 9369). Peers that support v2 advertise this;
@@ -108,6 +109,55 @@ pub struct TurnConfig {
     pub turn_force: bool,
 }
 
+/// Serialized Iroh endpoint addressing details stored inside `NativeQuicTicket::cert_der_b64`
+/// (preserving wire compatibility with the signaling protocol while upgrading to Iroh P2P).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct IrohEndpointTicket {
+    pub endpoint_id: EndpointId,
+    #[serde(default)]
+    pub relay_urls: Vec<RelayUrl>,
+    #[serde(default)]
+    pub ip_addrs: Vec<SocketAddr>,
+}
+
+fn force_relay_only_from_env() -> bool {
+    [
+        "QUBOX_IROH_FORCE_RELAY",
+        "QUBOX_TURN_ONLY",
+        "QUBOX_TURN_FORCE",
+    ]
+    .iter()
+    .any(|key| {
+        std::env::var(key)
+            .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
+            .unwrap_or(false)
+    })
+}
+
+impl IrohEndpointTicket {
+    pub fn to_endpoint_addr(&self, fallback_addr: SocketAddr) -> EndpointAddr {
+        let mut addr = EndpointAddr::new(self.endpoint_id);
+        for relay in &self.relay_urls {
+            addr = addr.with_relay_url(relay.clone());
+        }
+        let force_relay = force_relay_only_from_env() && !self.relay_urls.is_empty();
+        if force_relay {
+            debug!(
+                endpoint_id = %self.endpoint_id,
+                relay_urls = ?self.relay_urls,
+                "forcing Iroh relay-only addressing (omitting direct IP addresses)"
+            );
+        } else if self.ip_addrs.is_empty() && self.relay_urls.is_empty() {
+            addr = addr.with_ip_addr(fallback_addr);
+        } else {
+            for &ip in &self.ip_addrs {
+                addr = addr.with_ip_addr(ip);
+            }
+        }
+        addr
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct NativeQuicTicket {
     pub session_id: Uuid,
@@ -118,9 +168,78 @@ pub struct NativeQuicTicket {
     pub expires_unix_millis: u64,
 }
 
-#[derive(Debug, Clone)]
+impl NativeQuicTicket {
+    /// Extract the Iroh `EndpointAddr` from this ticket.
+    /// Supports both the JSON `IrohEndpointTicket` payload in `cert_der_b64`
+    /// and a fallback where `server_name` or `cert_der_b64` holds the raw 32-byte `EndpointId`.
+    pub fn endpoint_addr(&self) -> anyhow::Result<EndpointAddr> {
+        if let Ok(raw) = STANDARD.decode(self.cert_der_b64.as_bytes()) {
+            if let Ok(iroh_ticket) = serde_json::from_slice::<IrohEndpointTicket>(&raw) {
+                return Ok(iroh_ticket.to_endpoint_addr(self.connect_addr));
+            }
+            if let Ok(bytes) = <[u8; 32]>::try_from(raw.as_slice()) {
+                if let Ok(id) = EndpointId::from_bytes(&bytes) {
+                    return Ok(EndpointAddr::new(id).with_ip_addr(self.connect_addr));
+                }
+            }
+        }
+        if let Ok(id) = self.server_name.parse::<EndpointId>() {
+            return Ok(EndpointAddr::new(id).with_ip_addr(self.connect_addr));
+        }
+        anyhow::bail!(
+            "ticket does not contain a valid Iroh EndpointId in cert_der_b64 or server_name"
+        )
+    }
+}
+
+/// Wrapper around [`iroh::Endpoint`] that spawns an async `endpoint.close()` task on `Drop`
+/// so Iroh's internal socket actor shuts down cleanly without logging ungraceful-drop warnings.
+#[derive(Debug)]
+pub(crate) struct ManagedEndpoint {
+    endpoint: Option<Endpoint>,
+}
+
+impl ManagedEndpoint {
+    pub(crate) fn new(endpoint: Endpoint) -> Arc<Self> {
+        Arc::new(Self {
+            endpoint: Some(endpoint),
+        })
+    }
+
+    pub(crate) fn endpoint(&self) -> &Endpoint {
+        self.endpoint.as_ref().expect("ManagedEndpoint is active")
+    }
+}
+
+impl Drop for ManagedEndpoint {
+    fn drop(&mut self) {
+        if let Some(ep) = self.endpoint.take() {
+            if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                handle.spawn(async move {
+                    ep.close().await;
+                });
+            }
+        }
+    }
+}
+
+#[derive(Debug)]
+enum HostEndpointState {
+    /// Socket reserved synchronously in `NativeQuicHost::bind`; converted into a full
+    /// `iroh::Endpoint` when `accept_authenticated_connection` runs.
+    Deferred {
+        secret_key: SecretKey,
+        local_addr: SocketAddr,
+        reserved_socket: Option<std::net::UdpSocket>,
+        v2: bool,
+    },
+    /// Already bound via `NativeQuicHost::bind_async`.
+    Bound(Arc<ManagedEndpoint>),
+}
+
+#[derive(Debug)]
 pub struct NativeQuicHost {
-    endpoint: Arc<Endpoint>,
+    state: HostEndpointState,
     ticket: NativeQuicTicket,
     expected_client_credential: SessionCredential,
 }
@@ -132,32 +251,158 @@ impl NativeQuicHost {
         session_id: Uuid,
         expected_client_credential: SessionCredential,
     ) -> anyhow::Result<Self> {
-        let certified = generate_simple_self_signed(vec![DEFAULT_SERVER_NAME.to_string()])?;
-        let cert_der = CertificateDer::from(certified.cert.der().to_vec());
-        let key = rustls::pki_types::PrivatePkcs8KeyDer::from(certified.key_pair.serialize_der());
-        let mut server_config =
-            quinn::ServerConfig::with_single_cert(vec![cert_der.clone()], key.into())?;
-        server_config.transport_config(Arc::new(build_transport_config()));
-        let endpoint = Endpoint::server(server_config, bind_addr)?;
-        let local_addr = endpoint.local_addr()?;
+        Self::bind_internal(
+            bind_addr,
+            advertised_ip,
+            session_id,
+            expected_client_credential,
+            false,
+        )
+    }
+
+    /// Bind with QUIC v2 transport and ALPN. Accepts both v1 and v2 ALPNs.
+    pub fn bind_v2(
+        bind_addr: SocketAddr,
+        advertised_ip: Option<IpAddr>,
+        session_id: Uuid,
+        expected_client_credential: SessionCredential,
+    ) -> anyhow::Result<Self> {
+        Self::bind_internal(
+            bind_addr,
+            advertised_ip,
+            session_id,
+            expected_client_credential,
+            true,
+        )
+    }
+
+    fn bind_internal(
+        bind_addr: SocketAddr,
+        advertised_ip: Option<IpAddr>,
+        session_id: Uuid,
+        expected_client_credential: SessionCredential,
+        v2: bool,
+    ) -> anyhow::Result<Self> {
+        let secret_key = SecretKey::generate();
+        let endpoint_id = secret_key.public();
+        let reserved_socket = std::net::UdpSocket::bind(bind_addr)
+            .with_context(|| format!("failed to reserve UDP socket on {bind_addr}"))?;
+        let local_addr = reserved_socket.local_addr()?;
         let connect_ip = advertised_ip.unwrap_or_else(|| default_advertised_ip(local_addr.ip()));
+        let connect_addr = SocketAddr::new(connect_ip, local_addr.port());
+
+        let iroh_ticket = IrohEndpointTicket {
+            endpoint_id,
+            relay_urls: configured_relay_urls(),
+            ip_addrs: vec![connect_addr],
+        };
+        let cert_der_b64 = STANDARD.encode(serde_json::to_vec(&iroh_ticket)?);
+        let alpn = if v2 {
+            NATIVE_QUIC_ALPN_V2.to_string()
+        } else {
+            NATIVE_QUIC_ALPN.to_string()
+        };
 
         info!(
             %session_id,
             %bind_addr,
             %local_addr,
             connect_ip = %connect_ip,
-            "native QUIC host endpoint bound"
+            %endpoint_id,
+            "native Iroh QUIC host endpoint prepared"
         );
 
         Ok(Self {
-            endpoint: Arc::new(endpoint),
+            state: HostEndpointState::Deferred {
+                secret_key,
+                local_addr,
+                reserved_socket: Some(reserved_socket),
+                v2,
+            },
             ticket: NativeQuicTicket {
                 session_id,
-                connect_addr: SocketAddr::new(connect_ip, local_addr.port()),
-                server_name: DEFAULT_SERVER_NAME.to_string(),
+                connect_addr,
+                server_name: endpoint_id.to_string(),
+                alpn,
+                cert_der_b64,
+                expires_unix_millis: expected_client_credential.expires_unix_millis,
+            },
+            expected_client_credential,
+        })
+    }
+
+    /// Asynchronously bind the Iroh `Endpoint` up-front and populate the ticket with all
+    /// discovered local socket addresses and relay URLs.
+    pub async fn bind_async(
+        bind_addr: SocketAddr,
+        advertised_ip: Option<IpAddr>,
+        session_id: Uuid,
+        expected_client_credential: SessionCredential,
+    ) -> anyhow::Result<Self> {
+        let secret_key = SecretKey::generate();
+        let endpoint = bind_iroh_server_endpoint(secret_key, bind_addr, false).await?;
+        let is_loopback = bind_addr.ip().is_loopback();
+        if !matches!(resolve_relay_mode(is_loopback), RelayMode::Disabled) {
+            let _ = tokio::time::timeout(Duration::from_millis(5000), endpoint.online()).await;
+        }
+
+        let endpoint_id = endpoint.id();
+        let bound_sockets = endpoint.bound_sockets();
+        let addr = endpoint.addr();
+        let mut ip_addrs: Vec<SocketAddr> = addr.ip_addrs().copied().collect();
+        let mut relay_urls: Vec<RelayUrl> = addr.relay_urls().cloned().collect();
+        for configured_url in configured_relay_urls() {
+            if !relay_urls.contains(&configured_url) {
+                relay_urls.push(configured_url);
+            }
+        }
+
+        let bound_port = bound_sockets
+            .first()
+            .map(|a| a.port())
+            .or_else(|| ip_addrs.first().map(|a| a.port()))
+            .unwrap_or_else(|| bind_addr.port());
+        let primary_ip = ip_addrs
+            .first()
+            .map(|a| a.ip())
+            .unwrap_or_else(|| default_advertised_ip(bind_addr.ip()));
+        let connect_ip = advertised_ip.unwrap_or(primary_ip);
+        let connect_addr = SocketAddr::new(connect_ip, bound_port);
+        if !ip_addrs.contains(&connect_addr) {
+            ip_addrs.insert(0, connect_addr);
+        }
+        if bind_addr.ip().is_unspecified() {
+            let lo = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), bound_port);
+            if !ip_addrs.contains(&lo) {
+                ip_addrs.push(lo);
+            }
+        }
+
+        let iroh_ticket = IrohEndpointTicket {
+            endpoint_id,
+            relay_urls: relay_urls.clone(),
+            ip_addrs: ip_addrs.clone(),
+        };
+        let cert_der_b64 = STANDARD.encode(serde_json::to_vec(&iroh_ticket)?);
+
+        info!(
+            %session_id,
+            %bind_addr,
+            %connect_addr,
+            %endpoint_id,
+            ?ip_addrs,
+            ?relay_urls,
+            "native Iroh QUIC host endpoint bound (async)"
+        );
+
+        Ok(Self {
+            state: HostEndpointState::Bound(ManagedEndpoint::new(endpoint)),
+            ticket: NativeQuicTicket {
+                session_id,
+                connect_addr,
+                server_name: endpoint_id.to_string(),
                 alpn: NATIVE_QUIC_ALPN.to_string(),
-                cert_der_b64: STANDARD.encode(cert_der.as_ref()),
+                cert_der_b64,
                 expires_unix_millis: expected_client_credential.expires_unix_millis,
             },
             expected_client_credential,
@@ -168,53 +413,38 @@ impl NativeQuicHost {
         &self.ticket
     }
 
-    /// Bind with QUIC v2 transport and ALPN. Uses
-    /// `build_server_config_v2` which accepts both ALPNs.
-    pub fn bind_v2(
-        bind_addr: SocketAddr,
-        advertised_ip: Option<IpAddr>,
-        session_id: Uuid,
-        expected_client_credential: SessionCredential,
-    ) -> anyhow::Result<Self> {
-        let certified = generate_simple_self_signed(vec![DEFAULT_SERVER_NAME.to_string()])?;
-        let cert_der = CertificateDer::from(certified.cert.der().to_vec());
-        let key = rustls::pki_types::PrivatePkcs8KeyDer::from(certified.key_pair.serialize_der());
-        let server_config = build_server_config_v2(vec![cert_der.clone()], key.into())?;
-        let endpoint = Endpoint::server(server_config, bind_addr)?;
-        let local_addr = endpoint.local_addr()?;
-        let connect_ip = advertised_ip.unwrap_or_else(|| default_advertised_ip(local_addr.ip()));
-
-        Ok(Self {
-            endpoint: Arc::new(endpoint),
-            ticket: NativeQuicTicket {
-                session_id,
-                connect_addr: SocketAddr::new(connect_ip, local_addr.port()),
-                server_name: DEFAULT_SERVER_NAME.to_string(),
-                alpn: NATIVE_QUIC_ALPN_V2.to_string(),
-                cert_der_b64: STANDARD.encode(cert_der.as_ref()),
-                expires_unix_millis: expected_client_credential.expires_unix_millis,
-            },
-            expected_client_credential,
-        })
-    }
-
     /// Borrow the ticket — ALPN is `NATIVE_QUIC_ALPN_V2` when bound via `bind_v2`.
     pub fn ticket_v2(&self) -> &NativeQuicTicket {
         &self.ticket
     }
 
     pub async fn accept_authenticated_connection(self) -> anyhow::Result<NativeQuicHostConnection> {
-        trace!(session_id = %self.ticket.session_id, "waiting for native QUIC client connection");
-        let incoming = self
-            .endpoint
+        let managed_endpoint = match self.state {
+            HostEndpointState::Bound(ep) => ep,
+            HostEndpointState::Deferred {
+                secret_key,
+                local_addr,
+                mut reserved_socket,
+                v2,
+            } => {
+                // Release the reserved OS port immediately before binding the Iroh endpoint on it.
+                drop(reserved_socket.take());
+                let ep = bind_iroh_server_endpoint(secret_key, local_addr, v2).await?;
+                ManagedEndpoint::new(ep)
+            }
+        };
+
+        trace!(session_id = %self.ticket.session_id, "waiting for native Iroh QUIC client connection");
+        let incoming = managed_endpoint
+            .endpoint()
             .accept()
             .await
             .ok_or_else(|| anyhow!("native QUIC endpoint stopped accepting connections"))?;
         let connection = incoming.await.context("native QUIC handshake failed")?;
         info!(
             session_id = %self.ticket.session_id,
-            remote_addr = %connection.remote_address(),
-            "native QUIC handshake complete"
+            remote_id = %connection.remote_id(),
+            "native Iroh QUIC handshake complete"
         );
         let (mut send, mut recv) = connection
             .accept_bi()
@@ -297,12 +527,12 @@ impl NativeQuicHost {
         send.finish().context("failed to finish auth stream")?;
         debug!(
             session_id = %self.ticket.session_id,
-            remote_addr = %connection.remote_address(),
-            "native QUIC client authenticated"
+            remote_id = %connection.remote_id(),
+            "native Iroh QUIC client authenticated"
         );
 
         Ok(NativeQuicHostConnection {
-            _endpoint: self.endpoint,
+            _endpoint: managed_endpoint,
             connection,
             session_id: self.ticket.session_id,
         })
@@ -310,7 +540,7 @@ impl NativeQuicHost {
 }
 
 pub struct NativeQuicHostConnection {
-    _endpoint: Arc<Endpoint>,
+    _endpoint: Arc<ManagedEndpoint>,
     connection: Connection,
     session_id: Uuid,
 }
@@ -555,14 +785,14 @@ impl NativeQuicMediaSender {
 }
 
 pub struct NativeQuicMediaReceiver {
-    _endpoint: Arc<Endpoint>,
+    _endpoint: Arc<ManagedEndpoint>,
     _connection: Connection,
     recv: RecvStream,
     session_id: Uuid,
 }
 
 impl NativeQuicMediaReceiver {
-    /// Borrow the underlying `quinn::Connection` so callers can layer
+    /// Borrow the underlying `iroh::endpoint::Connection` so callers can layer
     /// the P0-2 datagram media path on top of the reliable stream
     /// returned by this receiver.
     pub fn connection(&self) -> Connection {
@@ -658,7 +888,7 @@ impl NativeQuicAudioSender {
 }
 
 pub struct NativeQuicAudioReceiver {
-    _endpoint: Arc<Endpoint>,
+    _endpoint: Arc<ManagedEndpoint>,
     _connection: Connection,
     recv: RecvStream,
     session_id: Uuid,
@@ -695,7 +925,7 @@ impl NativeQuicAudioReceiver {
 }
 
 pub struct NativeQuicInputSender {
-    _endpoint: Arc<Endpoint>,
+    _endpoint: Arc<ManagedEndpoint>,
     _connection: Connection,
     send: SendStream,
     session_id: Uuid,
@@ -764,8 +994,8 @@ impl NativeQuicInputReceiver {
 /// Reads `ControlMsg` values from a uni-stream opened by the host.
 pub struct NativeQuicControlReceiver {
     #[allow(dead_code)]
-    connection: quinn::Connection,
-    recv: quinn::RecvStream,
+    connection: Connection,
+    recv: RecvStream,
 }
 
 impl NativeQuicControlReceiver {
@@ -783,7 +1013,7 @@ impl NativeQuicControlReceiver {
 /// Client→Host control stream sender (host side).
 /// Sends `ControlMsg` values to the client over a uni-stream.
 pub struct NativeQuicHostControlSender {
-    send: quinn::SendStream,
+    send: SendStream,
 }
 
 impl NativeQuicHostControlSender {
@@ -811,18 +1041,18 @@ pub struct NativeQuicClientSession {
     pub control_receiver: NativeQuicControlReceiver,
     /// Connection handle, exposed so callers can open additional
     /// streams for P1-9/P1-10 features (clipboard + mic control
-    /// channel). Held as an `Arc`-cloned `quinn::Connection` (the
+    /// channel). Held as an `Arc`-cloned `iroh::endpoint::Connection` (the
     /// existing fields also keep clones).
     pub connection: Connection,
 }
 
-/// Convenience alias for the underlying `quinn::Connection`. The
+/// Convenience alias for the underlying `iroh::endpoint::Connection`. The
 /// host's `NativeQuicHostConnection::connection()` returns the same
 /// type, so downstream callers (clip/mic handlers) can share the
 /// type between host and client.
 pub type NativeQuicConnection = Connection;
 /// Re-export for FileSync drain / session helpers.
-pub use quinn::Connection as QuinnConnection;
+pub use iroh::endpoint::Connection as QuinnConnection;
 
 impl NativeQuicClientSession {
     /// Open a new bi-directional control channel for sending
@@ -843,52 +1073,62 @@ pub async fn connect_to_native_quic(
         anyhow::bail!("native QUIC ticket or client credential already expired");
     }
 
-    let mut roots = RootCertStore::empty();
-    let cert_bytes = STANDARD
-        .decode(ticket.cert_der_b64.as_bytes())
-        .context("failed to decode native QUIC certificate")?;
-    roots
-        .add(CertificateDer::from(cert_bytes))
-        .context("failed to trust native QUIC server certificate")?;
+    // Yield once so any concurrently spawned `host.accept_authenticated_connection()`
+    // task on a single-threaded runtime has a chance to release its reserved socket
+    // and bind the Iroh server endpoint before we dial.
+    tokio::task::yield_now().await;
 
-    let client_config = quinn::ClientConfig::with_root_certificates(Arc::new(roots))
-        .context("failed to build native QUIC client config")?;
-    let mut client_config = client_config;
-    client_config.transport_config(Arc::new(build_transport_config()));
-    let bind_addr = if ticket.connect_addr.is_ipv6() {
-        SocketAddr::new(IpAddr::from([0u16; 8]), 0)
-    } else {
-        SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0)
-    };
-    let mut endpoint = Endpoint::client(bind_addr)?;
-    endpoint.set_default_client_config(client_config);
-    let endpoint = Arc::new(endpoint);
+    let endpoint_addr = ticket
+        .endpoint_addr()
+        .context("failed to extract Iroh EndpointAddr from ticket")?;
+    let has_direct_ips = endpoint_addr.ip_addrs().next().is_some();
+    let is_loopback = has_direct_ips
+        && endpoint_addr.ip_addrs().all(|addr| addr.ip().is_loopback())
+        && endpoint_addr.relay_urls().next().is_none();
 
-    info!(
-        session_id = %ticket.session_id,
-        connect_addr = %ticket.connect_addr,
-        bind_addr = %bind_addr,
-        expires_unix_millis = ticket.expires_unix_millis,
-        "starting native QUIC client connection"
-    );
-
-    let connection = endpoint
-        .connect(ticket.connect_addr, &ticket.server_name)
-        .context("failed to start native QUIC connection")?
+    let v2 = ticket.alpn == NATIVE_QUIC_ALPN_V2;
+    let endpoint = bind_iroh_client_endpoint(ticket.connect_addr.is_ipv6(), is_loopback, v2)
         .await
-        .context("native QUIC connect failed")?;
+        .context("failed to bind Iroh client endpoint")?;
+    if !has_direct_ips && endpoint_addr.relay_urls().next().is_some() {
+        let _ = tokio::time::timeout(Duration::from_millis(5000), endpoint.online()).await;
+    }
+    let managed_endpoint = ManagedEndpoint::new(endpoint);
+
     info!(
         session_id = %ticket.session_id,
-        remote_addr = %connection.remote_address(),
-        "native QUIC client connected"
+        remote_id = %endpoint_addr.id,
+        connect_addr = %ticket.connect_addr,
+        direct_ips = endpoint_addr.ip_addrs().count(),
+        relays = endpoint_addr.relay_urls().count(),
+        alpn = %ticket.alpn,
+        expires_unix_millis = ticket.expires_unix_millis,
+        "starting native Iroh QUIC client connection"
     );
 
-    run_post_quic_handshake(connection, endpoint, ticket.session_id, client_credential).await
+    let connection = managed_endpoint
+        .endpoint()
+        .connect(endpoint_addr, ticket.alpn.as_bytes())
+        .await
+        .context("native Iroh QUIC connect failed")?;
+    info!(
+        session_id = %ticket.session_id,
+        remote_id = %connection.remote_id(),
+        "native Iroh QUIC client connected"
+    );
+
+    run_post_quic_handshake(
+        connection,
+        managed_endpoint,
+        ticket.session_id,
+        client_credential,
+    )
+    .await
 }
 
 async fn run_post_quic_handshake(
     connection: Connection,
-    endpoint: Arc<Endpoint>,
+    endpoint: Arc<ManagedEndpoint>,
     session_id: Uuid,
     client_credential: &SessionCredential,
 ) -> anyhow::Result<NativeQuicClientSession> {
@@ -934,7 +1174,7 @@ async fn run_post_quic_handshake(
 /// envelope.
 async fn route_post_auth_streams(
     connection: Connection,
-    endpoint: Arc<Endpoint>,
+    endpoint: Arc<ManagedEndpoint>,
     session_id: Uuid,
 ) -> anyhow::Result<NativeQuicClientSession> {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
@@ -1281,136 +1521,6 @@ async fn drain_legacy_streams(
     }
     Ok(())
 }
-/// Establish a QUIC connection through a TURN relay (client side).
-///
-/// This creates a `TurnUdpSocket` wrapping a TURN channel to `peer_turn_address`,
-/// builds a quinn endpoint with an explicit `TokioRuntime`, and runs the standard
-/// auth + control + media stream setup.
-pub async fn connect_via_turn(
-    ticket: &NativeQuicTicket,
-    client_credential: &SessionCredential,
-    turn_server: SocketAddr,
-    turn_username: String,
-    turn_password: String,
-    peer_turn_address: SocketAddr,
-) -> anyhow::Result<NativeQuicClientSession> {
-    if ticket.expires_unix_millis < unix_millis_now()
-        || client_credential.expires_unix_millis < unix_millis_now()
-    {
-        anyhow::bail!("TURN QUIC ticket or client credential already expired");
-    }
-
-    let creds = turn::TurnCredentials {
-        urls: vec![],
-        username: turn_username,
-        password: turn_password,
-        ttl: 0,
-    };
-    let socket = turn::TurnUdpSocket::new(turn_server, creds, peer_turn_address).await?;
-    let runtime = Arc::new(quinn::TokioRuntime);
-
-    let mut roots = RootCertStore::empty();
-    let cert_bytes = STANDARD
-        .decode(ticket.cert_der_b64.as_bytes())
-        .context("failed to decode TURN QUIC certificate")?;
-    roots
-        .add(CertificateDer::from(cert_bytes))
-        .context("failed to trust TURN QUIC server certificate")?;
-
-    let client_config = quinn::ClientConfig::with_root_certificates(Arc::new(roots))
-        .context("failed to build TURN QUIC client config")?;
-    let mut client_config = client_config;
-    client_config.transport_config(Arc::new(build_transport_config()));
-
-    let mut endpoint = Endpoint::new_with_abstract_socket(
-        EndpointConfig::default(),
-        None,
-        socket.clone(),
-        runtime,
-    )?;
-    endpoint.set_default_client_config(client_config);
-    let endpoint = Arc::new(endpoint);
-
-    info!(
-        session_id = %ticket.session_id,
-        connect_addr = %ticket.connect_addr,
-        "starting TURN-over-QUIC client connection"
-    );
-
-    let connection = endpoint
-        .connect(ticket.connect_addr, &ticket.server_name)
-        .context("failed to start TURN-over-QUIC connection")?
-        .await
-        .context("TURN-over-QUIC connect failed")?;
-    info!(
-        session_id = %ticket.session_id,
-        remote_addr = %connection.remote_address(),
-        "TURN-over-QUIC client connected"
-    );
-
-    run_post_quic_handshake(connection, endpoint, ticket.session_id, client_credential).await
-}
-
-/// Bind a TURN-relayed QUIC endpoint (host side).
-///
-/// Creates a TURN allocation, permission, and channel to `client_turn_address`,
-/// then builds a quinn endpoint using `new_with_abstract_socket`. The returned
-/// `NativeQuicHost` has a ticket whose `connect_addr` is the advertised
-/// TURN address (not the local UDP socket address).
-pub async fn bind_via_turn(
-    bind_addr: SocketAddr,
-    advertised_turn_address: SocketAddr,
-    session_id: Uuid,
-    expected_client_credential: SessionCredential,
-    turn_server: SocketAddr,
-    turn_username: String,
-    turn_password: String,
-    client_turn_address: SocketAddr,
-) -> anyhow::Result<NativeQuicHost> {
-    let _ = bind_addr; // the TURN socket picks its own local address
-    let certified = generate_simple_self_signed(vec![DEFAULT_SERVER_NAME.to_string()])?;
-    let cert_der = CertificateDer::from(certified.cert.der().to_vec());
-    let key = rustls::pki_types::PrivatePkcs8KeyDer::from(certified.key_pair.serialize_der());
-    let mut server_config =
-        quinn::ServerConfig::with_single_cert(vec![cert_der.clone()], key.into())?;
-    server_config.transport_config(Arc::new(build_transport_config()));
-
-    let creds = turn::TurnCredentials {
-        urls: vec![],
-        username: turn_username,
-        password: turn_password,
-        ttl: 0,
-    };
-    let socket = turn::TurnUdpSocket::new(turn_server, creds, client_turn_address).await?;
-    let runtime = Arc::new(quinn::TokioRuntime);
-
-    info!(
-        %session_id,
-        %advertised_turn_address,
-        "binding TURN-relayed QUIC endpoint"
-    );
-
-    let endpoint = Endpoint::new_with_abstract_socket(
-        EndpointConfig::default(),
-        Some(server_config),
-        socket.clone(),
-        runtime,
-    )?;
-
-    Ok(NativeQuicHost {
-        endpoint: Arc::new(endpoint),
-        ticket: NativeQuicTicket {
-            session_id,
-            connect_addr: advertised_turn_address,
-            server_name: DEFAULT_SERVER_NAME.to_string(),
-            alpn: NATIVE_QUIC_ALPN.to_string(),
-            cert_der_b64: STANDARD.encode(cert_der.as_ref()),
-            expires_unix_millis: expected_client_credential.expires_unix_millis,
-        },
-        expected_client_credential,
-    })
-}
-
 /// Extended `connect_with_fallback` that retries v2 → v1 on
 /// `version_negotiation` failures. First attempt uses v2 ALPN; if it fails,
 /// retries with v1 ALPN.
@@ -1431,99 +1541,56 @@ pub async fn connect_with_fallback_v2(
     }
 }
 
-/// Fallback connection chain: direct QUIC → TURN-over-QUIC → TURN/TCP (stubbed).
+/// Connect to a host using Iroh's built-in hole punching, direct UDP, and relay fallback.
 ///
-/// The chain is:
-/// 1. Direct QUIC attempt with a 3-second timeout (skipped when `turn_only` or `turn_force` is set).
-/// 2. TURN-over-QUIC: fetches credentials and the peer's relay address from the signaling
-///    server, publishes its own relay address, and connects through the TURN server.
-/// 3. TURN/TCP (stubbed — returns an error).
+/// When `turn_config` has `turn_only` or `turn_force` set, direct IP addresses are stripped
+/// from the ticket (when a relay URL is available) to force relay-only routing.
 pub async fn connect_with_fallback(
     ticket: &NativeQuicTicket,
     client_credential: &SessionCredential,
     turn_config: Option<TurnConfig>,
 ) -> anyhow::Result<NativeQuicClientSession> {
-    let skip_direct = turn_config
+    let force_relay = turn_config
         .as_ref()
         .is_some_and(|c| c.turn_only || c.turn_force);
 
-    if !skip_direct {
-        match tokio::time::timeout(
-            Duration::from_secs(3),
-            connect_to_native_quic(ticket, client_credential),
-        )
-        .await
-        {
-            Ok(Ok(session)) => return Ok(session),
-            Ok(Err(e)) => info!("direct QUIC failed: {e}"),
-            Err(_) => info!("direct QUIC timed out after 3s"),
+    let effective_ticket = if force_relay {
+        if let Ok(raw) = STANDARD.decode(ticket.cert_der_b64.as_bytes()) {
+            if let Ok(mut iroh_ticket) = serde_json::from_slice::<IrohEndpointTicket>(&raw) {
+                if !iroh_ticket.relay_urls.is_empty() {
+                    iroh_ticket.ip_addrs.clear();
+                    let mut modified = ticket.clone();
+                    modified.cert_der_b64 = STANDARD.encode(serde_json::to_vec(&iroh_ticket)?);
+                    info!(
+                        session_id = %ticket.session_id,
+                        relay_urls = ?iroh_ticket.relay_urls,
+                        "relay-only mode requested: stripped direct IP addresses from Iroh ticket"
+                    );
+                    modified
+                } else {
+                    ticket.clone()
+                }
+            } else {
+                ticket.clone()
+            }
+        } else {
+            ticket.clone()
         }
-    }
+    } else {
+        ticket.clone()
+    };
 
-    if let Some(config) = &turn_config {
-        let peer_pubkey_hex = pubkey_to_hex(&client_credential.client_pubkey);
-        let turn_creds = fetch_turn_credentials(
-            &config.signaling_url,
-            &config.client_credential,
-            &peer_pubkey_hex,
-            config.self_peer_id,
-        )
-        .await?;
-        let host_turn_addr = fetch_host_turn_address(
-            &config.signaling_url,
-            &config.client_credential,
-            config.remote_peer_id,
-        )
-        .await?;
-        let _ = publish_own_turn_address(
-            &config.signaling_url,
-            &config.client_credential,
-            config.self_peer_id,
-            config.turn_server,
-        )
-        .await;
-
-        match tokio::time::timeout(
-            Duration::from_secs(5),
-            connect_via_turn(
-                ticket,
-                client_credential,
-                config.turn_server,
-                turn_creds.username,
-                turn_creds.password,
-                host_turn_addr,
-            ),
-        )
-        .await
-        {
-            Ok(Ok(session)) => return Ok(session),
-            Ok(Err(e)) => info!("TURN-over-QUIC failed: {e}"),
-            Err(_) => info!("TURN-over-QUIC timed out after 5s"),
-        }
-    }
-
-    // TURN/TCP not implemented in this build
-    Err(anyhow!("all connection paths failed"))
+    tokio::time::timeout(
+        Duration::from_secs(15),
+        connect_to_native_quic(&effective_ticket, client_credential),
+    )
+    .await
+    .context("Iroh QUIC connection timed out after 15s")?
 }
 
-// ── TURN signaling-server HTTP helpers ──────────────────────────────
-
-/// Process-wide shared HTTP client for the TURN signaling helpers.
-/// Building a `reqwest::Client` is comparatively expensive (TLS config,
-/// connector pool, etc.), so we reuse a single instance across all calls.
-fn shared_http() -> &'static reqwest::Client {
-    static CLI: OnceLock<reqwest::Client> = OnceLock::new();
-    CLI.get_or_init(|| {
-        reqwest::Client::builder()
-            .timeout(Duration::from_secs(5))
-            .build()
-            .expect("build reqwest client")
-    })
-}
-
-/// Build the `Authorization: Bearer <...>` value used against the TURN
-/// endpoints on the signaling server: the entire `SessionCredential`
-/// JSON, base64-encoded.
+/// Build the `Authorization: Bearer <...>` value used against signaling server
+/// endpoints: the entire `SessionCredential` JSON, base64-encoded.
+#[allow(dead_code)]
 fn bearer_from_credential(c: &SessionCredential) -> String {
     let raw = serde_json::to_vec(c).expect("SessionCredential serializes");
     STANDARD.encode(raw)
@@ -1531,119 +1598,19 @@ fn bearer_from_credential(c: &SessionCredential) -> String {
 
 /// True iff `s` is a 64-character lowercase/uppercase hex string (i.e.
 /// the textual encoding of a 32-byte Ed25519 public key).
+#[allow(dead_code)]
 fn is_valid_hex_pubkey(s: &str) -> bool {
     s.len() == 64 && s.chars().all(|c| c.is_ascii_hexdigit())
 }
 
 /// Render a 32-byte Ed25519 public key as lowercase hex.
+#[allow(dead_code)]
 fn pubkey_to_hex(pk: &[u8; 32]) -> String {
     let mut out = String::with_capacity(64);
     for b in pk {
         out.push_str(&format!("{:02x}", b));
     }
     out
-}
-
-async fn fetch_turn_credentials(
-    signaling_url: &str,
-    credential: &SessionCredential,
-    peer_pubkey_hex: &str,
-    peer_id: Uuid,
-) -> anyhow::Result<turn::TurnCredentials> {
-    if !is_valid_hex_pubkey(peer_pubkey_hex) {
-        anyhow::bail!(
-            "fetch_turn_credentials: peer_pubkey_hex must be 64-char hex (got {} chars)",
-            peer_pubkey_hex.len()
-        );
-    }
-    let base = signaling_url.trim_end_matches('/');
-    let bearer = bearer_from_credential(credential);
-    let resp = shared_http()
-        .post(format!("{base}/v1/turn/credentials"))
-        .header("Authorization", format!("Bearer {bearer}"))
-        .json(&serde_json::json!({ "peer_id": peer_pubkey_hex }))
-        .send()
-        .await
-        .context("failed to fetch TURN credentials from signaling server")?;
-    if !resp.status().is_success() {
-        let status = resp.status();
-        let body = resp.text().await.unwrap_or_default();
-        return Err(anyhow!(
-            "TURN credentials request failed for peer_id={peer_id}: {status} body={body}"
-        ));
-    }
-    let creds: turn::TurnCredentials = resp
-        .json()
-        .await
-        .context("failed to parse TURN credentials response")?;
-    Ok(creds)
-}
-
-/// Fetch the host's published TURN relay address. Requires an HMAC-bound
-/// `SessionCredential` bearer — the signaling server rejects unauthenticated
-/// GET (legacy bare UUID is not accepted on this path).
-async fn fetch_host_turn_address(
-    signaling_url: &str,
-    credential: &SessionCredential,
-    peer_id: Uuid,
-) -> anyhow::Result<SocketAddr> {
-    let base = signaling_url.trim_end_matches('/');
-    let bearer = bearer_from_credential(credential);
-    let resp = shared_http()
-        .get(format!("{base}/v1/turn/relay-address/{peer_id}"))
-        .header("Authorization", format!("Bearer {bearer}"))
-        .send()
-        .await
-        .context("failed to fetch host TURN relay address")?;
-    if !resp.status().is_success() {
-        let status = resp.status();
-        let body = resp.text().await.unwrap_or_default();
-        return Err(anyhow!(
-            "host TURN relay address fetch failed for peer_id={peer_id}: {status} body={body}"
-        ));
-    }
-    let body: serde_json::Value = resp
-        .json()
-        .await
-        .context("failed to parse TURN relay address response")?;
-    // Prefer the new `relay_address` field; fall back to the legacy
-    // `turn_address` field for backward-compat with older server builds.
-    let addr_str = body
-        .get("relay_address")
-        .and_then(|v| v.as_str())
-        .or_else(|| body.get("turn_address").and_then(|v| v.as_str()))
-        .ok_or_else(|| anyhow!("missing relay_address (or legacy turn_address) in response"))?;
-    addr_str
-        .parse::<SocketAddr>()
-        .map_err(|e| anyhow!("invalid relay_address {addr_str:?}: {e}"))
-}
-
-async fn publish_own_turn_address(
-    signaling_url: &str,
-    credential: &SessionCredential,
-    peer_id: Uuid,
-    addr: SocketAddr,
-) -> anyhow::Result<()> {
-    let base = signaling_url.trim_end_matches('/');
-    let bearer = bearer_from_credential(credential);
-    let resp = shared_http()
-        .post(format!("{base}/v1/turn/relay-address"))
-        .header("Authorization", format!("Bearer {bearer}"))
-        .json(&serde_json::json!({
-            "peer_id": peer_id.to_string(),
-            "relay_address": addr.to_string(),
-        }))
-        .send()
-        .await
-        .context("failed to publish TURN relay address")?;
-    if !resp.status().is_success() {
-        let status = resp.status();
-        let body = resp.text().await.unwrap_or_default();
-        return Err(anyhow!(
-            "publish TURN relay address failed for peer_id={peer_id}: {status} body={body}"
-        ));
-    }
-    Ok(())
 }
 
 pub fn encode_ticket_b64(ticket: &NativeQuicTicket) -> anyhow::Result<String> {
@@ -1982,7 +1949,7 @@ pub struct StreamRouter {
     pub audio_recv: Option<RecvStream>,
     pub media_recv: Option<RecvStream>,
     pub control_send: Option<SendStream>,
-    pub control_recv: Option<quinn::RecvStream>,
+    pub control_recv: Option<RecvStream>,
     /// Streams accepted but not yet recognised — kept so we don't
     /// drop them on the floor.
     pub extra: Vec<AcceptedStream>,
@@ -2036,68 +2003,201 @@ fn default_advertised_ip(ip: IpAddr) -> IpAddr {
     }
 }
 
-fn build_transport_config() -> TransportConfig {
-    let mut config = TransportConfig::default();
-    config.max_concurrent_bidi_streams(VarInt::from_u32(8));
-    config.max_concurrent_uni_streams(VarInt::from_u32(8));
-    config.keep_alive_interval(Some(Duration::from_secs(5)));
-    config.enable_segmentation_offload(false);
-    // P0-2: enable QUIC DATAGRAM (RFC 9221) for the low-latency media path.
-    // 1 MiB per-direction send + receive buffer is the canonical setting
-    // for ~4 Mbps / 60 fps streams.
-    config.datagram_send_buffer_size(1 << 20);
-    config.datagram_receive_buffer_size(Some(1 << 20));
-    config.min_mtu(1200);
-    config
+/// Automatically derive and set `QUBOX_IROH_RELAY_URL` from the signaling server URL
+/// (e.g. `ws://203.0.113.10:7000/ws` -> `http://203.0.113.10:3340/`) if `QUBOX_IROH_RELAY_URL`
+/// is not already set in the environment.
+pub fn configure_default_relay_from_signaling_url(signaling_url: &str) {
+    if std::env::var("QUBOX_IROH_RELAY_URL")
+        .map(|v| !v.trim().is_empty())
+        .unwrap_or(false)
+    {
+        return;
+    }
+    let after_scheme = signaling_url.split("://").nth(1).unwrap_or(signaling_url);
+    let authority = after_scheme
+        .split(['/', '?', '#'])
+        .next()
+        .unwrap_or("")
+        .split('@')
+        .next_back()
+        .unwrap_or("");
+    let host = if authority.starts_with('[') {
+        authority
+            .split(']')
+            .next()
+            .map(|h| format!("{h}]"))
+            .unwrap_or_default()
+    } else {
+        authority.split(':').next().unwrap_or("").to_string()
+    };
+    if host.is_empty() {
+        return;
+    }
+    let relay_port: u16 = std::env::var("QUBOX_IROH_RELAY_PORT")
+        .ok()
+        .and_then(|p| p.trim().parse().ok())
+        .unwrap_or(3340);
+    let derived_url = format!("http://{host}:{relay_port}/");
+    std::env::set_var("QUBOX_IROH_RELAY_URL", &derived_url);
+    info!(
+        signaling_url,
+        iroh_relay_url = %derived_url,
+        "configured self-hosted Iroh relay URL from signaling server"
+    );
 }
 
-/// Build a `TransportConfig` for the QUIC v2 + ACK-Frequency path.
+/// Resolve the Iroh `RelayMode` from environment configuration (`QUBOX_IROH_RELAY_URL`
+/// or `QUBOX_IROH_RELAY_MODE`). Never contacts public `n0.iroh.link` relays unless
+/// `QUBOX_IROH_RELAY_MODE=n0` is explicitly requested.
+fn resolve_relay_mode(_is_loopback: bool) -> RelayMode {
+    if let Ok(mode) = std::env::var("QUBOX_IROH_RELAY_MODE") {
+        match mode.trim().to_ascii_lowercase().as_str() {
+            "disabled" | "none" | "off" | "0" => return RelayMode::Disabled,
+            "staging" => return RelayMode::Staging,
+            "default" | "n0" => return RelayMode::Default,
+            _ => {}
+        }
+    }
+    if let Ok(url_str) = std::env::var("QUBOX_IROH_RELAY_URL") {
+        let trimmed = url_str.trim();
+        if !trimmed.is_empty() {
+            if let Ok(url) = trimmed.parse::<RelayUrl>() {
+                return RelayMode::Custom(RelayMap::from(url));
+            }
+        }
+    }
+    RelayMode::Disabled
+}
+
+fn configured_relay_urls() -> Vec<RelayUrl> {
+    if let Ok(url_str) = std::env::var("QUBOX_IROH_RELAY_URL") {
+        let trimmed = url_str.trim();
+        if !trimmed.is_empty() {
+            if let Ok(url) = trimmed.parse::<RelayUrl>() {
+                return vec![url];
+            }
+        }
+    }
+    Vec::new()
+}
+
+async fn bind_iroh_server_endpoint(
+    secret_key: SecretKey,
+    bind_addr: SocketAddr,
+    v2: bool,
+) -> anyhow::Result<Endpoint> {
+    let is_loopback = bind_addr.ip().is_loopback();
+    let transport_cfg = if v2 {
+        build_transport_config_v2(AckPolicy::Media)
+    } else {
+        build_transport_config()
+    };
+
+    let mut builder = Endpoint::builder(presets::N0)
+        .secret_key(secret_key)
+        .alpns(vec![
+            NATIVE_QUIC_ALPN.as_bytes().to_vec(),
+            NATIVE_QUIC_ALPN_V2.as_bytes().to_vec(),
+        ])
+        .transport_config(transport_cfg)
+        .relay_mode(resolve_relay_mode(is_loopback))
+        .clear_ip_transports();
+
+    if is_loopback {
+        builder = builder.clear_address_lookup();
+    }
+
+    builder = match bind_addr {
+        SocketAddr::V4(v4) => builder.bind_addr(v4)?,
+        SocketAddr::V6(v6) => builder.bind_addr(v6)?,
+    };
+
+    builder
+        .bind()
+        .await
+        .context("failed to bind Iroh server endpoint")
+}
+
+async fn bind_iroh_client_endpoint(
+    ipv6: bool,
+    is_loopback: bool,
+    v2: bool,
+) -> anyhow::Result<Endpoint> {
+    let transport_cfg = if v2 {
+        build_transport_config_v2(AckPolicy::Media)
+    } else {
+        build_transport_config()
+    };
+
+    let mut builder = Endpoint::builder(presets::N0)
+        .transport_config(transport_cfg)
+        .relay_mode(resolve_relay_mode(is_loopback))
+        .clear_ip_transports();
+
+    if is_loopback {
+        builder = builder.clear_address_lookup();
+        let bind_addr = if ipv6 {
+            SocketAddr::new(IpAddr::from([0, 0, 0, 0, 0, 0, 0, 1]), 0)
+        } else {
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0)
+        };
+        builder = match bind_addr {
+            SocketAddr::V4(v4) => builder.bind_addr(v4)?,
+            SocketAddr::V6(v6) => builder.bind_addr(v6)?,
+        };
+    } else {
+        let bind_addr = if ipv6 {
+            SocketAddr::new(IpAddr::from([0u16; 8]), 0)
+        } else {
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0)
+        };
+        builder = match bind_addr {
+            SocketAddr::V4(v4) => builder.bind_addr(v4)?,
+            SocketAddr::V6(v6) => builder.bind_addr(v6)?,
+        };
+    }
+
+    builder
+        .bind()
+        .await
+        .context("failed to bind Iroh client endpoint")
+}
+
+fn build_transport_config() -> QuicTransportConfig {
+    let mut builder = QuicTransportConfig::builder();
+    builder = builder
+        .max_concurrent_bidi_streams(VarInt::from_u32(8))
+        .max_concurrent_uni_streams(VarInt::from_u32(8))
+        .keep_alive_interval(Duration::from_secs(5))
+        .enable_segmentation_offload(false)
+        // P0-2: enable QUIC DATAGRAM (RFC 9221) for the low-latency media path.
+        // 1 MiB per-direction send + receive buffer is the canonical setting
+        // for ~4 Mbps / 60 fps streams.
+        .datagram_send_buffer_size(1 << 20)
+        .datagram_receive_buffer_size(Some(1 << 20))
+        .min_mtu(1200);
+    builder.build()
+}
+
+/// Build a `QuicTransportConfig` for the QUIC v2 + ACK-Frequency path.
 /// Doubles datagram buffers to 2 MiB and wires ACK-Frequency per `policy`.
-pub fn build_transport_config_v2(policy: AckPolicy) -> TransportConfig {
-    let mut config = build_transport_config();
-    config.datagram_send_buffer_size(2 << 20);
-    config.datagram_receive_buffer_size(Some(2 << 20));
-    let mut ack = quinn::AckFrequencyConfig::default();
+pub fn build_transport_config_v2(policy: AckPolicy) -> QuicTransportConfig {
+    let mut ack = AckFrequencyConfig::default();
     ack.ack_eliciting_threshold(VarInt::from_u32(policy.ack_eliciting_threshold() as u32));
     ack.reordering_threshold(VarInt::from_u32(policy.reordering_threshold() as u32));
     if matches!(policy, AckPolicy::Control | AckPolicy::InputImmediate) {
         ack.max_ack_delay(Some(Duration::from_micros(policy.min_ack_delay_us())));
     }
-    config.ack_frequency_config(Some(ack));
-    config.keep_alive_interval(Some(Duration::from_secs(5)));
-    config
-}
-
-/// Build a `quinn::EndpointConfig` that prefers QUIC v2 and falls back to v1.
-pub fn build_endpoint_config_v2() -> EndpointConfig {
-    let mut cfg = EndpointConfig::default();
-    cfg.supported_versions(PREFERRED_QUIC_VERSIONS.to_vec());
-    cfg
-}
-
-/// Build a `quinn::ServerConfig` that accepts both `qubox-native-quic/0` (v1)
-/// and `qubox-native-quic-v2/0` (v2) ALPNs.
-pub fn build_server_config_v2(
-    cert_der: Vec<rustls::pki_types::CertificateDer<'static>>,
-    key_der: rustls::pki_types::PrivateKeyDer<'static>,
-) -> anyhow::Result<quinn::ServerConfig> {
-    use quinn::crypto::rustls::QuicServerConfig;
-
-    let mut tls_config = rustls::ServerConfig::builder()
-        .with_no_client_auth()
-        .with_single_cert(cert_der, key_der)
-        .context("build_server_config_v2: rustls config")?;
-    tls_config.alpn_protocols = vec![
-        NATIVE_QUIC_ALPN.as_bytes().to_vec(),
-        NATIVE_QUIC_ALPN_V2.as_bytes().to_vec(),
-    ];
-    let quic_config = QuicServerConfig::try_from(tls_config)
-        .map_err(|_| anyhow!("build_server_config_v2: no initial cipher suite"))?;
-    let mut cfg = quinn::ServerConfig::with_crypto(Arc::new(quic_config));
-    let transport = Arc::get_mut(&mut cfg.transport)
-        .context("build_server_config_v2: transport already shared")?;
-    *transport = build_transport_config_v2(AckPolicy::Media);
-    Ok(cfg)
+    QuicTransportConfig::builder()
+        .max_concurrent_bidi_streams(VarInt::from_u32(8))
+        .max_concurrent_uni_streams(VarInt::from_u32(8))
+        .keep_alive_interval(Duration::from_secs(5))
+        .enable_segmentation_offload(false)
+        .datagram_send_buffer_size(2 << 20)
+        .datagram_receive_buffer_size(Some(2 << 20))
+        .min_mtu(1200)
+        .ack_frequency_config(Some(ack))
+        .build()
 }
 
 fn unix_millis_now() -> u64 {
@@ -2683,7 +2783,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn connect_via_turn_rejects_expired_ticket() {
+    async fn connect_to_native_quic_rejects_expired_ticket() {
         let ticket = NativeQuicTicket {
             session_id: Uuid::new_v4(),
             connect_addr: "127.0.0.1:9999".parse().unwrap(),
@@ -2693,37 +2793,25 @@ mod tests {
             expires_unix_millis: unix_millis_now() - 1,
         };
         let cred = SessionCredential::new_legacy_token(unix_millis_now() + 60_000);
-        match connect_via_turn(
-            &ticket,
-            &cred,
-            "127.0.0.1:3478".parse().unwrap(),
-            "user".to_string(),
-            "pass".to_string(),
-            "127.0.0.1:9998".parse().unwrap(),
-        )
-        .await
-        {
+        match connect_to_native_quic(&ticket, &cred).await {
             Err(e) => assert!(e.to_string().contains("expired"), "got: {e}"),
             Ok(_) => panic!("expected Err for expired ticket"),
         }
     }
 
     #[tokio::test]
-    async fn bind_via_turn_fails_when_no_turn_server() {
-        // No TURN server listening; bind_via_turn should fail with a
-        // connection error (expiry is checked at accept time, not bind time).
-        assert!(bind_via_turn(
-            "0.0.0.0:0".parse().unwrap(),
-            "10.0.0.1:3478".parse().unwrap(),
-            Uuid::new_v4(),
-            SessionCredential::new_legacy_token(unix_millis_now() + 60_000),
-            "127.0.0.1:3478".parse().unwrap(),
-            "user".to_string(),
-            "pass".to_string(),
-            "127.0.0.1:9998".parse().unwrap(),
-        )
-        .await
-        .is_err());
+    async fn iroh_endpoint_ticket_round_trips_and_async_bind() {
+        let cred = SessionCredential::new_legacy_token(unix_millis_now() + 60_000);
+        let host =
+            NativeQuicHost::bind_async("127.0.0.1:0".parse().unwrap(), None, Uuid::new_v4(), cred)
+                .await
+                .expect("bind_async on loopback must succeed");
+        let ticket = host.ticket();
+        let addr = ticket
+            .endpoint_addr()
+            .expect("ticket must decode to EndpointAddr");
+        assert_eq!(addr.id.to_string(), ticket.server_name);
+        assert!(addr.ip_addrs().any(|ip| ip == &ticket.connect_addr));
     }
 }
 

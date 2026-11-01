@@ -754,6 +754,8 @@ async fn main() -> anyhow::Result<()> {
         return run_cli_sync(action.clone()).await;
     }
 
+    qubox_transport::configure_default_relay_from_signaling_url(&args.server);
+
     let (stream, _) = connect_async(&args.server)
         .await
         .with_context(|| format!("failed to connect to {}", args.server))?;
@@ -1910,30 +1912,40 @@ async fn run_native_quic_viewer(
         return Ok(());
     }
 
-    let outcome = if reg.is_tile_mode() {
-        run_tiled_view(
-            &format!("qubox session {session_id}"),
-            decoded_rx,
-            &input_tx,
-            max_stream_frames,
-            &overlay_rx,
-            reg,
-            stats_collector.clone(),
-            video_config.width,
-            video_config.height,
-        )?
-    } else {
-        run_video_window(
-            &format!("qubox session {session_id}"),
-            &video_config,
-            decoded_rx,
-            &input_tx,
-            max_stream_frames,
-            &overlay_rx,
-            reg,
-            stats_collector.clone(),
-        )?
-    };
+    let reg_cloned = reg.clone();
+    let video_config_cloned = video_config.clone();
+    let stats_cloned = stats_collector.clone();
+    let input_tx_cloned = input_tx.clone();
+    drop(input_tx);
+
+    let outcome = tokio::task::spawn_blocking(move || {
+        if reg_cloned.is_tile_mode() {
+            run_tiled_view(
+                &format!("qubox session {session_id}"),
+                decoded_rx,
+                &input_tx_cloned,
+                max_stream_frames,
+                &overlay_rx,
+                &reg_cloned,
+                stats_cloned,
+                video_config_cloned.width,
+                video_config_cloned.height,
+            )
+        } else {
+            run_video_window(
+                &format!("qubox session {session_id}"),
+                &video_config_cloned,
+                decoded_rx,
+                &input_tx_cloned,
+                max_stream_frames,
+                &overlay_rx,
+                &reg_cloned,
+                stats_cloned,
+            )
+        }
+    })
+    .await
+    .context("video window task panicked")??;
 
     if tlm::is_enabled() {
         tlm::emit(&TelemetryEvent::FrameRendered {
@@ -1941,8 +1953,6 @@ async fn run_native_quic_viewer(
             skipped: 0,
         });
     }
-
-    drop(input_tx);
 
     let received_frames = if outcome.closed_by_user && !outcome.stream_ended {
         network_task.abort();
@@ -2061,6 +2071,18 @@ async fn receive_media_stream_registry(
     let mut received_frames = 0_u64;
 
     while let Some(access_unit) = media_receiver.read_access_unit().await? {
+        let recv_unix_micros = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_micros() as u64)
+            .unwrap_or(0);
+        tracing::debug!(
+            frame_id = access_unit.frame_id,
+            timestamp_micros = access_unit.timestamp_micros,
+            recv_unix_micros,
+            keyframe = access_unit.keyframe,
+            bytes = access_unit.bytes.len(),
+            "client received native QUIC video access unit"
+        );
         if received_frames == 0 {
             tracing::info!(
                 frame_id = access_unit.frame_id,
@@ -2295,6 +2317,11 @@ async fn send_input_events(
     let mut pending_event = None;
 
     while let Some(event) = next_outbound_input_event(&mut pending_event, &mut input_rx).await {
+        let send_unix_micros = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_micros() as u64)
+            .unwrap_or(0);
+        tracing::debug!(?event, send_unix_micros, "client sent remote input event");
         input_sender.send_input_event(&event).await?;
     }
 
@@ -2325,6 +2352,12 @@ fn run_video_window(
     let mut last_mouse = None;
     let mut button_states = [false; 3];
     let mut overlay = BlankOverlayWindow::new();
+    if std::env::var("QUBOX_SHOW_STATS_OVERLAY")
+        .map(|v| matches!(v.trim(), "1" | "true" | "yes"))
+        .unwrap_or(false)
+    {
+        stats.toggle_visibility();
+    }
 
     while window.is_open() {
         if window.is_key_down(Key::Escape) {
@@ -2693,7 +2726,10 @@ fn pump_window_input(
     last_mouse: &mut Option<(u32, u32)>,
     button_states: &mut [bool; 3],
 ) {
-    if !window.is_active() {
+    let allow_unfocused = std::env::var("QUBOX_ALLOW_UNFOCUSED_INPUT")
+        .map(|v| matches!(v.trim(), "1" | "true" | "yes"))
+        .unwrap_or(false);
+    if !allow_unfocused && !window.is_active() {
         *last_mouse = None;
         return;
     }

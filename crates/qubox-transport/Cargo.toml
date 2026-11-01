@@ -15,16 +15,10 @@ bytes = "1"
 reed-solomon-erasure = "6"
 ed25519-dalek = { workspace = true }
 hmac = "0.12"
-md-5 = "0.10"
-quinn.workspace = true
-quinn-proto = { version = "0.11", default-features = false, features = ["rustls-ring"] }
-quinn-udp = "0.6"
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
-rcgen.workspace = true
+iroh.workspace = true
 rustls.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-sha1 = "0.10"
 sha2 = "0.10"
 tokio.workspace = true
 thiserror = "1"
@@ -33,17 +27,6 @@ uuid.workspace = true
 
 [features]
 default = []
-masque = ["dep:h3", "dep:h3-quinn"]
-
-[dependencies.h3]
-version = "0.0.8"
-optional = true
-package = "h3"
-
-[dependencies.h3-quinn]
-version = "0.0.10"
-optional = true
-package = "h3-quinn"
 
 [dev-dependencies]
 tempfile = "3"

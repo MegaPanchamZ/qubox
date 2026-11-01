@@ -55,6 +55,14 @@ struct Args {
     /// Stable instance id for this process (auto UUID if empty).
     #[arg(long, env = "QUBOX_INSTANCE_ID", default_value = "")]
     instance_id: String,
+
+    /// Bind address for the embedded self-hosted Iroh relay server.
+    #[arg(long, env = "QUBOX_IROH_RELAY_BIND", default_value = "0.0.0.0:3340")]
+    iroh_relay_bind: SocketAddr,
+
+    /// Disable the embedded self-hosted Iroh relay server.
+    #[arg(long, env = "QUBOX_DISABLE_IROH_RELAY", default_value_t = false)]
+    disable_iroh_relay: bool,
 }
 
 #[tokio::main]
@@ -67,6 +75,30 @@ async fn main() -> anyhow::Result<()> {
         .context("failed to bind signaling listener")?;
 
     tracing::info!(address = %args.bind, "signaling server listening");
+
+    let _iroh_relay = if !args.disable_iroh_relay {
+        let mut relay_cfg = iroh_relay::server::ServerConfig::default();
+        relay_cfg.relay = Some(iroh_relay::server::RelayConfig::new(args.iroh_relay_bind));
+        match iroh_relay::server::Server::spawn(relay_cfg).await {
+            Ok(server) => {
+                tracing::info!(
+                    relay_http_addr = ?server.http_addr(),
+                    "embedded self-hosted Iroh relay server listening"
+                );
+                Some(server)
+            }
+            Err(error) => {
+                tracing::warn!(
+                    ?error,
+                    bind = %args.iroh_relay_bind,
+                    "failed to bind embedded Iroh relay server; continuing with signaling only"
+                );
+                None
+            }
+        }
+    } else {
+        None
+    };
 
     let signaling_secret = match std::env::var(&args.signaling_secret_env) {
         Ok(secret) if !secret.is_empty() => secret.into_bytes(),

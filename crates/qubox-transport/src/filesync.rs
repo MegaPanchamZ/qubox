@@ -12,7 +12,7 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::Context;
-use quinn::{Connection, RecvStream, SendStream};
+use iroh::endpoint::{Connection, RecvStream, SendStream};
 use serde::{de::DeserializeOwned, Serialize};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::Semaphore;
@@ -559,11 +559,7 @@ mod tests {
     /// Loopback e2e: real QUIC uni stream FileSync push + accept + path confine.
     #[tokio::test]
     async fn loopback_quic_filesync_push_accept() {
-        use rcgen::generate_simple_self_signed;
-        use rustls::pki_types::CertificateDer;
-        use rustls::RootCertStore;
-        use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-        use std::sync::Arc;
+        use iroh::{endpoint::presets, Endpoint, RelayMode};
         use std::time::Duration;
 
         let dir = tempfile::tempdir().unwrap();
@@ -573,24 +569,25 @@ mod tests {
         let dest = dir.path().join("incoming");
         std::fs::create_dir_all(&dest).unwrap();
 
-        let certified = generate_simple_self_signed(vec!["localhost".into()]).unwrap();
-        let cert_der = CertificateDer::from(certified.cert.der().to_vec());
-        let key = rustls::pki_types::PrivatePkcs8KeyDer::from(certified.key_pair.serialize_der());
-        let mut server_config =
-            quinn::ServerConfig::with_single_cert(vec![cert_der.clone()], key.into()).unwrap();
-        server_config.transport_config(Arc::new(quinn::TransportConfig::default()));
-        let server =
-            quinn::Endpoint::server(server_config, "127.0.0.1:0".parse().unwrap()).unwrap();
-        let addr = server.local_addr().unwrap();
+        let server = Endpoint::builder(presets::Minimal)
+            .relay_mode(RelayMode::Disabled)
+            .clear_ip_transports()
+            .bind_addr("127.0.0.1:0")
+            .unwrap()
+            .alpns(vec![b"qubox-filesync-test".to_vec()])
+            .bind()
+            .await
+            .unwrap();
+        let server_addr = server.addr();
 
-        let mut roots = RootCertStore::empty();
-        roots.add(cert_der).unwrap();
-        let mut client_config =
-            quinn::ClientConfig::with_root_certificates(Arc::new(roots)).unwrap();
-        client_config.transport_config(Arc::new(quinn::TransportConfig::default()));
-        let mut client_ep =
-            quinn::Endpoint::client(SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0)).unwrap();
-        client_ep.set_default_client_config(client_config);
+        let client_ep = Endpoint::builder(presets::Minimal)
+            .relay_mode(RelayMode::Disabled)
+            .clear_ip_transports()
+            .bind_addr("127.0.0.1:0")
+            .unwrap()
+            .bind()
+            .await
+            .unwrap();
 
         let server_task = tokio::spawn(async move {
             let incoming = server.accept().await.expect("accept");
@@ -602,12 +599,12 @@ mod tests {
             let (hdr, path) = recv_file_bulk(&mut recv, &dest, MAX_FILESYNC_BYTES)
                 .await
                 .expect("recv bulk");
+            server.close().await;
             (hdr, path, dest)
         });
 
         let conn = client_ep
-            .connect(addr, "localhost")
-            .unwrap()
+            .connect(server_addr, b"qubox-filesync-test")
             .await
             .expect("client connect");
         push_file_over_connection(&conn, &src, "file-1", "nested/payload.bin")
@@ -618,6 +615,7 @@ mod tests {
             .await
             .expect("server timed out")
             .expect("server join");
+        client_ep.close().await;
         assert_eq!(hdr.file_id, "file-1");
         assert_eq!(hdr.relative_path, "nested/payload.bin");
         assert_eq!(std::fs::read(&path).unwrap(), data);

@@ -24,9 +24,9 @@ use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Context};
 use byteorder::ReadBytesExt;
+use iroh::endpoint::{Connection, RecvStream, SendDatagramError, SendStream};
 use qubox_media::EncodedVideoAccessUnit;
 use qubox_proto::{ControlMsg, RateFeedback, VideoCodec, PEN_DATAGRAM_DISCRIMINATOR};
-use quinn::{Connection, SendStream};
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::mpsc;
@@ -799,13 +799,13 @@ impl std::fmt::Display for MediaDatagramSendError {
 
 impl std::error::Error for MediaDatagramSendError {}
 
-impl From<quinn::SendDatagramError> for MediaDatagramSendError {
-    fn from(value: quinn::SendDatagramError) -> Self {
+impl From<SendDatagramError> for MediaDatagramSendError {
+    fn from(value: SendDatagramError) -> Self {
         match value {
-            quinn::SendDatagramError::Disabled
-            | quinn::SendDatagramError::UnsupportedByPeer
-            | quinn::SendDatagramError::ConnectionLost(_) => MediaDatagramSendError::Closed,
-            quinn::SendDatagramError::TooLarge => MediaDatagramSendError::TooLarge,
+            SendDatagramError::Disabled
+            | SendDatagramError::UnsupportedByPeer
+            | SendDatagramError::ConnectionLost(_) => MediaDatagramSendError::Closed,
+            SendDatagramError::TooLarge => MediaDatagramSendError::TooLarge,
         }
     }
 }
@@ -991,7 +991,7 @@ impl DatagramDispatcher {
 /// tolerate a small serialization overhead).
 pub struct ControlChannel {
     send: SendStream,
-    recv: quinn::RecvStream,
+    recv: RecvStream,
     // 4-byte length prefix, little-endian.
 }
 
