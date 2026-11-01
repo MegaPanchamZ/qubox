@@ -423,7 +423,7 @@ export function HostList({
                         border: "1px solid rgba(255, 185, 81, 0.45)",
                       }}
                     >
-                      🎮 PLAYER {playerSlot}
+                      PLAYER {playerSlot}
                     </span>
                     <h2 style={{ margin: 0 }}>Connected to {computerName}</h2>
                   </div>
@@ -461,7 +461,7 @@ export function HostList({
                     title="Allow or block virtual Xbox 360 controller input for this friend"
                     type="button"
                   >
-                    🎮 Controller: {perms.gamepad ? "ON" : "OFF"}
+                    Controller: {perms.gamepad ? "ON" : "OFF"}
                   </button>
 
                   <button
@@ -484,7 +484,7 @@ export function HostList({
                     title="Allow or block keyboard input for this friend"
                     type="button"
                   >
-                    ⌨️ Keyboard: {perms.keyboard ? "ON" : "OFF"}
+                    Keyboard: {perms.keyboard ? "ON" : "OFF"}
                   </button>
 
                   <button
@@ -507,7 +507,7 @@ export function HostList({
                     title="Allow or block mouse control for this friend"
                     type="button"
                   >
-                    🖱️ Mouse: {perms.mouse ? "ON" : "OFF"}
+                    Mouse: {perms.mouse ? "ON" : "OFF"}
                   </button>
 
                   {onKickSession ? (
@@ -586,23 +586,11 @@ export function HostList({
             }}
           >
             <div>
-              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                <span
-                  style={{
-                    display: "inline-block",
-                    width: 10,
-                    height: 10,
-                    borderRadius: 999,
-                    background: isSharing ? "var(--success)" : "var(--muted)",
-                    boxShadow: isSharing ? "0 0 10px var(--success)" : "none",
-                  }}
-                />
-                <p className="host-card__label" style={{ margin: 0 }}>
-                  {isSharing
-                    ? "Ready for remote connections & co-op gaming"
-                    : "Screen sharing is off"}
-                </p>
-              </div>
+              <p className="host-card__label" style={{ margin: 0 }}>
+                {isSharing
+                  ? "Ready for remote connections & co-op gaming"
+                  : "Screen sharing is off"}
+              </p>
               <h2 style={{ margin: "6px 0 4px" }}>{thisComputerName}</h2>
               <p className="host-card__meta">
                 {isSharing
@@ -689,7 +677,7 @@ export function HostList({
             >
               <div>
                 <p className="host-card__label">
-                  15-Minute Party Code (Up to 4 Friends · 🎮 Controller Ready)
+                  15-Minute Party Code (Up to 4 Friends · Controller Ready)
                 </p>
                 <code
                   className="share-code"
@@ -705,7 +693,7 @@ export function HostList({
                 {shareExpiresMs ? (
                   <p className="host-card__meta" style={{ marginTop: 4 }}>
                     Expires at {new Date(shareExpiresMs).toLocaleTimeString()} ·
-                    Friends get 🎮 Controller ON, ⌨️/🖱️ OFF by default
+                    Friends get Controller ON, Keyboard &amp; Mouse OFF by default
                   </p>
                 ) : null}
                 <div style={{ marginTop: 10, display: "flex", gap: 8 }}>

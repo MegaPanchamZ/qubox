@@ -63,20 +63,6 @@ export function Sidebar({
           );
         })}
       </nav>
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: 8,
-          justifyContent: "center",
-          fontSize: "0.78rem",
-          color: "var(--muted)",
-          paddingTop: 8,
-        }}
-      >
-        <div className="rail__status" style={{ margin: 0 }} />
-        <span>Iroh P2P Ready</span>
-      </div>
     </aside>
   );
 }

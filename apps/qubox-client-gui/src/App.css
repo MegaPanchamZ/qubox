@@ -307,15 +307,6 @@ h1 {
   font-weight: 800;
 }
 
-.rail__status {
-  width: 10px;
-  height: 10px;
-  border-radius: 999px;
-  background: var(--success);
-  box-shadow: 0 0 12px var(--success);
-  margin: 12px auto 0;
-}
-
 /* ── Panel / View Shell ───────────────────────────────────────────── */
 .panel {
   flex: 1;
