@@ -1,16 +1,22 @@
-# Qubox desktop client (Tauri 2 + React)
+# Qubox Desktop App (`qubox-client-gui` — Tauri 2 + React)
 
-Production **launcher / control plane** for Qubox. Video still runs in
-`qubox-client-cli` (separate window); this app owns pairing, sessions,
-host start/stop, File Sync, settings, and tray.
+Primary desktop interface for **Qubox**. Provides a streamlined 2-tab layout (**Computers** and **Settings**) for hosting, connecting to remote computers, managing 4-player Co-Op Gaming sessions, generating Party Share Codes, and configuring Parsec-style per-peer access controls. Low-latency video rendering runs in the bundled `qubox-client-cli` viewer window alongside `qubox-host-agent` and `qubox-daemon` sidecars.
 
-## Prerequisites
+## Features
 
-- `qubox-daemon run` (settings + File Sync + host lifecycle)
-- Optional: `qubox-signaling-server` for self-host
-- Built `qubox-client-cli` on `PATH` or next to the GUI binary
+- **Simplified 2-Tab Navigation:**
+  - **Computers:** Pinned top controls (**Share This Computer**, 15-minute **Party Share Code** generator, live search filter, and **Connect via Code** input) above an independently scrollable, compact single-line computer list (`P1`–`P4` · **Computer Name** · `Connected` + **Connect** / **Sync** / **Unpair** actions) that scales cleanly to 100+ computers.
+  - **Settings:** Device identity, signaling URL (`ws://` or `wss://`), video codec/FPS/bitrate, privacy blanking, File Sync ignore patterns, and daemon diagnostics.
+- **4-Player Co-Op Gaming (`Player 1`–`Player 4`):** Up to 4 simultaneous guests can connect to a host, each assigned a dedicated virtual Xbox 360 controller (`uinput` on Linux, `ViGEmBus` on Windows).
+- **Parsec-Style Per-Peer Access Control:** Persistent per-friend permission toggles directly on the active host banner:
+  - **Controller** (`sports_esports`) — allow or block gamepad input
+  - **Keyboard** (`keyboard`) — allow or block keyboard events
+  - **Mouse** (`mouse`) — allow or block mouse cursor/clicks
+  - **Connect without approval** (`lock_open`) — auto-approve future pairing/session requests from trusted peers
+  - **Kick / Kick All** (`person_remove` / `group_off`) — immediately terminate one or all active guest sessions
+- **System Tray Integration:** Show window, toggle hosting, and quit cleanly.
 
-## Dev
+## Development
 
 ```bash
 npm install
@@ -19,21 +25,19 @@ npm run tauri dev
 
 ## Testing
 
-### Unit (Vitest + mockIPC)
+### Unit Tests (Vitest + `mockIPC`)
 
 ```bash
 npm test
 ```
 
-Uses `@tauri-apps/api/mocks` (`mockIPC`) so frontend command calls run without a Rust backend.
+Uses `@tauri-apps/api/mocks` (`mockIPC`) so frontend command calls run without a live Rust backend.
 
-### E2E — browser mode (local, recommended)
+### E2E — Browser Mode (Local, Recommended)
 
-Drives the Vite frontend in Chrome via `@wdio/tauri-service` browser mode.
-No Tauri binary or WebKitWebDriver required; `invoke()` is mocked.
+Drives the Vite frontend in headless Chrome via WebdriverIO:
 
 ```bash
-# from apps/qubox-client-gui
 npm run test:e2e
 ```
 
@@ -43,27 +47,11 @@ Or with Vite already running on port 1420:
 QUBOX_E2E_SKIP_VITE=1 npm run test:e2e
 ```
 
-Specs live in `e2e/specs/`. Config: `e2e/wdio.browser.conf.ts`.
-
-### E2E — native mode (full Tauri binary)
+### E2E — Native Mode (Full Tauri Binary)
 
 ```bash
-# build the GUI (workspace root)
 cargo build -p qubox-client-gui --release
-
-# Linux: WebKitWebDriver + fake display
-#   sudo apt-get install -y webkit2gtk-driver xvfb
 xvfb-run npm run test:e2e:native
 ```
 
-Optional: set `QUBOX_E2E_APP=/path/to/qubox-client-gui`.  
-For `browser.tauri.mock()` / `execute()` in native mode, add `tauri-plugin-wdio` (and `tauri-plugin-wdio-webdriver` for embedded driver) — see Tauri WDIO docs.
-
-## Features
-
-- First-run wizard (device name + signaling URL)
-- System tray: show, start/stop host, quit
-- Hosts / Pairing / Sessions / Host mode / File Sync / Settings
-- Share code create/redeem; File Sync never-track (default `.git`)
-
-See `docs/maturity-non-mobile.md` and `docs/user-guide-file-sync.md`.
+See [`../../docs/architecture.md`](../../docs/architecture.md) and [`../../docs/SELF_HOSTING.md`](../../docs/SELF_HOSTING.md) for full system documentation.

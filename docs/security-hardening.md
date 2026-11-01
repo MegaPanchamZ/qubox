@@ -1,48 +1,32 @@
-# Security hardening (desktop + self-host production)
+# Security Hardening (Desktop + Self-Host Production)
 
-Threat model: paired peers over authenticated signaling + native QUIC.
-Attackers: network MITM, malicious peer after pair compromise, local
-unprivileged process, path-injection via FileSync.
+Threat model: paired peers communicating over authenticated WebSocket signaling and end-to-end encrypted Iroh P2P / QUIC v2 media and control streams.
+Attackers considered: network MITM, untrusted or over-privileged guest peer in a multi-player session, local unprivileged processes, and path-injection via FileSync.
 
-## Mitigations in code
+## Mitigations in Code
 
 | Surface | Mitigation |
 |---------|------------|
-| Signaling identity | Ed25519 device identity; `SignedHello` required by default |
-| Session auth | HMAC-bound `SessionCredential`; short TTL |
-| Auto-approve | Forbidden on non-loopback binds (`refuse_auto_approve_on_public_server`) |
-| TLS | Self-host: Caddy profile in `ops/self-host` (`wss://`); never expose raw `:7000` on the public internet |
-| TURN | Credentials bound to session; short-term credentials |
-| FileSync path | `validate_relative_path` + `resolve_safe_target` (no `..`, abs, null, control) |
-| FileSync integrity | blake3 over body; reject on mismatch; atomic rename from `.qubox-partial` |
-| FileSync size | `MAX_FILESYNC_BYTES` (512 MiB); streaming hash/I/O |
-| FileSync concurrency | `MAX_FILESYNC_CONCURRENT` (4) accept slots |
-| FileSync never-track | Default ignores include `.git` (ADR-022) |
-| Host permissions | Host enforces input/clipboard/mic permission bits |
-| Daemon IPC | Local Unix socket / Named Pipe; no remote bind |
-| Updates | TUF repo under `ops/tuf` (when published) |
-| Privacy | Blank-overlay / vkms flags; GUI prefs applied on host start |
+| Signaling identity | Ed25519 device identity; `SignedHello` enforced by default |
+| Transport encryption | End-to-end TLS 1.3 (`rustls` + `ring`) over QUIC v2 and Iroh P2P endpoints authenticated by peer `NodeId` |
+| Session auth | HMAC-bound `SessionCredential` with short TTL enforced on session start |
+| Global auto-approve | Refused on non-loopback binds (`refuse_auto_approve_on_public_server`) |
+| Per-peer access control | Parsec-style per-peer host permissions (`allow_gamepad`, `allow_keyboard`, `allow_mouse`, `auto_approve`) enforced in real time by `qubox-host-agent`; host can kick any or all peers immediately |
+| Party Share Codes | 15-minute expiry (`900s` TTL); guests default to controller-only when joining co-op sessions unless granted keyboard/mouse by the host |
+| TLS | Caddy profile in `ops/self-host` (`wss://`); never expose raw `:7000` on the public internet |
+| Relay privacy | `iroh-relay` (`:3340`) and `coturn` (`:3478`) forward only end-to-end encrypted QUIC/DTLS packets |
+| FileSync path confinement | `validate_relative_path` + `resolve_safe_target` rejects `..`, absolute paths, symlinks, null bytes, and control characters |
+| FileSync integrity & limits | `blake3` verification before atomic rename from `.qubox-partial`; `MAX_FILESYNC_BYTES` (512 MiB); `MAX_FILESYNC_CONCURRENT` (4); `.git` never-track default |
+| Host permissions | Host enforces per-session clipboard and microphone permission bits |
+| Daemon IPC | Local Unix domain socket / Windows Named Pipe restricted to the local user |
 
-## Operational controls (self-host)
+## Operational Controls (Self-Host)
 
-1. **Do not** run host-agent with `--auto-approve-pairing` on internet-facing servers.
-2. Prefer `ops/self-host` with the **TLS profile** (Caddy); rotate certs per `docs/operations/signaling-tls-cert-rotation.md` when present.
-3. Restrict FileSync destination (`QUBOX_FILESYNC_DIR`) to a dedicated directory; do not point at `$HOME`.
-4. Keep pairing approvals human-gated; revoke via CLI/GUI when devices are lost.
-5. Run TURN soak before production cutover: `docs/operations/turn-soak.md`.
-6. Sign installers when shipping outside lab: `ops/signing/README.md` + `ops/tuf`.
-7. Treat Open enrollment as **LAN-trust**: anyone who can reach the signaling WS can list hosts until pairing is required—front with TLS, rate limits, and network ACLs for public exposure.
+1. **Do not** run `qubox-host-agent` with global `--auto-approve-pairing` on internet-facing networks; use the GUI's per-device **Connect without approval** toggle only for your own trusted machines.
+2. Run `ops/self-host` with the **TLS profile** (`--profile tls`) when exposing signaling outside a private LAN.
+3. Restrict FileSync destination (`QUBOX_FILESYNC_DIR`) to a dedicated workspace folder rather than `$HOME`.
+4. Revoke pairings or kick guests immediately from the **Computers** tab if a peer device is lost or untrusted.
 
-## Residual risk (accepted for 1.0 desktop)
+## Incident Response
 
-| Risk | Status |
-|------|--------|
-| Code-signing cert / SmartScreen reputation | Requires org certs (scripts ready) |
-| Full HW decode on every GPU | SW fallback always available; HW probe + get_format path present |
-| vkms/IddCx productization | Blank-overlay production path works without kernel modules |
-| Embedded video in Tauri | Dual-window CLI viewer is the supported product surface |
-| USB passthrough | Out of scope unless product requires |
-
-## Incident response
-
-Report to **security@qubox.app** per `SECURITY.md`. Coordinated disclosure default 90 days.
+Report vulnerabilities privately to **security@qubox.app** per [`SECURITY.md`](../SECURITY.md). Coordinated disclosure default is 90 days.

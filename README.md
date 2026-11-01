@@ -1,202 +1,155 @@
 # Qubox
 
-**Secure, self-hostable WebRTC-style remote desktop — pair machines, stream desktops, move files.**
+**Low-latency remote desktop & 4-player co-op streaming in Rust — QUIC v2 + Iroh P2P media plane, hardware encode/decode, and a self-hostable control plane.**
 
-Qubox lets you take control of another machine, share screens, and move files
-between them — peer-to-peer when possible, TURN-relayed when not. The core is
-written in Rust; the desktop client is a Tauri (TypeScript + Rust) app.
+[![CI](https://github.com/MegaPanchamZ/qubox/actions/workflows/ci.yml/badge.svg)](https://github.com/MegaPanchamZ/qubox/actions/workflows/ci.yml)
+[![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](LICENSE)
 
-```
-┌──────────────────┐  WebSocket (TLS)  ┌──────────────────┐
-│  qubox-host-agent│ ─────────────────▶│ qubox-signaling- │
-│  (controlled PC) │ ◀───────────────  │     server       │
-└──────────────────┘                   └────────┬─────────┘
-        ▲                                       │ TURN credentials
-        │ QUIC / WebRTC                         ▼
-        │                                ┌──────────────┐
-┌──────────────────┐                     │   coturn     │
-│ qubox-client-cli │  ────relay─────────▶│  (TURN/STUN) │
-│ / -gui (viewer)  │                     └──────────────┘
-└──────────────────┘
-```
-
-> **Managed cloud:** if you'd rather not self-host, the [Qubox Cloud](https://qubox.app)
-> service runs the same open-source clients against hosted signaling, TURN, and
-> accounts. The cloud uses the same wire protocols as this open source stack.
+> **Two ways to run Qubox**
+>
+> - **Self-host (this repo):** Run `qubox-signaling-server` (with embedded `iroh-relay` and optional `coturn`) on your own hardware or VPS. Free, AGPL-3.0, no account required. Start with [`docs/SELF_HOSTING.md`](docs/SELF_HOSTING.md).
+> - **Qubox Cloud:** Managed signaling, global relays, accounts, and cloud friend graphs at **[qubox.app](https://qubox.app)**. Same open-source client & host binaries — only the control plane is hosted.
 
 ---
 
-## Features
+## Architecture
 
-- **End-to-end** streaming: display, audio, keyboard, mouse, pen / tablet, gamepad, clipboard
-- **Identity & pairing**: Ed25519 device identity, signed `Hello` handshake, host-side approval
-- **Transports**: native QUIC, WebRTC (browser-compatible), QUIC relay fallback
-- **File sync** between paired machines
-- **TURN / STUN** for NAT traversal (uses standard `coturn`)
-- **TUF** auto-update with offline root key
-- **Cross-platform** host agent and viewer: Linux, Windows, macOS
-- **Three clients**: Tauri GUI, headless CLI, browser (WebCodecs)
+```
+┌────────────────────────────┐                  ┌────────────────────────────┐
+│  qubox-host-agent          │   Iroh P2P /     │  qubox-client-cli / GUI    │
+│  • PipeWire / DXGI / SCK   │◄──QUIC v2───────►│  • Hardware H.264/HEVC/AV1 │
+│  • NVENC / VAAPI / VT / MF │   (UDP hole-     │  • wgpu + winit renderer   │
+│  • Enigo + uinput/ViGEm    │    punching or   │  • Mouse / KB / 4x Gamepad │
+│  • Player 1–4 Gamepad slots│    Iroh Relay)   │  • Parsec-style permissions│
+│  • Opus audio + FileSync   │                  │  • Opus playback + Mic     │
+└─────────────┬──────────────┘                  └──────────────┬─────────────┘
+              │  Ed25519 SignedHello + Party Share Codes       │
+              └──────────────►┌────────────────┐◄──────────────┘
+                              │   signaling    │
+                              │   (WS :7000)   │
+                              │ + iroh-relay   │
+                              │   (:3340)      │
+                              └────────────────┘
+```
+
+### Key Features
+
+- **Direct Iroh P2P & QUIC v2 Transport (`qubox-transport`):** Automatic NAT hole-punching via Ed25519 NodeIds with zero-config fallback to an embedded `iroh-relay` server (`:3340`) or TURN (`:3478`).
+- **Simplified Desktop App (`qubox-client-gui`):** Clean 2-tab interface (**Computers** and **Settings**) with compact single-line host rows, live search filtering across 100+ computers, and one-click connect.
+- **4-Player Co-Op Gaming & Party Share Codes:** Host up to 4 simultaneous players with isolated virtual Xbox 360 controllers (`Player 1`–`Player 4` via Linux `uinput` and Windows `ViGEmBus`). Generate 15-minute multi-friend **Party Share Codes** so friends can join with a single code.
+- **Parsec-Style Per-Peer Access Control:** Granular, persistent per-friend permissions directly on the host banner — toggle **Controller**, **Keyboard**, **Mouse**, and **Connect without approval** (auto-approve), or kick individual/all guests at any time.
+- **Context-Aware File Sync (`qubox-sync`):** Content-addressed (`blake3`) file synchronization over dedicated QUIC streams with path confinement and automatic `.git` ignore rules.
+
+### Crates (`crates/`)
+
+| Crate | Role |
+|-------|------|
+| `qubox-proto` | Wire protocol (`SignedHello`, pairing, Party Share Codes, `EndpointAddr`, codec negotiation, `StreamPurpose::FileSync`) |
+| `qubox-identity` | Ed25519 device identity, encrypted on-disk keystore, signed signaling envelopes |
+| `qubox-signaling` | Signaling state machine, pairing store, 15-minute multi-peer share codes, HMAC session credentials |
+| `qubox-transport` | QUIC v2 + Iroh P2P endpoint transport, BBRv2/ack-frequency tuning, Reed-Solomon FEC, frame-aware pacer |
+| `qubox-webtransport` | WebTransport server for the browser client (`web/`) |
+| `qubox-media` | Capture & encode/decode (PipeWire, X11, DXGI, ScreenCaptureKit; FFmpeg/VAAPI/NVENC/VideoToolbox/MediaFoundation; wgpu viewer) |
+| `qubox-platform` | OS input injection (Enigo, XTest, Linux `uinput` & Windows `ViGEmBus` virtual Xbox 360 gamepads for up to 4 players) |
+| `qubox-display` | Display enumeration, privacy blanking overlay, virtual display helpers (`vkms` / `IddCx`) |
+| `qubox-clipboard` | Bidirectional clipboard sync with host permission gate |
+| `qubox-mic` | Client-to-host microphone passthrough (Opus + noise suppression) |
+| `qubox-pen` | Stylus / tablet pressure & tilt events |
+| `qubox-rl-policy` | Pensieve-style ABR bitrate policy |
+| `qubox-sync` | Content-addressed (`blake3`) File Sync over QUIC streams with `.git` never-track default |
+
+### Apps (`apps/`)
+
+| Binary | Role |
+|--------|------|
+| `qubox-signaling-server` | Self-host WebSocket signaling server (`:7000/ws`, `/health`) + optional embedded `iroh-relay` (`:3340`) |
+| `qubox-host-agent` | Captures display/audio, runs Iroh + QUIC host listener, enforces per-peer input permissions |
+| `qubox-client-cli` | Native low-latency viewer (`list-hosts`, `pair`, `connect`, `share-create`, `share-redeem`) |
+| `qubox-daemon` | Local background service (IPC socket/pipe, host lifecycle, FileSync outbox, settings) |
+| `qubox-client-gui` | Tauri 2 + React desktop app (Computers & Settings tabs, Party Share Codes, Parsec-style access control, tray) |
 
 ---
 
-## Quick start (self-host)
+## Quickstart — Self-Host in 60 Seconds
 
-The fastest path is the bundled Docker stack:
+See **[`docs/SELF_HOSTING.md`](docs/SELF_HOSTING.md)** for full instructions, firewall ports, TLS (`wss://`), and hardening.
 
 ```bash
 git clone https://github.com/MegaPanchamZ/qubox.git
 cd qubox
+
 export QUBOX_SIGNALING_SECRET=$(openssl rand -hex 32)
 export QUBOX_TURN_SECRET=$(openssl rand -hex 16)
+
 docker compose -f ops/self-host/docker-compose.yml up -d --build
+curl -sS http://127.0.0.1:7000/health
 ```
 
-This runs the signaling server (`:7000`), coturn (`:3478`), and an
-optional Caddy reverse proxy (`:443`) on the same host.
-
-Then on the **machine you want to control** (host):
+Then build and run a host and viewer on your LAN:
 
 ```bash
-cargo build --release -p qubox-host-agent
-QUBOX_IDENTITY_PATH=/tmp/host-id.json \
-  ./target/release/qubox-host-agent \
-    --server ws://127.0.0.1:7000/ws \
-    --name "$(hostname)"
+cargo build --release -p qubox-host-agent -p qubox-client-cli
+
+# On the host machine (the one being controlled)
+./target/release/qubox-host-agent \
+  --server ws://<SIGNALING_IP>:7000/ws \
+  --name my-workstation
+
+# On the client machine
+./target/release/qubox-client-cli \
+  --server ws://<SIGNALING_IP>:7000/ws \
+  list-hosts
 ```
 
-On the **viewer** (client), in a Tauri GUI or CLI:
-
-```bash
-cargo build --release -p qubox-client-cli
-QUBOX_IDENTITY_PATH=/tmp/client-id.json \
-  ./target/release/qubox-client-cli \
-    --server ws://127.0.0.1:7000/ws \
-    list-hosts
-# pair with the host
-./target/release/qubox-client-cli \
-    --server ws://127.0.0.1:7000/ws \
-    pair --host "$(hostname)"
-./target/release/qubox-client-cli \
-    --server ws://127.0.0.1:7000/ws \
-    start-session --host "$(hostname)" --codec h264
-```
-
-A native window opens streaming the host's display. See
-[`docs/SELF_HOSTING.md`](docs/SELF_HOSTING.md) for the full guide
-(network exposure, TLS, TURN, troubleshooting).
-
-> **Default security posture:** the open-source signaling server runs in
-> *Open* mode — anyone who can reach `:7000/ws` can list hosts. That is the
-> right default for trusted LANs. For internet exposure, use the TLS profile
-> in `ops/self-host`, require host-side pairing approval (never
-> `--auto-approve-pairing` on public hosts), and network ACLs / rate limits.
-> Multi-tenant accounts enrollment is a **Qubox Cloud** product concern, not
-> part of this self-host stack (see `docs/adr/021-dual-mode-control-plane.md`).
+Or download the prebuilt **Qubox Desktop** installer for Windows (`.exe` / `.msi`), macOS (`.dmg`), or Linux (`.AppImage` / `.deb` / `.rpm`) from [**GitHub Releases**](https://github.com/MegaPanchamZ/qubox/releases).
 
 ---
 
-## Building from source
+## Building from Source
 
-Requires Rust 1.78+ and a C toolchain (for the codec stack on Linux:
-`gcc`, `libx11-dev`, `libxkbcommon-dev`, `libwayland-dev`, `libudev-dev`,
-`libpipewire-0.3-dev`, `libopus-dev`).
+### Prerequisites
+
+- **Rust** 1.83+ (`rustup update stable`)
+- **Node.js** 22+ (only required for `apps/qubox-client-gui` and `web/`)
+- **Linux system packages** (Ubuntu/Debian):
+  ```bash
+  sudo apt-get update && sudo apt-get install -y \
+    libx11-dev libxrandr-dev libxdo-dev libxkbcommon-dev \
+    libwayland-dev libxext-dev libclang-dev pkg-config cmake \
+    libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libavfilter-dev libavdevice-dev \
+    libpulse-dev libasound2-dev libdbus-1-dev libudev-dev libsystemd-dev \
+    libpipewire-0.3-dev libspa-0.2-dev libopus-dev \
+    libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev
+  ```
+- **macOS:** `brew install ffmpeg opus pkg-config cmake`
+- **Windows:** Visual Studio 2022 C++ Build Tools, LLVM/Clang, FFmpeg, and `vcpkg install opus:x64-windows-static-md`
+
+### Workspace check & test
 
 ```bash
-cargo build --release \
-  -p qubox-signaling-server \
-  -p qubox-host-agent \
-  -p qubox-client-cli \
-  -p qubox-daemon
-```
-
-The Tauri GUI requires Node 18+ and `pnpm`:
-
-```bash
-cd apps/qubox-client-gui
-pnpm install
-pnpm tauri build
-```
-
-Cross-compile helpers live under `apps/qubox-*/Dockerfile` and
-`scratch/`.
-
----
-
-## Repo layout
-
-```
-qubox/
-├── apps/                       # binaries
-│   ├── qubox-signaling-server/    # WebSocket signaling + TURN credential issuer
-│   ├── qubox-host-agent/          # runs on the controlled machine
-│   ├── qubox-client-cli/          # headless viewer
-│   ├── qubox-client-gui/          # Tauri desktop viewer
-│   └── qubox-daemon/              # background daemon (state, IPC, TUF)
-├── crates/                     # reusable libraries
-│   ├── qubox-signaling/        # protocol + tenant isolation
-│   ├── qubox-transport/        # QUIC / TCP
-│   ├── qubox-webtransport/     # WebTransport binding
-│   ├── qubox-identity/         # device identity + signed hellos
-│   ├── qubox-proto/            # shared message types
-│   ├── qubox-media/, -display/, -mic/, -pen/, -clipboard/
-│   ├── qubox-platform/         # OS shims
-│   ├── qubox-rl-policy/        # adaptive bitrate (optional)
-│   └── qubox-sync/             # file sync engine
-├── clients/webcodecs/          # browser-based viewer
-├── docs/                       # architecture, security, operations
-├── ops/
-│   ├── self-host/              # one-liner Docker stack
-│   ├── local/                  # dev scripts (start signaling, connect)
-│   ├── signing/                # release signing helpers
-│   └── vm-lab/                 # local VM test lab
-├── scripts/
-├── research/                   # ADRs and roadmap
-└── scratch/                    # throwaway / VM build helpers
+cargo test --workspace --exclude qubox-client-gui
 ```
 
 ---
 
 ## Documentation
 
-| Doc | What it covers |
-|-----|----------------|
-| [`docs/SELF_HOSTING.md`](docs/SELF_HOSTING.md) | End-to-end self-host guide |
-| [`docs/architecture.md`](docs/architecture.md) | High-level architecture |
-| [`docs/security-hardening.md`](docs/security-hardening.md) | Threat model + hardening |
-| [`docs/production-readiness.md`](docs/production-readiness.md) | What's solid, what isn't |
-| [`docs/operations/coturn-deploy.md`](docs/operations/coturn-deploy.md) | TURN server deploy |
-| [`docs/operations/turn-soak.md`](docs/operations/turn-soak.md) | Load + soak testing |
-| [`docs/tuf.md`](docs/tuf.md) | Auto-update trust model |
-| [`docs/platforms.md`](docs/platforms.md) | OS / platform support matrix |
+- [`docs/SELF_HOSTING.md`](docs/SELF_HOSTING.md) — Docker Compose stack, TLS with Caddy, pairing, Party Share Codes, operations
+- [`docs/architecture.md`](docs/architecture.md) — Control, media, Iroh P2P, input, and platform planes
+- [`docs/platforms.md`](docs/platforms.md) — Linux, Windows, and macOS capture, encode, and virtual gamepad support
+- [`docs/security-hardening.md`](docs/security-hardening.md) — Threat model, Ed25519 identity, per-peer access controls, FileSync confinement
+- [`docs/production-readiness.md`](docs/production-readiness.md) — Production checklist for self-hosted deployments
+- [`docs/operations/coturn-deploy.md`](docs/operations/coturn-deploy.md) & [`docs/operations/turn-soak.md`](docs/operations/turn-soak.md) — Relay deployment and load testing
+- [`docs/tuf.md`](docs/tuf.md) — TUF auto-update signing and verification
+- [`docs/adr/`](docs/adr/) — Architecture Decision Records (ADR-001 through ADR-022)
 
 ---
+
+## Security
+
+Please report vulnerabilities privately to **security@qubox.app** — see [`SECURITY.md`](SECURITY.md).
 
 ## License
 
-This project is licensed under the **GNU Affero General Public License v3.0
-or later** (AGPL-3.0-or-later). See [`LICENSE`](LICENSE).
-
-The AGPL means: if you run a modified version of this code as a network
-service, you must publish your modifications under the same license. This
-keeps the open core genuinely open. If you want to ship a non-AGPL build
-or a hosted fork, please contact us about a commercial license.
-
-> **Qubox Cloud** (<https://qubox.app>) is a hosted service that speaks the
-> same peer wire protocols.
-
----
-
-## Contributing
-
-Contributions are welcome. See [`CONTRIBUTING.md`](CONTRIBUTING.md) for
-the workflow, coding conventions, and how to run the test suite.
-
-Please report security issues privately to **security@qubox.app** — see
-[`SECURITY.md`](SECURITY.md).
-
----
-
-## Acknowledgments
-
-Qubox is built on the shoulders of giants: the Rust async ecosystem, the
-WebRTC community, and the TUF maintainers. See [`NOTICE`](NOTICE).
+Qubox is licensed under the **[GNU Affero General Public License v3.0 or later](LICENSE)** (`AGPL-3.0-or-later`).
+For commercial licensing or the hosted multi-tenant platform, visit **[qubox.app](https://qubox.app)**.

@@ -90,8 +90,12 @@ jobs:
 
       - name: Install macOS system dependencies
         if: runner.os == 'macOS'
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: "1"
+          HOMEBREW_NO_INSTALL_CLEANUP: "1"
         run: |
-          brew update
+          brew tap --repair || true
+          brew untap aws/tap 2>/dev/null || true
           brew install opus pkg-config autoconf automake libtool
 
       - name: Install Windows system dependencies (vcpkg + opus)
@@ -207,12 +211,18 @@ jobs:
               break
             fi
           done
-          # Optional: raw sidecars + self-host signaling for power users
+          # Standalone CLI + signaling archive per OS
           mkdir -p dist/bin
           for bin in qubox-daemon qubox-host-agent qubox-client-cli qubox-signaling-server; do
             [ -f "target/release/$bin" ] && cp "target/release/$bin" "dist/bin/$bin" && echo "copied $bin"
           done
-          find dist -type f \( -name '*.deb' -o -name '*.rpm' -o -name '*.AppImage' -o -name '*.dmg' -o -name '*.app' \) -print || true
+          if [ "${{ runner.os }}" = "Linux" ]; then
+            CLI_ARCHIVE="qubox-cli-linux-x86_64.tar.gz"
+          else
+            CLI_ARCHIVE="qubox-cli-macos-aarch64.tar.gz"
+          fi
+          tar -czf "dist/$CLI_ARCHIVE" -C dist/bin .
+          find dist -type f \( -name '*.deb' -o -name '*.rpm' -o -name '*.AppImage' -o -name '*.dmg' -o -name '*.tar.gz' \) -print || true
           (cd dist && find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS)
           ls -laR dist > /tmp/dist-listing.txt 2>&1 || true
           head -80 /tmp/dist-listing.txt
@@ -243,6 +253,7 @@ jobs:
               Write-Host "copied $b"
             }
           }
+          Compress-Archive -Path "dist\bin\*" -DestinationPath "dist\qubox-cli-windows-x86_64.zip" -Force
           Get-ChildItem -Recurse dist -File | ForEach-Object {
             $rel = $_.FullName.Substring((Resolve-Path dist).Path.Length + 1)
             $h = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower()
@@ -277,14 +288,18 @@ jobs:
       - name: Install cargo-cyclonedx
         run: cargo install cargo-cyclonedx
 
-      - name: Generate CycloneDX SBOM
-        run: cargo cyclonedx --override-filename qubox.cdx.json
+      - name: Generate CycloneDX SBOM archive
+        run: |
+          cargo cyclonedx --format json
+          mkdir -p sbom-out
+          find crates apps -name '*.cdx.json' -exec cp {} sbom-out/ \;
+          tar -czf qubox-sbom.cdx.tar.gz -C sbom-out .
 
       - name: Upload SBOM
         uses: actions/upload-artifact@v4
         with:
           name: sbom
-          path: "**/*.cdx.json"
+          path: qubox-sbom.cdx.tar.gz
           retention-days: 5
           if-no-files-found: error
 
@@ -309,9 +324,12 @@ jobs:
             artifacts/release-linux/**/*.AppImage
             artifacts/release-linux/**/*.deb
             artifacts/release-linux/**/*.rpm
+            artifacts/release-linux/qubox-cli-linux-x86_64.tar.gz
             artifacts/release-macos/**/*.dmg
+            artifacts/release-macos/qubox-cli-macos-aarch64.tar.gz
             artifacts/release-windows/**/*-setup.exe
             artifacts/release-windows/**/*.msi
-            artifacts/sbom/**/*.cdx.json
+            artifacts/release-windows/qubox-cli-windows-x86_64.zip
+            artifacts/sbom/qubox-sbom.cdx.tar.gz
           generate_release_notes: true
           fail_on_unmatched_files: false

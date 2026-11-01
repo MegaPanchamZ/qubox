@@ -1,54 +1,42 @@
-# Production readiness (self-host desktop)
+# Production Readiness (Self-Host & Desktop)
 
-**Scope:** this public repository only (self-host signaling, clients, TURN, daemon).  
-Mobile/web remain out of scope. Hosted multi-tenant Cloud is a separate product.
+**Scope:** Open-source repository (`qubox-signaling-server`, `qubox-host-agent`, `qubox-client-cli`, `qubox-client-gui`, `qubox-daemon`).
+Hosted multi-tenant Cloud is maintained separately at <https://qubox.app>.
 
-## What ships (open core)
+## What Ships in Open Core
 
-### Trust & control plane
+### Trust & Control Plane
 
-- Device Ed25519 identity + encrypted envelope (`qubox-identity`)
+- Ed25519 device identity + encrypted keystore (`qubox-identity`)
 - `SignedHello` required by default on signaling
-- HMAC session credentials; TURN bound to session
-- Self-host stack: `ops/self-host/docker-compose.yml` (signaling + coturn + optional Caddy)
-- Open enrollment default (LAN-trust); harden with TLS + pairing approval + network ACLs
-- Daemon IPC: pair, share, kick, settings, onboarding, FileSync
+- Short-lived HMAC `SessionCredential` tokens bound to sessions
+- 15-minute multi-friend **Party Share Codes** for instant co-op sessions
+- **Parsec-Style Per-Peer Access Control**: persistent per-peer toggles for **Controller**, **Keyboard**, **Mouse**, and **Connect without approval** (`auto_approve`), plus instant **Kick** / **Kick All**
+- Self-host stack: `ops/self-host/docker-compose.yml` (`signaling` + embedded `iroh-relay` + `coturn` + optional `Caddy` TLS)
 
-### Media & session
+### Media & Input Plane
 
-- Native QUIC H.264 path (host capture → client decoder/viewer)
-- Congestion / rate feedback hooks; multi-display host mode
-- Clipboard + mic permission enforcement on host
-- Privacy: blank-overlay production path; vkms flag (Linux)
-- HW decode with SW fallback on the client CLI path
+- Direct **Iroh P2P + QUIC v2** transport (`qubox-transport`) with automatic NAT hole-punching and relay fallback (`iroh-relay` / TURN)
+- Hardware H.264 / HEVC / AV1 encoding and decoding with software fallback
+- **4-Player Co-Op Gaming**: up to 4 concurrent guests mapped to dedicated virtual Xbox 360 controllers (`Player 1`–`Player 4` via Linux `/dev/uinput` and Windows `ViGEmBus`)
+- Bidirectional clipboard sync and client-to-host Opus microphone passthrough
+- Display privacy blanking overlay and multi-display selection
 
-### File Sync (ADR-022)
+### Context-Aware File Sync (ADR-022)
 
-- StreamPurpose `FileSync`, blake3, redb schema
-- Daemon outbox/jobs/ignores (default never-track includes `.git`)
-- Path confinement, size caps, concurrent accept limit
+- Dedicated `StreamPurpose::FileSync` QUIC streams, `blake3` content addressing, `redb` state store
+- Automatic `.git` never-track default, path traversal confinement, 512 MiB file size cap, 4 concurrent transfer slots
 
-### Desktop UX
+### Desktop UX (`qubox-client-gui`)
 
-- Tauri GUI + CLI viewer; first-run should target **your** signaling URL
-- Host agent approval for pairing on public deployments
+- Streamlined 2-tab Tauri 2 desktop app (**Computers** and **Settings**)
+- Pinned host/share controls and independently scrollable compact computer rows tested cleanly up to 100+ hosts with sub-10ms live search filtering
+- Prebuilt installers via GitHub Actions for **Windows** (`.exe`, `.msi`), **macOS** (`.dmg`), and **Linux** (`.AppImage`, `.deb`, `.rpm`)
 
-## Ops gates before calling a deploy “production”
+## Ops Gates Before Production Cutover
 
-1. `docs/operations/turn-soak.md` on the intended network path  
-2. TLS profile (`wss://`) for any internet-facing signaling  
-3. No `--auto-approve-pairing` on public hosts  
-4. Secrets rotated (`QUBOX_SIGNALING_SECRET`, `QUBOX_TURN_SECRET`)  
-5. Installer signing / TUF when distributing binaries outside a lab  
-
-## Explicitly out of scope here
-
-- Accounts API, OIDC, billing, friends/access grants  
-- Managed enrollment HTTP client and multi-tenant SaaS edge  
-- EC2 / AWS product deploy scripts  
-
-See `docs/adr/021-dual-mode-control-plane.md` and <https://qubox.app> for the Cloud product boundary.
-
-## Residual risk
-
-See `docs/security-hardening.md`.
+1. Run [`docs/operations/turn-soak.md`](operations/turn-soak.md) on the target network path.
+2. Enable TLS (`wss://`) for any internet-facing signaling server.
+3. Never use global `--auto-approve-pairing` on internet-facing hosts; rely on explicit host approval or per-device **Connect without approval** for trusted peers.
+4. Rotate `QUBOX_SIGNALING_SECRET` and `QUBOX_TURN_SECRET`.
+5. Sign installers / TUF metadata when distributing binaries outside your organization.
