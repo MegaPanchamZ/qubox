@@ -894,6 +894,28 @@ async fn kick_session(session_id: String, reason: Option<String>) -> Result<(), 
 }
 
 #[tauri::command]
+async fn set_session_permissions(
+    session_id: String,
+    gamepad: bool,
+    keyboard: bool,
+    mouse: bool,
+) -> Result<(), String> {
+    if let Ok(mut client) = connect_daemon().await {
+        let key = format!("session_perms.{session_id}");
+        let value = serde_json::json!({
+            "gamepad": gamepad,
+            "keyboard": keyboard,
+            "mouse": mouse,
+        })
+        .to_string();
+        let _ = client
+            .call::<IpcResponse>(&IpcRequest::SetSetting { key, value })
+            .await;
+    }
+    Ok(())
+}
+
+#[tauri::command]
 async fn get_settings() -> Result<Settings, String> {
     let mut settings = Settings {
         signaling_server: Some(
@@ -2060,6 +2082,7 @@ pub fn run() {
             create_share_link,
             redeem_share_link,
             kick_session,
+            set_session_permissions,
             set_setting,
             get_onboarding,
             complete_onboarding,

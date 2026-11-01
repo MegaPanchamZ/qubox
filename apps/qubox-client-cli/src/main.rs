@@ -1092,6 +1092,9 @@ async fn main() -> anyhow::Result<()> {
                         input,
                         clipboard,
                         mic,
+                        gamepad: input,
+                        keyboard: input,
+                        mouse: input,
                     },
                 },
             )

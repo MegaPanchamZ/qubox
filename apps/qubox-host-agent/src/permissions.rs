@@ -5,7 +5,25 @@ use qubox_proto::SessionPermissions;
 /// Whether remote input events may be injected on the host.
 #[inline]
 pub fn allow_input(p: &SessionPermissions) -> bool {
-    p.input
+    p.input && (p.gamepad || p.keyboard || p.mouse)
+}
+
+/// Whether remote gamepad controller events may be injected on the host.
+#[inline]
+pub fn allow_gamepad(p: &SessionPermissions) -> bool {
+    p.input && p.gamepad
+}
+
+/// Whether remote keyboard events may be injected on the host.
+#[inline]
+pub fn allow_keyboard(p: &SessionPermissions) -> bool {
+    p.input && p.keyboard
+}
+
+/// Whether remote mouse events may be injected on the host.
+#[inline]
+pub fn allow_mouse(p: &SessionPermissions) -> bool {
+    p.input && p.mouse
 }
 
 /// Whether host may apply client→host clipboard payloads.
@@ -90,6 +108,9 @@ mod tests {
             input,
             clipboard,
             mic,
+            gamepad: input,
+            keyboard: input,
+            mouse: input,
         }
     }
 

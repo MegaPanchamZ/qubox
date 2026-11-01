@@ -51,6 +51,7 @@ mod browser_audio;
 mod capture_orchestrator;
 mod enforce;
 mod filesync_drain;
+mod gamepad;
 mod input_inject;
 mod input_mapping;
 mod pairing_ui;
@@ -1637,14 +1638,27 @@ async fn send_client_message(
 ///   * When `device_name` is `None`, drains all three channels with
 ///     `try_recv()` so the dispatcher keeps reading from the QUIC socket
 ///     and never back-pressures — we are a pure consumer on the host.
+static NEXT_GAMEPAD_SLOT: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
 async fn run_datagram_dispatcher_loop(
     conn: qubox_transport::NativeQuicConnection,
     device_name: Option<String>,
 ) {
     use qubox_transport::media::{decode_pen_datagram, DatagramDispatcher};
+    let player_slot = NEXT_GAMEPAD_SLOT.fetch_add(1, std::sync::atomic::Ordering::Relaxed) % 4;
+    let (gp_tx, gp_rx) = tokio_mpsc::unbounded_channel();
+    let _gp_handle = gamepad::spawn(gp_rx).ok();
     let mut dispatcher = DatagramDispatcher::spawn(conn);
     let mut injector: Option<Box<dyn qubox_pen::PenInjector + Send>> = None;
     loop {
+        while let Ok(gp_bytes) = dispatcher.gamepad_rx().try_recv() {
+            if let Some(mut state) = qubox_proto::WireGamepadState::from_bytes(&gp_bytes) {
+                if state.gamepad_id == 0 {
+                    state.gamepad_id = player_slot;
+                }
+                let _ = gp_tx.send(RemoteInputEvent::Gamepad { state });
+            }
+        }
         if let Some(name) = device_name.as_ref() {
             let bytes = match dispatcher.pen_rx().recv().await {
                 Some(b) => b,
@@ -1688,12 +1702,9 @@ async fn run_datagram_dispatcher_loop(
         } else {
             // No pen configured: drain the dispatcher's raw channels so
             // its internal `read_datagram` loop keeps making progress.
-            // We don't need to forward anywhere — we just keep
-            // the dispatcher from blocking on its senders.
             while dispatcher.pen_rx().try_recv().is_ok() {}
-            while dispatcher.gamepad_rx().try_recv().is_ok() {}
             while dispatcher.media_chunk_rx().try_recv().is_ok() {}
-            tokio::time::sleep(Duration::from_millis(100)).await;
+            tokio::time::sleep(Duration::from_millis(8)).await;
         }
     }
 }
@@ -2796,6 +2807,10 @@ async fn handle_remote_input_events(
         return;
     }
 
+    let player_slot = NEXT_GAMEPAD_SLOT.fetch_add(1, std::sync::atomic::Ordering::Relaxed) % 4;
+    let (gp_tx, gp_rx) = tokio_mpsc::unbounded_channel();
+    let _gp_handle = gamepad::spawn(gp_rx).ok();
+
     let input_tx = match spawn_remote_input_worker(session_id, video_config) {
         Ok(input_tx) => Some(input_tx),
         Err(error) => {
@@ -2811,6 +2826,31 @@ async fn handle_remote_input_events(
     loop {
         match input_receiver.read_input_event().await {
             Ok(Some(event)) => {
+                match event {
+                    RemoteInputEvent::Gamepad { mut state } => {
+                        if permissions::allow_gamepad(&permissions) {
+                            if state.gamepad_id == 0 {
+                                state.gamepad_id = player_slot;
+                            }
+                            let _ = gp_tx.send(RemoteInputEvent::Gamepad { state });
+                        }
+                        continue;
+                    }
+                    RemoteInputEvent::Keyboard { .. } => {
+                        if !permissions::allow_keyboard(&permissions) {
+                            continue;
+                        }
+                    }
+                    RemoteInputEvent::MouseMove { .. }
+                    | RemoteInputEvent::RelativeMouseMove { .. }
+                    | RemoteInputEvent::MouseButton { .. }
+                    | RemoteInputEvent::MouseWheel { .. } => {
+                        if !permissions::allow_mouse(&permissions) {
+                            continue;
+                        }
+                    }
+                    _ => {}
+                }
                 if let Some(input_tx) = input_tx.as_ref() {
                     if input_tx.send(event).is_err() {
                         tracing::warn!(

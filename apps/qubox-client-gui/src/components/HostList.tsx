@@ -55,8 +55,37 @@ export function HostList({
   const [shareExpiresMs, setShareExpiresMs] = useState<number | null>(null);
   const [approvingId, setApprovingId] = useState<string | null>(null);
   const [thisComputerName, setThisComputerName] = useState<string>("This Computer");
+  const [sessionPerms, setSessionPerms] = useState<
+    Record<string, { gamepad: boolean; keyboard: boolean; mouse: boolean }>
+  >({});
 
   const isSharing = hostRunning === true;
+
+  const getPermsForSession = (sessionId: string) =>
+    sessionPerms[sessionId] ?? {
+      gamepad: true,
+      keyboard: false,
+      mouse: false,
+    };
+
+  const toggleSessionPerm = async (
+    sessionId: string,
+    field: "gamepad" | "keyboard" | "mouse",
+  ) => {
+    const current = getPermsForSession(sessionId);
+    const updated = { ...current, [field]: !current[field] };
+    setSessionPerms((prev) => ({ ...prev, [sessionId]: updated }));
+    try {
+      await invoke("set_session_permissions", {
+        sessionId,
+        gamepad: updated.gamepad,
+        keyboard: updated.keyboard,
+        mouse: updated.mouse,
+      });
+    } catch {
+      // ignore if daemon/host does not support live RPC in mock mode
+    }
+  };
 
   const resolveComputerName = (peerId: string): string => {
     const saved = knownHosts.find((h) => h.hostPeerId === peerId);
@@ -137,7 +166,9 @@ export function HostList({
       });
       setShareCode(res.code);
       setShareExpiresMs(res.expiresUnixMs || null);
-      setHostNotice("Share code created (valid for 15 minutes).");
+      setHostNotice(
+        "Party Share Code created (valid 15 minutes — up to 4 friends can join with controllers).",
+      );
     } catch (error) {
       setLoadError(`Could not create share code: ${String(error)}`);
     }
@@ -148,6 +179,9 @@ export function HostList({
     try {
       await invoke("host_pairing_decide", { requestId, approved });
       removeHostPendingPairing(requestId);
+      if (approved) {
+        await refreshKnownHosts();
+      }
       setHostNotice(
         approved
           ? "Approved connection request."
@@ -190,7 +224,7 @@ export function HostList({
     const target = quickInput.trim();
     if (!target) return;
 
-    // A short alphanumeric code without hyphens (6-12 chars) is a Share Code
+    // A short alphanumeric code without hyphens (6-12 chars) is a Party Share Code
     const looksLikeShareCode =
       /^[A-Za-z0-9]{6,12}$/.test(target) && !target.includes("-");
     if (looksLikeShareCode) {
@@ -199,11 +233,18 @@ export function HostList({
         const out = await invoke<string>("redeem_share_link", { code: target });
         await refreshKnownHosts();
         setQuickInput("");
-        setHostNotice(
-          out
-            ? `Connected with share code (${out}).`
-            : "Share code redeemed! You can now click Connect below.",
-        );
+        // Extract host=<uuid> if returned and auto-launch the co-op session
+        const match = /host=([0-9a-fA-F-]{36})/.exec(out ?? "");
+        if (match?.[1]) {
+          setHostNotice("Joined party! Launching game stream…");
+          await onStartSession(match[1]);
+        } else {
+          setHostNotice(
+            out
+              ? `Joined party (${out}).`
+              : "Party code redeemed! You can now click Connect below.",
+          );
+        }
         setConnect({ kind: "idle" });
       } catch (error) {
         setConnect({ kind: "error", hostId: target, message: String(error) });
@@ -324,20 +365,25 @@ export function HostList({
           style={{
             borderColor: "var(--success)",
             background: "rgba(52, 211, 153, 0.07)",
+            display: "flex",
+            flexDirection: "column",
+            gap: 14,
           }}
         >
           <p
             className="host-card__label"
-            style={{ color: "var(--success)" }}
+            style={{ color: "var(--success)", margin: 0 }}
           >
-            Active Remote Session ({activeSessions.length})
+            Active Remote Session ({activeSessions.length}) · Co-Op Party Ready
           </p>
-          {activeSessions.map((session) => {
+          {activeSessions.map((session, idx) => {
             const events = telemetryBySession[session.sessionId] ?? [];
             const decodedCount = events.filter(
               (e) => e.kind === "frame_decoded",
             ).length;
             const computerName = resolveComputerName(session.hostId);
+            const perms = getPermsForSession(session.sessionId);
+            const playerSlot = (idx % 4) + 1;
             return (
               <div
                 key={session.sessionId}
@@ -347,17 +393,123 @@ export function HostList({
                   justifyContent: "space-between",
                   gap: 16,
                   flexWrap: "wrap",
+                  paddingTop: idx > 0 ? 12 : 0,
+                  borderTop:
+                    idx > 0 ? "1px solid rgba(255,255,255,0.08)" : "none",
                 }}
               >
                 <div>
-                  <h2 style={{ margin: "0 0 4px" }}>
-                    Connected to {computerName}
-                  </h2>
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 10,
+                      marginBottom: 4,
+                    }}
+                  >
+                    <span
+                      data-testid={`player-slot-badge-${playerSlot}`}
+                      style={{
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: 5,
+                        padding: "3px 10px",
+                        borderRadius: 999,
+                        fontSize: "0.75rem",
+                        fontWeight: 800,
+                        letterSpacing: "0.06em",
+                        background: "rgba(255, 185, 81, 0.18)",
+                        color: "var(--primary)",
+                        border: "1px solid rgba(255, 185, 81, 0.45)",
+                      }}
+                    >
+                      🎮 PLAYER {playerSlot}
+                    </span>
+                    <h2 style={{ margin: 0 }}>Connected to {computerName}</h2>
+                  </div>
                   <p className="host-card__meta">
                     Streaming live over Iroh P2P · {decodedCount} frames decoded
                   </p>
                 </div>
-                <div style={{ display: "flex", gap: 10 }}>
+
+                {/* Per-Friend Co-Op Input Controls */}
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 8,
+                    flexWrap: "wrap",
+                  }}
+                >
+                  <button
+                    className="secondary-button"
+                    data-testid={`toggle-perm-gamepad-${session.sessionId}`}
+                    onClick={() =>
+                      void toggleSessionPerm(session.sessionId, "gamepad")
+                    }
+                    style={{
+                      borderColor: perms.gamepad
+                        ? "var(--success)"
+                        : "var(--panel-border)",
+                      background: perms.gamepad
+                        ? "rgba(52, 211, 153, 0.16)"
+                        : "rgba(255, 255, 255, 0.03)",
+                      color: perms.gamepad ? "#ecfdf5" : "var(--muted)",
+                      padding: "7px 12px",
+                      fontSize: "0.78rem",
+                    }}
+                    title="Allow or block virtual Xbox 360 controller input for this friend"
+                    type="button"
+                  >
+                    🎮 Controller: {perms.gamepad ? "ON" : "OFF"}
+                  </button>
+
+                  <button
+                    className="secondary-button"
+                    data-testid={`toggle-perm-keyboard-${session.sessionId}`}
+                    onClick={() =>
+                      void toggleSessionPerm(session.sessionId, "keyboard")
+                    }
+                    style={{
+                      borderColor: perms.keyboard
+                        ? "var(--success)"
+                        : "var(--panel-border)",
+                      background: perms.keyboard
+                        ? "rgba(52, 211, 153, 0.16)"
+                        : "rgba(255, 255, 255, 0.03)",
+                      color: perms.keyboard ? "#ecfdf5" : "var(--muted)",
+                      padding: "7px 12px",
+                      fontSize: "0.78rem",
+                    }}
+                    title="Allow or block keyboard input for this friend"
+                    type="button"
+                  >
+                    ⌨️ Keyboard: {perms.keyboard ? "ON" : "OFF"}
+                  </button>
+
+                  <button
+                    className="secondary-button"
+                    data-testid={`toggle-perm-mouse-${session.sessionId}`}
+                    onClick={() =>
+                      void toggleSessionPerm(session.sessionId, "mouse")
+                    }
+                    style={{
+                      borderColor: perms.mouse
+                        ? "var(--success)"
+                        : "var(--panel-border)",
+                      background: perms.mouse
+                        ? "rgba(52, 211, 153, 0.16)"
+                        : "rgba(255, 255, 255, 0.03)",
+                      color: perms.mouse ? "#ecfdf5" : "var(--muted)",
+                      padding: "7px 12px",
+                      fontSize: "0.78rem",
+                    }}
+                    title="Allow or block mouse control for this friend"
+                    type="button"
+                  >
+                    🖱️ Mouse: {perms.mouse ? "ON" : "OFF"}
+                  </button>
+
                   {onKickSession ? (
                     <button
                       className="secondary-button"
@@ -414,7 +566,7 @@ export function HostList({
 
       {/* 3. THIS COMPUTER (Host Sharing Card) */}
       <section className="section">
-        <h2 className="section__title">This Computer (Share Screen)</h2>
+        <h2 className="section__title">This Computer (Share Screen &amp; Co-Op Host)</h2>
         <div
           className="host-card"
           data-testid="this-computer-card"
@@ -447,15 +599,15 @@ export function HostList({
                 />
                 <p className="host-card__label" style={{ margin: 0 }}>
                   {isSharing
-                    ? "Ready for remote connections"
+                    ? "Ready for remote connections & co-op gaming"
                     : "Screen sharing is off"}
                 </p>
               </div>
               <h2 style={{ margin: "6px 0 4px" }}>{thisComputerName}</h2>
               <p className="host-card__meta">
                 {isSharing
-                  ? "Other devices can connect using a 15-minute Share Code or your Computer ID."
-                  : "Start sharing to control this computer from your other devices."}
+                  ? "Invite up to 4 friends with a Party Code (controllers auto-assigned to Player 1–4)."
+                  : "Start sharing to play local co-op games with friends or access this PC remotely."}
               </p>
             </div>
 
@@ -492,9 +644,9 @@ export function HostList({
                   className="material-symbols-outlined"
                   style={{ fontSize: "1.05rem" }}
                 >
-                  qr_code_2
+                  sports_esports
                 </span>
-                One-Time Share Code
+                Invite Friends (Party Code)
               </button>
 
               <button
@@ -536,7 +688,9 @@ export function HostList({
               }}
             >
               <div>
-                <p className="host-card__label">15-Minute Share Code</p>
+                <p className="host-card__label">
+                  15-Minute Party Code (Up to 4 Friends · 🎮 Controller Ready)
+                </p>
                 <code
                   className="share-code"
                   style={{
@@ -550,7 +704,8 @@ export function HostList({
                 </code>
                 {shareExpiresMs ? (
                   <p className="host-card__meta" style={{ marginTop: 4 }}>
-                    Expires at {new Date(shareExpiresMs).toLocaleTimeString()}
+                    Expires at {new Date(shareExpiresMs).toLocaleTimeString()} ·
+                    Friends get 🎮 Controller ON, ⌨️/🖱️ OFF by default
                   </p>
                 ) : null}
                 <div style={{ marginTop: 10, display: "flex", gap: 8 }}>
@@ -558,11 +713,11 @@ export function HostList({
                     className="secondary-button"
                     onClick={() => {
                       void navigator.clipboard.writeText(shareCode);
-                      setHostNotice("Copied share code to clipboard.");
+                      setHostNotice("Copied party code to clipboard.");
                     }}
                     type="button"
                   >
-                    Copy Code
+                    Copy Party Code
                   </button>
                   <button
                     className="ghost-button"

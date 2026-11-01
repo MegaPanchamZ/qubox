@@ -69,6 +69,35 @@ impl WireGamepadState {
     pub const BTN_L3: u8 = 1 << 0;
     pub const BTN_R3: u8 = 1 << 1;
     pub const BTN_GUIDE: u8 = 1 << 2;
+
+    /// Decode a `WireGamepadState` from either a raw 16-byte slice or a
+    /// 19-byte QUIC datagram prefixed with `[0x52, 0x42, 0x47]`.
+    pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
+        let data = if bytes.len() >= 3 + Self::SIZE
+            && bytes[0] == 0x52
+            && bytes[1] == 0x42
+            && bytes[2] == GAMEPAD_DATAGRAM_DISCRIMINATOR
+        {
+            &bytes[3..3 + Self::SIZE]
+        } else if bytes.len() >= Self::SIZE {
+            &bytes[..Self::SIZE]
+        } else {
+            return None;
+        };
+        Some(Self {
+            gamepad_id: data[0],
+            flags: data[1],
+            buttons_lo: data[2],
+            buttons_hi: data[3],
+            lt: data[4],
+            rt: data[5],
+            lx: i16::from_le_bytes([data[6], data[7]]),
+            ly: i16::from_le_bytes([data[8], data[9]]),
+            rx: i16::from_le_bytes([data[10], data[11]]),
+            ry: i16::from_le_bytes([data[12], data[13]]),
+            _pad: [data[14], data[15]],
+        })
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
@@ -282,7 +311,7 @@ pub struct PairingGrant {
     pub client_peer_id: Uuid,
 }
 
-/// Per-session capability mask (input / clipboard / mic).
+/// Per-session capability mask (input / clipboard / mic + granular co-op gaming controls).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SessionPermissions {
     #[serde(default = "default_true")]
@@ -291,6 +320,27 @@ pub struct SessionPermissions {
     pub clipboard: bool,
     #[serde(default = "default_true")]
     pub mic: bool,
+    #[serde(default = "default_true")]
+    pub gamepad: bool,
+    #[serde(default = "default_true")]
+    pub keyboard: bool,
+    #[serde(default = "default_true")]
+    pub mouse: bool,
+}
+
+impl SessionPermissions {
+    /// Safe co-op gaming guest permissions: controller and voice enabled,
+    /// keyboard, mouse, and clipboard disabled by default.
+    pub fn coop_guest() -> Self {
+        Self {
+            input: true,
+            clipboard: false,
+            mic: true,
+            gamepad: true,
+            keyboard: false,
+            mouse: false,
+        }
+    }
 }
 
 impl Default for SessionPermissions {
@@ -299,6 +349,9 @@ impl Default for SessionPermissions {
             input: true,
             clipboard: true,
             mic: true,
+            gamepad: true,
+            keyboard: true,
+            mouse: true,
         }
     }
 }

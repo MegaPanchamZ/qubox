@@ -125,22 +125,30 @@ mod linux {
     #[allow(dead_code)]
     pub const TRIGGER_MAX: i32 = 255;
 
-    /// Open /dev/uinput, register the full Xbox360 event surface,
-    /// and return the created `Device`. Returns a clear error if
-    /// /dev/uinput is absent (no panic).
-    pub fn open() -> Result<Device> {
+    /// Open /dev/uinput for a specific player slot (0..=3), register the full
+    /// Xbox360 event surface, and return the created `Device`.
+    pub fn open_slot(slot: u8) -> Result<Device> {
+        let name = if slot == 0 {
+            "qubox virtual gamepad".to_string()
+        } else {
+            format!("qubox virtual gamepad {}", slot + 1)
+        };
         let dev = uinput::open("/dev/uinput")
             .map_err(|e| anyhow!(
                 "cannot open /dev/uinput: {e}; install the uinput module \
                  or check udev rules per ADR-004 \
                  research/decisions/ADR-004-virtual-gamepad-uinput-vigembus.md"
             ))?
-            .name("qubox virtual gamepad")
+            .name(&name)
             .map_err(|e| anyhow!("failed to set uinput device name: {e}"))?;
 
         // Chain all event registration + axis range setup, then create.
         let dev = register_events(dev)?;
         dev.create().map_err(|e| anyhow!("failed to create uinput device: {e}"))
+    }
+
+    pub fn open() -> Result<Device> {
+        open_slot(0)
     }
 
     fn register_events(
@@ -244,19 +252,21 @@ mod linux {
 
 #[cfg(target_os = "linux")]
 fn run_loop_linux(rx: &mut UnboundedReceiver<RemoteInputEvent>) -> Result<()> {
-    tracing::info!("P0-6 gamepad backend thread started (uinput)");
-    let mut gamepad: Option<uinput::Device> = None;
+    tracing::info!("P0-6 gamepad backend thread started (4-player uinput slots)");
+    let mut gamepads: [Option<uinput::Device>; 4] = [None, None, None, None];
 
     while let Some(event) = rx.blocking_recv() {
         if let RemoteInputEvent::Gamepad { state } = event {
-            if gamepad.is_none() {
-                match linux::open() {
+            let slot = (state.gamepad_id as usize) % 4;
+            if gamepads[slot].is_none() {
+                match linux::open_slot(slot as u8) {
                     Ok(dev) => {
-                        tracing::info!("P0-6 uinput gamepad device opened");
-                        gamepad = Some(dev);
+                        tracing::info!(slot = slot + 1, "P0-6 uinput gamepad device opened");
+                        gamepads[slot] = Some(dev);
                     }
                     Err(e) => {
                         tracing::warn!(
+                            slot = slot + 1,
                             "P0-6 uinput open failed: {e:#}; dropping gamepad events \
                              (will retry on next event)"
                         );
@@ -264,9 +274,9 @@ fn run_loop_linux(rx: &mut UnboundedReceiver<RemoteInputEvent>) -> Result<()> {
                     }
                 }
             }
-            if let Some(ref mut dev) = gamepad {
+            if let Some(ref mut dev) = gamepads[slot] {
                 if let Err(e) = linux::apply(dev, &state) {
-                    tracing::warn!("P0-6 uinput write failed: {e:#}");
+                    tracing::warn!(slot = slot + 1, "P0-6 uinput write failed: {e:#}");
                 }
             }
         }

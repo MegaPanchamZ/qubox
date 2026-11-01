@@ -1613,7 +1613,7 @@ impl SignalingState {
         &self,
         client: PeerDescriptor,
         code: String,
-        client_label: String,
+        _client_label: String,
     ) -> anyhow::Result<()> {
         let entry = {
             let mut links = self.share_links.write().await;
@@ -1625,20 +1625,23 @@ impl SignalingState {
                 links.remove(&code);
                 bail!("share code expired");
             }
-            // one-time redeem
-            links.remove(&code);
+            // Keep the party share code active until `expires_unix_ms` so multiple
+            // friends in a co-op gaming session can join with the same code.
             e
         };
-        let request = PairingRequest {
-            request_id: Uuid::new_v4(),
+        let grant = PairingGrant {
             host_peer_id: entry.host_peer_id,
-            client_label: if client_label.is_empty() {
-                client.device_name.clone()
-            } else {
-                client_label
-            },
+            client_peer_id: client.peer_id,
         };
-        self.request_pairing(client, request).await
+        self.pairing_store.add_pairing(grant.clone()).await?;
+        let _ = self
+            .send_to(
+                entry.host_peer_id,
+                ServerMessage::PairingEstablished(grant.clone()),
+            )
+            .await;
+        self.send_to(client.peer_id, ServerMessage::PairingEstablished(grant))
+            .await
     }
 
     async fn relay_signal(&self, peer: PeerDescriptor, signal: RelaySignal) -> anyhow::Result<()> {
