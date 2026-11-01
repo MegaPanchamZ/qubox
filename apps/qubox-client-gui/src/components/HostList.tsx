@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useApp } from "./AppContext";
-import { shareCodeSvg } from "../lib/qr";
 
 type HostListProps = {
   onStartSession: (hostId: string) => Promise<void>;
@@ -23,6 +22,31 @@ type ShareLinkPayload = {
   expiresUnixMs: number;
 };
 
+const iconBtnStyle = (active = false, danger = false): React.CSSProperties => ({
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+  width: 36,
+  height: 36,
+  borderRadius: 10,
+  border: `1px solid ${
+    danger
+      ? "rgba(255, 180, 171, 0.3)"
+      : active
+        ? "var(--success)"
+        : "var(--panel-border)"
+  }`,
+  background: danger
+    ? "rgba(255, 180, 171, 0.1)"
+    : active
+      ? "rgba(52, 211, 153, 0.16)"
+      : "rgba(255, 255, 255, 0.03)",
+  color: danger ? "var(--danger)" : active ? "var(--success)" : "var(--muted)",
+  cursor: "pointer",
+  padding: 0,
+  transition: "all 0.15s ease",
+});
+
 export function HostList({
   onStartSession,
   onPairAndStartSession,
@@ -41,7 +65,6 @@ export function HostList({
     hostPendingPairings,
     removeHostPendingPairing,
     activeSessions,
-    telemetryBySession,
   } = useApp();
 
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -52,7 +75,6 @@ export function HostList({
   const [hostBusy, setHostBusy] = useState(false);
   const [hostNotice, setHostNotice] = useState<string | null>(null);
   const [shareCode, setShareCode] = useState<string | null>(null);
-  const [shareExpiresMs, setShareExpiresMs] = useState<number | null>(null);
   const [approvingId, setApprovingId] = useState<string | null>(null);
   const [thisComputerName, setThisComputerName] = useState<string>("This Computer");
   const [sessionPerms, setSessionPerms] = useState<
@@ -145,10 +167,8 @@ export function HostList({
     try {
       if (isSharing) {
         await invoke("stop_host_agent");
-        setHostNotice("Screen sharing stopped.");
       } else {
         await invoke("start_host_agent", {});
-        setHostNotice("This computer is now ready for remote connections.");
       }
       await refreshHostStatus();
     } catch (error) {
@@ -165,12 +185,8 @@ export function HostList({
         ttlSecs: 900,
       });
       setShareCode(res.code);
-      setShareExpiresMs(res.expiresUnixMs || null);
-      setHostNotice(
-        "Party Share Code created (valid 15 minutes — up to 4 friends can join with controllers).",
-      );
     } catch (error) {
-      setLoadError(`Could not create share code: ${String(error)}`);
+      setLoadError(`Could not create code: ${String(error)}`);
     }
   };
 
@@ -182,11 +198,6 @@ export function HostList({
       if (approved) {
         await refreshKnownHosts();
       }
-      setHostNotice(
-        approved
-          ? "Approved connection request."
-          : "Declined connection request.",
-      );
     } catch (error) {
       setLoadError(`Approval failed: ${String(error)}`);
     } finally {
@@ -224,7 +235,6 @@ export function HostList({
     const target = quickInput.trim();
     if (!target) return;
 
-    // A short alphanumeric code without hyphens (6-12 chars) is a Party Share Code
     const looksLikeShareCode =
       /^[A-Za-z0-9]{6,12}$/.test(target) && !target.includes("-");
     if (looksLikeShareCode) {
@@ -233,17 +243,9 @@ export function HostList({
         const out = await invoke<string>("redeem_share_link", { code: target });
         await refreshKnownHosts();
         setQuickInput("");
-        // Extract host=<uuid> if returned and auto-launch the co-op session
         const match = /host=([0-9a-fA-F-]{36})/.exec(out ?? "");
         if (match?.[1]) {
-          setHostNotice("Joined party! Launching game stream…");
           await onStartSession(match[1]);
-        } else {
-          setHostNotice(
-            out
-              ? `Joined party (${out}).`
-              : "Party code redeemed! You can now click Connect below.",
-          );
         }
         setConnect({ kind: "idle" });
       } catch (error) {
@@ -252,7 +254,6 @@ export function HostList({
       return;
     }
 
-    // Otherwise check if already in knownHosts; if not, Pair & Connect
     const alreadyPaired = knownHosts.some((h) => h.hostPeerId === target);
     await handleConnect(target, !alreadyPaired);
   };
@@ -268,49 +269,46 @@ export function HostList({
     connect.kind !== "error" &&
     connect.hostId === hostId;
 
-  const qrSvg = shareCode ? shareCodeSvg(shareCode) : null;
-
   return (
-    <div className="view" data-testid="computers-view">
-      <header className="view__header">
-        <div>
-          <p className="eyebrow">Qubox Remote Desktop</p>
-          <h1>Computers</h1>
-          <p className="subtitle">
-            Share this screen or connect to another computer anywhere over Iroh
-            P2P.
-          </p>
-        </div>
+    <div className="view" data-testid="computers-view" style={{ gap: 20 }}>
+      <header
+        className="view__header"
+        style={{ paddingBottom: 16, alignItems: "center" }}
+      >
+        <h1 style={{ fontSize: "1.85rem" }}>Computers</h1>
         <div className="view__actions">
           <button
-            className="secondary-button"
             data-testid="discover-button"
             disabled={discovering}
             onClick={() => void discover()}
+            style={iconBtnStyle(false)}
+            title="Refresh computers"
             type="button"
           >
             <span
               className="material-symbols-outlined"
-              style={{ fontSize: "1.1rem" }}
+              style={{ fontSize: "1.15rem" }}
             >
               {discovering ? "sync" : "refresh"}
             </span>
-            {discovering ? "Scanning…" : "Scan for Computers"}
           </button>
         </div>
       </header>
 
-      {/* 1. Incoming Pairing Requests Banner */}
+      {/* 1. Incoming Pairing Requests (Compact Single-Line Rows) */}
       {hostPendingPairings.length > 0 ? (
         <section
           className="host-card"
           data-testid="incoming-pairing-banner"
           style={{
             borderColor: "var(--primary)",
-            background: "rgba(255, 185, 81, 0.08)",
+            background: "rgba(255, 185, 81, 0.06)",
+            padding: "10px 16px",
+            display: "flex",
+            flexDirection: "column",
+            gap: 8,
           }}
         >
-          <p className="host-card__label">Incoming Connection Request</p>
           {hostPendingPairings.map((r) => (
             <div
               key={r.request_id}
@@ -318,38 +316,46 @@ export function HostList({
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "space-between",
-                gap: 16,
-                flexWrap: "wrap",
+                gap: 12,
               }}
             >
-              <div>
-                <h2 style={{ margin: "0 0 4px" }}>
-                  {r.client_name || r.client_label || "Another Computer"} wants
-                  to connect
-                </h2>
-                <p className="host-card__meta">
-                  Approve to allow{" "}
-                  {r.client_name || r.client_label || "this computer"} to view
-                  and control your screen.
-                </p>
+              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                <strong style={{ fontSize: "0.95rem", color: "#fff" }}>
+                  {r.client_name || r.client_label || "Another Computer"}
+                </strong>
+                <span style={{ color: "var(--muted)", fontSize: "0.85rem" }}>
+                  Incoming request
+                </span>
               </div>
-              <div style={{ display: "flex", gap: 10 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                 <button
-                  className="secondary-button"
                   disabled={approvingId === r.request_id}
                   onClick={() => void decideIncomingPairing(r.request_id, false)}
+                  style={iconBtnStyle(false, true)}
+                  title="Decline"
                   type="button"
                 >
-                  Decline
+                  <span
+                    className="material-symbols-outlined"
+                    style={{ fontSize: "1.1rem" }}
+                  >
+                    close
+                  </span>
                 </button>
                 <button
-                  className="connect-button"
                   data-testid={`approve-pairing-${r.request_id}`}
                   disabled={approvingId === r.request_id}
                   onClick={() => void decideIncomingPairing(r.request_id, true)}
+                  style={iconBtnStyle(true, false)}
+                  title="Approve"
                   type="button"
                 >
-                  Approve &amp; Pair
+                  <span
+                    className="material-symbols-outlined"
+                    style={{ fontSize: "1.1rem" }}
+                  >
+                    check
+                  </span>
                 </button>
               </div>
             </div>
@@ -357,30 +363,21 @@ export function HostList({
         </section>
       ) : null}
 
-      {/* 2. Active Sessions Banner */}
+      {/* 2. Active Sessions (Compact Icon-Driven Rows) */}
       {activeSessions.length > 0 ? (
         <section
           className="host-card"
           data-testid="active-sessions-banner"
           style={{
-            borderColor: "var(--success)",
-            background: "rgba(52, 211, 153, 0.07)",
+            borderColor: "rgba(52, 211, 153, 0.35)",
+            background: "rgba(52, 211, 153, 0.05)",
+            padding: "10px 16px",
             display: "flex",
             flexDirection: "column",
-            gap: 14,
+            gap: 8,
           }}
         >
-          <p
-            className="host-card__label"
-            style={{ color: "var(--success)", margin: 0 }}
-          >
-            Active Remote Session ({activeSessions.length}) · Co-Op Party Ready
-          </p>
           {activeSessions.map((session, idx) => {
-            const events = telemetryBySession[session.sessionId] ?? [];
-            const decodedCount = events.filter(
-              (e) => e.kind === "frame_decoded",
-            ).length;
             const computerName = resolveComputerName(session.hostId);
             const perms = getPermsForSession(session.sessionId);
             const playerSlot = (idx % 4) + 1;
@@ -391,147 +388,119 @@ export function HostList({
                   display: "flex",
                   alignItems: "center",
                   justifyContent: "space-between",
-                  gap: 16,
-                  flexWrap: "wrap",
-                  paddingTop: idx > 0 ? 12 : 0,
+                  gap: 12,
+                  paddingTop: idx > 0 ? 8 : 0,
                   borderTop:
-                    idx > 0 ? "1px solid rgba(255,255,255,0.08)" : "none",
+                    idx > 0 ? "1px solid rgba(255,255,255,0.06)" : "none",
                 }}
               >
-                <div>
-                  <div
+                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                  <span
+                    data-testid={`player-slot-badge-${playerSlot}`}
                     style={{
-                      display: "flex",
-                      alignItems: "center",
-                      gap: 10,
-                      marginBottom: 4,
+                      padding: "2px 8px",
+                      borderRadius: 6,
+                      fontSize: "0.72rem",
+                      fontWeight: 800,
+                      background: "rgba(255, 185, 81, 0.16)",
+                      color: "var(--primary)",
                     }}
                   >
-                    <span
-                      data-testid={`player-slot-badge-${playerSlot}`}
-                      style={{
-                        display: "inline-flex",
-                        alignItems: "center",
-                        gap: 5,
-                        padding: "3px 10px",
-                        borderRadius: 999,
-                        fontSize: "0.75rem",
-                        fontWeight: 800,
-                        letterSpacing: "0.06em",
-                        background: "rgba(255, 185, 81, 0.18)",
-                        color: "var(--primary)",
-                        border: "1px solid rgba(255, 185, 81, 0.45)",
-                      }}
-                    >
-                      PLAYER {playerSlot}
-                    </span>
-                    <h2 style={{ margin: 0 }}>Connected to {computerName}</h2>
-                  </div>
-                  <p className="host-card__meta">
-                    Streaming live over Iroh P2P · {decodedCount} frames decoded
-                  </p>
+                    P{playerSlot}
+                  </span>
+                  <strong style={{ fontSize: "0.95rem", color: "#fff" }}>
+                    {computerName}
+                  </strong>
+                  <span
+                    style={{
+                      color: "var(--muted)",
+                      fontSize: "0.82rem",
+                    }}
+                  >
+                    Connected
+                  </span>
                 </div>
 
-                {/* Per-Friend Co-Op Input Controls */}
-                <div
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 8,
-                    flexWrap: "wrap",
-                  }}
-                >
+                {/* Compact Icon Input & Disconnect Controls */}
+                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                   <button
-                    className="secondary-button"
+                    aria-label="Controller"
                     data-testid={`toggle-perm-gamepad-${session.sessionId}`}
                     onClick={() =>
                       void toggleSessionPerm(session.sessionId, "gamepad")
                     }
-                    style={{
-                      borderColor: perms.gamepad
-                        ? "var(--success)"
-                        : "var(--panel-border)",
-                      background: perms.gamepad
-                        ? "rgba(52, 211, 153, 0.16)"
-                        : "rgba(255, 255, 255, 0.03)",
-                      color: perms.gamepad ? "#ecfdf5" : "var(--muted)",
-                      padding: "7px 12px",
-                      fontSize: "0.78rem",
-                    }}
-                    title="Allow or block virtual Xbox 360 controller input for this friend"
+                    style={iconBtnStyle(perms.gamepad)}
+                    title={`Controller: ${perms.gamepad ? "On" : "Off"}`}
                     type="button"
                   >
-                    Controller: {perms.gamepad ? "ON" : "OFF"}
+                    <span
+                      className="material-symbols-outlined"
+                      style={{ fontSize: "1.1rem" }}
+                    >
+                      sports_esports
+                    </span>
                   </button>
 
                   <button
-                    className="secondary-button"
+                    aria-label="Keyboard"
                     data-testid={`toggle-perm-keyboard-${session.sessionId}`}
                     onClick={() =>
                       void toggleSessionPerm(session.sessionId, "keyboard")
                     }
-                    style={{
-                      borderColor: perms.keyboard
-                        ? "var(--success)"
-                        : "var(--panel-border)",
-                      background: perms.keyboard
-                        ? "rgba(52, 211, 153, 0.16)"
-                        : "rgba(255, 255, 255, 0.03)",
-                      color: perms.keyboard ? "#ecfdf5" : "var(--muted)",
-                      padding: "7px 12px",
-                      fontSize: "0.78rem",
-                    }}
-                    title="Allow or block keyboard input for this friend"
+                    style={iconBtnStyle(perms.keyboard)}
+                    title={`Keyboard: ${perms.keyboard ? "On" : "Off"}`}
                     type="button"
                   >
-                    Keyboard: {perms.keyboard ? "ON" : "OFF"}
+                    <span
+                      className="material-symbols-outlined"
+                      style={{ fontSize: "1.1rem" }}
+                    >
+                      keyboard
+                    </span>
                   </button>
 
                   <button
-                    className="secondary-button"
+                    aria-label="Mouse"
                     data-testid={`toggle-perm-mouse-${session.sessionId}`}
                     onClick={() =>
                       void toggleSessionPerm(session.sessionId, "mouse")
                     }
-                    style={{
-                      borderColor: perms.mouse
-                        ? "var(--success)"
-                        : "var(--panel-border)",
-                      background: perms.mouse
-                        ? "rgba(52, 211, 153, 0.16)"
-                        : "rgba(255, 255, 255, 0.03)",
-                      color: perms.mouse ? "#ecfdf5" : "var(--muted)",
-                      padding: "7px 12px",
-                      fontSize: "0.78rem",
-                    }}
-                    title="Allow or block mouse control for this friend"
+                    style={iconBtnStyle(perms.mouse)}
+                    title={`Mouse: ${perms.mouse ? "On" : "Off"}`}
                     type="button"
                   >
-                    Mouse: {perms.mouse ? "ON" : "OFF"}
+                    <span
+                      className="material-symbols-outlined"
+                      style={{ fontSize: "1.1rem" }}
+                    >
+                      mouse
+                    </span>
                   </button>
 
-                  {onKickSession ? (
+                  {(onCancelSession || onKickSession) ? (
                     <button
-                      className="secondary-button"
-                      onClick={() =>
-                        void onKickSession(
-                          session.sessionId,
-                          "disconnected by user",
-                        )
-                      }
-                      type="button"
-                    >
-                      Kick Viewer
-                    </button>
-                  ) : null}
-                  {onCancelSession ? (
-                    <button
-                      className="danger-button"
+                      aria-label="Disconnect"
                       data-testid="disconnect-session-button"
-                      onClick={() => void onCancelSession(session.sessionId)}
+                      onClick={() => {
+                        if (onCancelSession) {
+                          void onCancelSession(session.sessionId);
+                        } else if (onKickSession) {
+                          void onKickSession(
+                            session.sessionId,
+                            "disconnected by user",
+                          );
+                        }
+                      }}
+                      style={iconBtnStyle(false, true)}
+                      title="Disconnect"
                       type="button"
                     >
-                      Disconnect
+                      <span
+                        className="material-symbols-outlined"
+                        style={{ fontSize: "1.1rem" }}
+                      >
+                        link_off
+                      </span>
                     </button>
                   ) : null}
                 </div>
@@ -548,13 +517,12 @@ export function HostList({
       {hostNotice ? <p className="state state--info">{hostNotice}</p> : null}
       {connect.kind === "waiting_for_approval" ? (
         <p className="state state--info" data-testid="pair-pending">
-          Waiting for <strong>{resolveComputerName(connect.hostId)}</strong> to
-          click <strong>Approve</strong>…
+          Waiting for <strong>{resolveComputerName(connect.hostId)}</strong>…
           <button
             className="secondary-button"
             onClick={() => cancelPendingPair(connect.hostId)}
-            type="button"
             style={{ marginLeft: 8 }}
+            type="button"
           >
             Cancel
           </button>
@@ -564,307 +532,300 @@ export function HostList({
         <p className="state state--error">Connection failed: {connect.message}</p>
       ) : null}
 
-      {/* 3. THIS COMPUTER (Host Sharing Card) */}
-      <section className="section">
-        <h2 className="section__title">This Computer (Share Screen &amp; Co-Op Host)</h2>
+      {/* 3. THIS COMPUTER (Compact Host Row) */}
+      <div
+        className="host-card"
+        data-testid="this-computer-card"
+        style={{
+          padding: "14px 18px",
+          display: "flex",
+          flexDirection: "column",
+          gap: 12,
+        }}
+      >
         <div
-          className="host-card"
-          data-testid="this-computer-card"
           style={{
             display: "flex",
-            flexDirection: "column",
-            gap: 18,
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: 12,
+            flexWrap: "wrap",
           }}
         >
-          <div
-            style={{
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "space-between",
-              gap: 16,
-              flexWrap: "wrap",
-            }}
-          >
-            <div>
-              <p className="host-card__label" style={{ margin: 0 }}>
-                {isSharing
-                  ? "Ready for remote connections & co-op gaming"
-                  : "Screen sharing is off"}
-              </p>
-              <h2 style={{ margin: "6px 0 4px" }}>{thisComputerName}</h2>
-              <p className="host-card__meta">
-                {isSharing
-                  ? "Invite up to 4 friends with a Party Code (controllers auto-assigned to Player 1–4)."
-                  : "Start sharing to play local co-op games with friends or access this PC remotely."}
-              </p>
-            </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <strong style={{ fontSize: "1.05rem", color: "#fff" }}>
+              {thisComputerName}
+            </strong>
+            <span style={{ color: "var(--muted)", fontSize: "0.85rem" }}>
+              {isSharing ? "Sharing" : "Off"}
+            </span>
+          </div>
 
-            <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-              {settings?.hostPeerId ? (
-                <button
-                  className="secondary-button"
-                  data-testid="copy-host-id"
-                  onClick={() => {
-                    if (settings.hostPeerId) {
-                      void navigator.clipboard.writeText(settings.hostPeerId);
-                      setHostNotice("Copied Your Computer ID to clipboard.");
-                    }
-                  }}
-                  type="button"
-                >
-                  <span
-                    className="material-symbols-outlined"
-                    style={{ fontSize: "1.05rem" }}
-                  >
-                    content_copy
-                  </span>
-                  Copy ID
-                </button>
-              ) : null}
-
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            {settings?.hostPeerId ? (
               <button
-                className="secondary-button"
-                data-testid="create-share-code"
-                onClick={() => void generateShareCode()}
+                data-testid="copy-host-id"
+                onClick={() => {
+                  if (settings.hostPeerId) {
+                    void navigator.clipboard.writeText(settings.hostPeerId);
+                    setHostNotice("Copied ID.");
+                  }
+                }}
+                style={iconBtnStyle(false)}
+                title="Copy ID"
                 type="button"
               >
                 <span
                   className="material-symbols-outlined"
                   style={{ fontSize: "1.05rem" }}
                 >
-                  sports_esports
+                  content_copy
                 </span>
-                Invite Friends (Party Code)
               </button>
+            ) : null}
 
+            <button
+              data-testid="create-share-code"
+              onClick={() => void generateShareCode()}
+              style={iconBtnStyle(Boolean(shareCode))}
+              title="Invite friends"
+              type="button"
+            >
+              <span
+                className="material-symbols-outlined"
+                style={{ fontSize: "1.1rem" }}
+              >
+                person_add
+              </span>
+            </button>
+
+            <button
+              className={isSharing ? "danger-button" : "primary-button"}
+              data-testid="toggle-host-sharing"
+              disabled={hostBusy}
+              onClick={() => void toggleHostSharing()}
+              style={{ padding: "8px 16px" }}
+              type="button"
+            >
+              <span
+                className="material-symbols-outlined"
+                style={{ fontSize: "1.05rem" }}
+              >
+                {isSharing ? "stop_circle" : "cast"}
+              </span>
+              {hostBusy ? "…" : isSharing ? "Stop" : "Share"}
+            </button>
+          </div>
+        </div>
+
+        {shareCode ? (
+          <div
+            className="share-code-box"
+            data-testid="share-code-display"
+            style={{
+              marginTop: 0,
+              display: "flex",
+              flexDirection: "row",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: 12,
+              padding: "8px 14px",
+              borderRadius: 10,
+              background: "rgba(0, 0, 0, 0.35)",
+              border: "1px solid var(--panel-border)",
+            }}
+          >
+            <code
+              className="share-code"
+              style={{
+                fontSize: "1.15rem",
+                fontWeight: 800,
+                letterSpacing: "0.14em",
+                color: "var(--primary)",
+              }}
+            >
+              {shareCode}
+            </code>
+            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
               <button
-                className={isSharing ? "danger-button" : "primary-button"}
-                data-testid="toggle-host-sharing"
-                disabled={hostBusy}
-                onClick={() => void toggleHostSharing()}
+                onClick={() => {
+                  void navigator.clipboard.writeText(shareCode);
+                }}
+                style={iconBtnStyle(false)}
+                title="Copy code"
                 type="button"
               >
                 <span
                   className="material-symbols-outlined"
-                  style={{ fontSize: "1.1rem" }}
+                  style={{ fontSize: "1rem" }}
                 >
-                  {isSharing ? "stop_circle" : "cast"}
+                  content_copy
                 </span>
-                {hostBusy
-                  ? "Working…"
-                  : isSharing
-                    ? "Stop Sharing"
-                    : "Start Sharing"}
+              </button>
+              <button
+                aria-label="Hide"
+                data-testid="hide-share-code"
+                onClick={() => setShareCode(null)}
+                style={iconBtnStyle(false)}
+                title="Hide"
+                type="button"
+              >
+                <span
+                  className="material-symbols-outlined"
+                  style={{ fontSize: "1.05rem" }}
+                >
+                  close
+                </span>
               </button>
             </div>
           </div>
+        ) : null}
+      </div>
 
-          {shareCode ? (
-            <div
-              className="share-code-box"
-              data-testid="share-code-display"
+      {/* 4. OTHER COMPUTERS (Quick Connect + Compact List) */}
+      <div
+        className="host-card"
+        style={{
+          display: "flex",
+          flexDirection: "row",
+          gap: 10,
+          alignItems: "center",
+          padding: "10px 14px",
+        }}
+      >
+        <input
+          className="text-input"
+          data-testid="manual-host-id"
+          onChange={(e) => setQuickInput(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && quickInput.trim()) {
+              void handleQuickConnect();
+            }
+          }}
+          placeholder="Enter code or ID…"
+          style={{ flex: 1, minWidth: 200 }}
+          value={quickInput}
+        />
+        <button
+          className="connect-button"
+          data-testid="quick-connect-button"
+          disabled={!quickInput.trim() || isBusyFor(quickInput.trim())}
+          onClick={() => void handleQuickConnect()}
+          style={{ padding: "8px 18px" }}
+          type="button"
+        >
+          Connect
+        </button>
+      </div>
+
+      {combined.known.length === 0 && combined.discovered.length === 0 ? (
+        <div
+          className="empty-state"
+          data-testid="empty-computers-state"
+          style={{ padding: "24px 16px" }}
+        >
+          <p className="empty-state__title" style={{ margin: 0 }}>
+            No other computers
+          </p>
+        </div>
+      ) : (
+        <div
+          data-testid="computers-grid"
+          style={{ display: "flex", flexDirection: "column", gap: 8 }}
+        >
+          {combined.known.map((host) => (
+            <article
+              className="host-card"
+              key={host.hostPeerId}
               style={{
+                padding: "10px 16px",
                 display: "flex",
+                flexDirection: "row",
                 alignItems: "center",
                 justifyContent: "space-between",
-                gap: 20,
-                flexWrap: "wrap",
-                padding: 16,
-                borderRadius: 14,
-                background: "rgba(0, 0, 0, 0.35)",
-                border: "1px solid var(--panel-border)",
+                gap: 12,
               }}
             >
-              <div>
-                <p className="host-card__label">
-                  15-Minute Party Code (Up to 4 Friends · Controller Ready)
-                </p>
-                <code
-                  className="share-code"
-                  style={{
-                    fontSize: "1.6rem",
-                    fontWeight: 800,
-                    letterSpacing: "0.14em",
-                    color: "var(--primary)",
-                  }}
-                >
-                  {shareCode}
-                </code>
-                {shareExpiresMs ? (
-                  <p className="host-card__meta" style={{ marginTop: 4 }}>
-                    Expires at {new Date(shareExpiresMs).toLocaleTimeString()} ·
-                    Friends get Controller ON, Keyboard &amp; Mouse OFF by default
-                  </p>
-                ) : null}
-                <div style={{ marginTop: 10, display: "flex", gap: 8 }}>
-                  <button
-                    className="secondary-button"
-                    onClick={() => {
-                      void navigator.clipboard.writeText(shareCode);
-                      setHostNotice("Copied party code to clipboard.");
-                    }}
-                    type="button"
-                  >
-                    Copy Party Code
-                  </button>
-                  <button
-                    className="ghost-button"
-                    onClick={() => setShareCode(null)}
-                    type="button"
-                  >
-                    Hide
-                  </button>
-                </div>
+              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                <strong style={{ fontSize: "0.95rem", color: "#fff" }}>
+                  {host.displayName ?? "Paired Computer"}
+                </strong>
+                <span style={{ color: "var(--muted)", fontSize: "0.82rem" }}>
+                  Saved
+                </span>
               </div>
-              {qrSvg ? (
-                <div
-                  className="share-qr"
-                  aria-label="Share code QR"
-                  role="img"
-                  style={{ width: 120, height: 120 }}
-                  dangerouslySetInnerHTML={{ __html: qrSvg }}
-                />
-              ) : null}
-            </div>
-          ) : null}
-        </div>
-      </section>
+              <button
+                className="connect-button"
+                data-testid={`connect-known-${host.hostPeerId}`}
+                disabled={isBusyFor(host.hostPeerId)}
+                onClick={() => void handleConnect(host.hostPeerId, false)}
+                style={{ padding: "7px 16px" }}
+                type="button"
+              >
+                {connect.kind === "launching" &&
+                connect.hostId === host.hostPeerId
+                  ? "Connecting…"
+                  : "Connect"}
+              </button>
+            </article>
+          ))}
 
-      {/* 4. CONNECT TO ANOTHER COMPUTER */}
-      <section className="section">
-        <h2 className="section__title">Connect to Another Computer</h2>
-
-        {/* Quick Connect Bar */}
-        <div
-          className="host-card"
-          style={{
-            display: "flex",
-            flexDirection: "row",
-            gap: 12,
-            flexWrap: "wrap",
-            alignItems: "center",
-            padding: "18px 22px",
-          }}
-        >
-          <input
-            className="text-input"
-            data-testid="manual-host-id"
-            onChange={(e) => setQuickInput(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && quickInput.trim()) {
-                void handleQuickConnect();
-              }
-            }}
-            placeholder="Paste a Share Code (e.g. A7K9M2) or Computer ID…"
-            style={{ flex: 1, minWidth: 240 }}
-            value={quickInput}
-          />
-          <button
-            className="connect-button"
-            data-testid="quick-connect-button"
-            disabled={!quickInput.trim() || isBusyFor(quickInput.trim())}
-            onClick={() => void handleQuickConnect()}
-            type="button"
-          >
-            <span
-              className="material-symbols-outlined"
-              style={{ fontSize: "1.1rem" }}
-            >
-              bolt
-            </span>
-            Connect
-          </button>
-        </div>
-
-        {/* Unified Computers Grid */}
-        {combined.known.length === 0 && combined.discovered.length === 0 ? (
-          <div className="empty-state" data-testid="empty-computers-state">
-            <span
-              className="material-symbols-outlined"
-              style={{
-                fontSize: "2.4rem",
-                color: "var(--muted)",
-                marginBottom: "10px",
-              }}
-            >
-              devices
-            </span>
-            <p className="empty-state__title">No other computers found yet</p>
-            <p className="empty-state__body">
-              Click <strong>Scan for Computers</strong> above to find online
-              computers on your server, or paste a Share Code / Computer ID.
-            </p>
-          </div>
-        ) : (
-          <div className="host-grid" data-testid="computers-grid">
-            {combined.known.map((host) => (
-              <article className="host-card" key={host.hostPeerId}>
-                <p className="host-card__label">Saved Computer</p>
-                <h2>{host.displayName ?? "Paired Computer"}</h2>
-                <p className="host-card__meta">
-                  Paired &amp; trusted · Ready for 1-click remote control
-                </p>
-                <div className="host-card__actions">
-                  <button
-                    className="connect-button"
-                    data-testid={`connect-known-${host.hostPeerId}`}
-                    disabled={isBusyFor(host.hostPeerId)}
-                    onClick={() => void handleConnect(host.hostPeerId, false)}
-                    type="button"
-                  >
-                    {connect.kind === "launching" &&
-                    connect.hostId === host.hostPeerId
-                      ? "Connecting…"
-                      : "Connect"}
-                  </button>
+          {combined.discovered.map((host) => {
+            const waiting = isBusyFor(host.peerId);
+            return (
+              <article
+                className="host-card host-card--discovered"
+                key={host.peerId}
+                style={{
+                  padding: "10px 16px",
+                  display: "flex",
+                  flexDirection: "row",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  gap: 12,
+                }}
+              >
+                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                  <strong style={{ fontSize: "0.95rem", color: "#fff" }}>
+                    {host.deviceName || "Remote Computer"}
+                  </strong>
+                  <span style={{ color: "var(--muted)", fontSize: "0.82rem" }}>
+                    Online
+                  </span>
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  {waiting ? (
+                    <button
+                      onClick={() => cancelPendingPair(host.peerId)}
+                      style={iconBtnStyle(false, true)}
+                      title="Cancel"
+                      type="button"
+                    >
+                      <span
+                        className="material-symbols-outlined"
+                        style={{ fontSize: "1.05rem" }}
+                      >
+                        close
+                      </span>
+                    </button>
+                  ) : (
+                    <button
+                      className="connect-button"
+                      data-testid={`pair-connect-${host.peerId}`}
+                      disabled={isBusyFor(host.peerId)}
+                      onClick={() => void handleConnect(host.peerId, true)}
+                      style={{ padding: "7px 16px" }}
+                      type="button"
+                    >
+                      Connect
+                    </button>
+                  )}
                 </div>
               </article>
-            ))}
-
-            {combined.discovered.map((host) => {
-              const waiting = isBusyFor(host.peerId);
-              return (
-                <article
-                  className="host-card host-card--discovered"
-                  key={host.peerId}
-                >
-                  <p className="host-card__label">Online Now</p>
-                  <h2>{host.deviceName || "Remote Computer"}</h2>
-                  <p className="host-card__meta">
-                    Available on your server · Click Pair &amp; Connect
-                  </p>
-                  <div className="host-card__actions">
-                    {waiting ? (
-                      <>
-                        <button className="connect-button" disabled type="button">
-                          Waiting for approval…
-                        </button>
-                        <button
-                          className="secondary-button"
-                          onClick={() => cancelPendingPair(host.peerId)}
-                          type="button"
-                        >
-                          Cancel
-                        </button>
-                      </>
-                    ) : (
-                      <button
-                        className="connect-button"
-                        data-testid={`pair-connect-${host.peerId}`}
-                        disabled={isBusyFor(host.peerId)}
-                        onClick={() => void handleConnect(host.peerId, true)}
-                        type="button"
-                      >
-                        Pair &amp; Connect
-                      </button>
-                    )}
-                  </div>
-                </article>
-              );
-            })}
-          </div>
-        )}
-      </section>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }

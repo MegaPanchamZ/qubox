@@ -223,7 +223,7 @@ export function SettingsView() {
           }}
         >
           <label className="settings-field">
-            <span>Signaling &amp; Iroh Relay Server URL</span>
+            <span>Server URL</span>
             <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
               <input
                 className="text-input"
