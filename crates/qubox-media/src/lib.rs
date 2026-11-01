@@ -577,17 +577,12 @@ fn default_eight_bits() -> u8 {
     8
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "snake_case")]
 pub enum ChromaFormat {
+    #[default]
     Yuv420,
     Yuv444,
-}
-
-impl Default for ChromaFormat {
-    fn default() -> Self {
-        Self::Yuv420
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -682,7 +677,7 @@ impl AnnexBStreamFramer {
         if self.buffer.is_empty() {
             return Ok(None);
         }
-        let bytes = self.buffer.drain(..).collect();
+        let bytes = std::mem::take(&mut self.buffer);
         self.next_access_unit(bytes).map(Some)
     }
 

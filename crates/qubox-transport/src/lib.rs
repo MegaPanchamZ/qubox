@@ -1432,7 +1432,7 @@ async fn drain_legacy_streams(
     session_id: Uuid,
 ) -> anyhow::Result<()> {
     // Pull from the stash first.
-    let extras: Vec<AcceptedStream> = router.extra.drain(..).collect();
+    let extras: Vec<AcceptedStream> = std::mem::take(&mut router.extra);
     for st in extras {
         match st {
             AcceptedStream::LegacyBi { send, mut recv } => {
