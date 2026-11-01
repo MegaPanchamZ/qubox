@@ -29,6 +29,7 @@ export function HostList({
   const [discovering, setDiscovering] = useState(false);
   const [discoveryError, setDiscoveryError] = useState<string | null>(null);
   const [connect, setConnect] = useState<ConnectPhase>({ kind: "idle" });
+  const [manualHostId, setManualHostId] = useState("");
 
   useEffect(() => {
     const load = async () => {
@@ -112,8 +113,8 @@ export function HostList({
           <p className="eyebrow">Hosts</p>
           <h1>Connect to a host</h1>
           <p className="subtitle">
-            Pair once, then connect from anywhere. Use Discover to find hosts on
-            the local network.
+            Pair once, then connect from anywhere over Iroh P2P or relay. Use
+            Discover to find hosts registered on your signaling server.
           </p>
         </div>
         <div className="view__actions">
@@ -129,7 +130,7 @@ export function HostList({
             >
               {discovering ? "sync" : "search"}
             </span>
-            {discovering ? "Scanning…" : "Discover LAN"}
+            {discovering ? "Scanning…" : "Discover Hosts"}
           </button>
         </div>
       </header>
@@ -166,6 +167,39 @@ export function HostList({
       {connect.kind === "error" ? (
         <p className="state state--error">Connect failed: {connect.message}</p>
       ) : null}
+
+      <section className="section">
+        <h2 className="section__title">Direct connect by Host ID</h2>
+        <div
+          className="settings-field"
+          style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}
+        >
+          <input
+            className="text-input"
+            data-testid="manual-host-id"
+            onChange={(e) => setManualHostId(e.target.value)}
+            placeholder="Host Peer ID (UUID) or device name"
+            style={{ flex: 1, minWidth: 260 }}
+            value={manualHostId}
+          />
+          <button
+            className="secondary-button"
+            disabled={!manualHostId.trim() || isBusyFor(manualHostId.trim())}
+            onClick={() => void handleConnect(manualHostId.trim(), true)}
+            type="button"
+          >
+            Pair &amp; connect
+          </button>
+          <button
+            className="connect-button"
+            disabled={!manualHostId.trim() || isBusyFor(manualHostId.trim())}
+            onClick={() => void handleConnect(manualHostId.trim(), false)}
+            type="button"
+          >
+            Connect
+          </button>
+        </div>
+      </section>
 
       <section className="section">
         <h2 className="section__title">Paired hosts</h2>

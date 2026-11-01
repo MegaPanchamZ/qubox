@@ -21,6 +21,9 @@ function Shell() {
     activeSessions,
     conflictCount,
     ensureNotifications,
+    settings,
+    refreshKnownHosts,
+    refreshSettings,
   } = useApp();
 
   useEffect(() => {
@@ -71,9 +74,9 @@ function Shell() {
       await invoke<string>("start_session_subprocess", {
         hostId,
         options: {
-          mic: false,
-          clipboardSync: "off",
-          statsOverlay: true,
+          mic: settings?.micEnabled ?? false,
+          clipboardSync: settings?.clipboardSync ?? "off",
+          statsOverlay: settings?.statsOverlay ?? true,
         },
       });
       setView("sessions");
@@ -85,6 +88,7 @@ function Shell() {
 
   const pairAndStartSession = async (hostId: string) => {
     await invoke("pair_host", { hostId });
+    await refreshKnownHosts();
     await startSession(hostId);
   };
 
@@ -116,7 +120,13 @@ function Shell() {
     return (
       <main className="shell" data-testid="shell-onboarding">
         <section className="panel" style={{ flex: 1 }}>
-          <FirstRun onDone={() => setNeedsOnboarding(false)} />
+          <FirstRun
+            onDone={() => {
+              void refreshSettings();
+              void refreshKnownHosts();
+              setNeedsOnboarding(false);
+            }}
+          />
         </section>
       </main>
     );

@@ -124,7 +124,7 @@ export function FirstRun({ onDone }: FirstRunProps) {
             <h2>Qubox Cloud</h2>
             <p>
               Sign in at qubox.app, generate an enroll code, link this machine.
-              TLS signaling + TURN for hard NAT.
+              TLS signaling + Iroh relay for hard NAT.
             </p>
             <ul>
               <li>Account + device list on the web</li>
@@ -147,7 +147,7 @@ export function FirstRun({ onDone }: FirstRunProps) {
             <ul>
               <li>ws:// or wss:// to your host</li>
               <li>Works offline / air-gapped</li>
-              <li>You run coturn if needed</li>
+              <li>Built-in Iroh P2P + relay (no coturn needed)</li>
             </ul>
           </button>
         </div>

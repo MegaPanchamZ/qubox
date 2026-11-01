@@ -66,7 +66,7 @@ struct Args {
 
     /// Emit structured NDJSON telemetry on stdout for the Tauri GUI.
     /// Human-readable logs are routed to stderr when this is set.
-    #[arg(long, default_value_t = false)]
+    #[arg(long, global = true, default_value_t = false)]
     json_telemetry: bool,
 
     #[command(subcommand)]

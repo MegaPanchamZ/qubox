@@ -180,6 +180,12 @@ fn resolve_sidecar_path(name: &str, env_key: &str) -> PathBuf {
             if candidate.is_file() {
                 return candidate;
             }
+            if let Some(grand) = parent.parent() {
+                let candidate = grand.join(&file_name);
+                if candidate.is_file() {
+                    return candidate;
+                }
+            }
         }
     }
 
@@ -256,42 +262,106 @@ async fn ensure_daemon() -> Result<IpcClient, String> {
 
 // ── Tauri commands ──────────────────────────────────────────────────
 
-/// List hosts persisted in the workspace's `pairings.json`.
-#[tauri::command]
-fn get_known_hosts() -> Result<Vec<KnownHost>, String> {
-    let local_state_dir = resolve_local_state_dir()?;
-    let client_identity_path = local_state_dir.join("client-id.json");
-    let pairings_path = local_state_dir.join("pairings.json");
-    let (identity, _) = load_or_create_identity(Some(client_identity_path), None)
-        .map_err(|error| error.to_string())?;
-    let mut hosts = load_pairings_from_path(pairings_path)
-        .map_err(|error| error.to_string())?
-        .into_iter()
-        .filter(|pairing| pairing.client_peer_id == identity.client_peer_id)
-        .map(|pairing| KnownHost {
-            host_peer_id: pairing.host_peer_id.to_string(),
-            display_name: None,
-        })
-        .collect::<Vec<_>>();
+/// Resolve the configured signaling server URL and device display name from
+/// the daemon's settings table, falling back to `QUBOX_SERVER` and
+/// `DEFAULT_SIGNALING_SERVER`.
+async fn resolve_signaling_and_device_name() -> (String, Option<String>) {
+    let mut server = None;
+    let mut device_name = None;
+    if let Ok(mut client) = connect_daemon().await {
+        if let Ok(IpcResponse::SettingsMap { entries }) =
+            client.call::<IpcResponse>(&IpcRequest::ListSettings).await
+        {
+            for (k, v) in entries {
+                let trimmed = v.trim();
+                if trimmed.is_empty() {
+                    continue;
+                }
+                match k.as_str() {
+                    "signaling_server" => server = Some(trimmed.to_string()),
+                    "device_name" => device_name = Some(trimmed.to_string()),
+                    _ => {}
+                }
+            }
+        }
+    }
+    let resolved_server = server
+        .or_else(|| std::env::var("QUBOX_SERVER").ok().filter(|s| !s.is_empty()))
+        .unwrap_or_else(|| DEFAULT_SIGNALING_SERVER.to_string());
+    (resolved_server, device_name)
+}
 
+/// Persist a paired host in the local daemon's pairings table so it appears
+/// under "Paired hosts" even when the signaling server is remote.
+async fn remember_paired_host(host_peer_id: &str) {
+    if let Ok(mut client) = connect_daemon().await {
+        let _ = client
+            .call::<IpcResponse>(&IpcRequest::ApprovePairing {
+                peer_id: host_peer_id.to_string(),
+                public_key: Vec::new(),
+            })
+            .await;
+    }
+}
+
+/// List hosts persisted in the daemon's `pairings` table and (if present)
+/// the workspace's `.local/pairings.json`.
+#[tauri::command]
+async fn get_known_hosts() -> Result<Vec<KnownHost>, String> {
+    let mut by_id: HashMap<String, Option<String>> = HashMap::new();
+
+    if let Ok(mut client) = connect_daemon().await {
+        if let Ok(IpcResponse::ListPairingsResponse { pairings }) =
+            client.call::<IpcResponse>(&IpcRequest::ListPairings).await
+        {
+            for p in pairings {
+                by_id.insert(p.peer_id, p.label);
+            }
+        }
+    }
+
+    if let Ok(local_state_dir) = resolve_local_state_dir() {
+        let client_identity_path = local_state_dir.join("client-id.json");
+        let pairings_path = local_state_dir.join("pairings.json");
+        if let Ok((identity, _)) = load_or_create_identity(Some(client_identity_path), None) {
+            if let Ok(pairings) = load_pairings_from_path(pairings_path) {
+                for pairing in pairings {
+                    if pairing.client_peer_id == identity.client_peer_id {
+                        by_id
+                            .entry(pairing.host_peer_id.to_string())
+                            .or_insert(None);
+                    }
+                }
+            }
+        }
+    }
+
+    let mut hosts: Vec<KnownHost> = by_id
+        .into_iter()
+        .map(|(host_peer_id, display_name)| KnownHost {
+            host_peer_id,
+            display_name,
+        })
+        .collect();
     hosts.sort_by(|left, right| left.host_peer_id.cmp(&right.host_peer_id));
     Ok(hosts)
 }
 
-/// Spawn `qubox-client-cli list-hosts --json-telemetry` for `~3s` and parse
+/// Spawn `qubox-client-cli --json-telemetry list-hosts` and parse
 /// NDJSON `host_discovered` events.
 #[tauri::command]
 async fn discover_lan_hosts() -> Result<Vec<DiscoveredHost>, String> {
     let cli = resolve_qubox_client_cli_path();
-    let server =
-        std::env::var("QUBOX_SERVER").unwrap_or_else(|_| DEFAULT_SIGNALING_SERVER.to_string());
+    let (server, device_name) = resolve_signaling_and_device_name().await;
 
     let mut command = Command::new(&cli);
+    command.arg("--server").arg(&server);
+    if let Some(name) = device_name.as_deref() {
+        command.arg("--name").arg(name);
+    }
     command
-        .arg("--server")
-        .arg(&server)
-        .arg("list-hosts")
         .arg("--json-telemetry")
+        .arg("list-hosts")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .stdin(Stdio::null());
@@ -326,9 +396,13 @@ async fn discover_lan_hosts() -> Result<Vec<DiscoveredHost>, String> {
         hosts
     });
 
-    tokio::time::sleep(Duration::from_secs(3)).await;
-    let _ = child.kill().await;
-    let _ = child.wait().await;
+    if tokio::time::timeout(Duration::from_secs(5), child.wait())
+        .await
+        .is_err()
+    {
+        let _ = child.kill().await;
+        let _ = child.wait().await;
+    }
     if let Ok(hosts) = collect_task.await {
         discovered = hosts;
     }
@@ -344,11 +418,13 @@ async fn discover_lan_hosts() -> Result<Vec<DiscoveredHost>, String> {
 fn start_session(host_id: String) -> Result<(), String> {
     let host_id =
         Uuid::parse_str(&host_id).map_err(|error| format!("invalid host id {host_id}: {error}"))?;
-    let identity_path = resolve_local_state_dir()?.join("client-id.json");
+    let identity_path = resolve_local_state_dir()
+        .ok()
+        .map(|d| d.join("client-id.json"));
     let config = ClientSessionLaunchConfig {
         server: std::env::var("QUBOX_SERVER")
             .unwrap_or_else(|_| DEFAULT_SIGNALING_SERVER.to_string()),
-        identity_path: Some(identity_path),
+        identity_path,
         name: None,
         mute_playback: true,
         max_stream_frames: 0,
@@ -384,14 +460,14 @@ fn start_session(host_id: String) -> Result<(), String> {
 async fn pair_host(host_id: String) -> Result<(), String> {
     let host_uuid =
         Uuid::parse_str(&host_id).map_err(|error| format!("invalid host id {host_id}: {error}"))?;
-    let settings = get_settings().await?;
-    let server = settings
-        .signaling_server
-        .unwrap_or_else(|| DEFAULT_SIGNALING_SERVER.to_string());
+    let (server, device_name) = resolve_signaling_and_device_name().await;
     let cli = resolve_qubox_client_cli_path();
-    let output = Command::new(&cli)
-        .arg("--server")
-        .arg(server)
+    let mut cmd = Command::new(&cli);
+    cmd.arg("--server").arg(server);
+    if let Some(name) = device_name.as_deref() {
+        cmd.arg("--name").arg(name);
+    }
+    let output = cmd
         .arg("--json-telemetry")
         .arg("pair")
         .arg("--host")
@@ -400,6 +476,7 @@ async fn pair_host(host_id: String) -> Result<(), String> {
         .await
         .map_err(|error| format!("failed to spawn qubox-client-cli pair: {error}"))?;
     if output.status.success() {
+        remember_paired_host(&host_uuid.to_string()).await;
         Ok(())
     } else {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
@@ -433,19 +510,19 @@ async fn start_session_subprocess(
     });
 
     let cli = resolve_qubox_client_cli_path();
-    let server =
-        std::env::var("QUBOX_SERVER").unwrap_or_else(|_| DEFAULT_SIGNALING_SERVER.to_string());
+    let (server, device_name) = resolve_signaling_and_device_name().await;
     let session_id = Uuid::new_v4().to_string();
 
     let mut command = Command::new(&cli);
+    command.arg("--server").arg(&server);
+    if let Some(name) = device_name.as_deref() {
+        command.arg("--name").arg(name);
+    }
     command
-        .arg("--server")
-        .arg(&server)
+        .arg("--json-telemetry")
         .arg("start-session")
         .arg("--host")
         .arg(host_uuid.to_string())
-        .arg("--json-telemetry")
-        .arg("--datagram-media")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .stdin(Stdio::null());
@@ -455,12 +532,10 @@ async fn start_session_subprocess(
     if let Some(clip) = opts.clipboard_sync.as_deref() {
         command.arg("--clipboard-sync").arg(clip);
     }
-    if opts.stats_overlay {
-        command.arg("--stats-overlay");
-    }
+    let _ = opts.stats_overlay;
     if let Some(privacy) = opts.show_privacy_indicator {
         if !privacy {
-            command.arg("--no-privacy-indicator");
+            command.arg("--show-privacy-indicator=false");
         }
     }
     if opts.skip_window {
@@ -484,6 +559,8 @@ async fn start_session_subprocess(
         .stderr
         .take()
         .ok_or_else(|| "qubox-client-cli did not expose stderr".to_string())?;
+
+    remember_paired_host(&host_uuid.to_string()).await;
 
     let (kill_tx, kill_rx) = oneshot::channel::<()>();
     let started_at = std::time::SystemTime::now()
@@ -555,7 +632,11 @@ async fn cancel_session(
             let _ = tx.send(());
         }
         drop(guard);
-        let payload = serde_json::json!({ "session_id": session_id, "reason": "user_cancelled" });
+        let payload = serde_json::json!({
+            "sessionId": session_id,
+            "session_id": session_id,
+            "reason": "user_cancelled",
+        });
         let _ = app.emit("session://ended", payload);
         Ok(())
     } else {
@@ -760,29 +841,52 @@ async fn create_share_link(ttl_secs: u64) -> Result<serde_json::Value, String> {
 }
 
 #[tauri::command]
-fn redeem_share_link(code: String, client_label: Option<String>) -> Result<String, String> {
+async fn redeem_share_link(code: String, client_label: Option<String>) -> Result<String, String> {
     let cli = resolve_qubox_client_cli_path();
-    let mut cmd = std::process::Command::new(&cli);
+    let (server, device_name) = resolve_signaling_and_device_name().await;
+    let mut cmd = Command::new(&cli);
+    cmd.args(["--server", &server]);
+    if let Some(name) = device_name.as_deref() {
+        cmd.args(["--name", name]);
+    }
     cmd.args(["redeem-share-link", "--code", &code]);
-    if let Some(label) = client_label {
+    if let Some(label) = client_label.or(device_name) {
         cmd.args(["--client-label", &label]);
     }
-    let output = cmd.output().map_err(|e| format!("spawn client-cli: {e}"))?;
+    let output = cmd
+        .output()
+        .await
+        .map_err(|e| format!("spawn client-cli: {e}"))?;
     if !output.status.success() {
         return Err(String::from_utf8_lossy(&output.stderr).into_owned());
     }
-    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    // Extract `host=<uuid>` from `paired via share link: host=<uuid> client=<uuid>`
+    for token in stdout.split_whitespace() {
+        if let Some(host_id) = token.strip_prefix("host=") {
+            remember_paired_host(host_id.trim()).await;
+        }
+    }
+    Ok(stdout)
 }
 
 #[tauri::command]
-fn kick_session(session_id: String, reason: Option<String>) -> Result<(), String> {
+async fn kick_session(session_id: String, reason: Option<String>) -> Result<(), String> {
     let cli = resolve_qubox_client_cli_path();
-    let mut cmd = std::process::Command::new(&cli);
+    let (server, device_name) = resolve_signaling_and_device_name().await;
+    let mut cmd = Command::new(&cli);
+    cmd.args(["--server", &server]);
+    if let Some(name) = device_name {
+        cmd.args(["--name", &name]);
+    }
     cmd.args(["kick-session", "--session", &session_id]);
     if let Some(r) = reason {
         cmd.args(["--reason", &r]);
     }
-    let output = cmd.output().map_err(|e| format!("spawn client-cli: {e}"))?;
+    let output = cmd
+        .output()
+        .await
+        .map_err(|e| format!("spawn client-cli: {e}"))?;
     if !output.status.success() {
         return Err(String::from_utf8_lossy(&output.stderr).into_owned());
     }
@@ -1029,6 +1133,17 @@ async fn start_host_agent(server: Option<String>) -> Result<(), String> {
         Ok(IpcResponse::SettingValue { value, .. }) => value.filter(|v| !v.is_empty()),
         _ => None,
     };
+    let auto_approve_pairing = match client
+        .call::<IpcResponse>(&IpcRequest::GetSetting {
+            key: "auto_approve_pairing".into(),
+        })
+        .await
+    {
+        Ok(IpcResponse::SettingValue {
+            value: Some(val), ..
+        }) => val == "true" || val == "1",
+        _ => false,
+    };
     let final_server = server
         .or(signaling_server)
         .or_else(|| std::env::var("QUBOX_SERVER").ok())
@@ -1037,7 +1152,7 @@ async fn start_host_agent(server: Option<String>) -> Result<(), String> {
         .call::<IpcResponse>(&IpcRequest::StartHost {
             config: qubox_daemon::ipc::HostConfig {
                 identity_path: None,
-                auto_approve_pairing: false,
+                auto_approve_pairing,
                 socket_path: socket,
                 server: Some(final_server),
                 privacy_mode,
@@ -1536,6 +1651,8 @@ async fn run_session_pipeline<R, S>(
     S: tokio::io::AsyncRead + Unpin + Send + 'static,
 {
     let started_payload = serde_json::json!({
+        "sessionId": session_id,
+        "hostId": host_id,
         "session_id": session_id,
         "host_id": host_id,
     });
@@ -1570,6 +1687,7 @@ async fn run_session_pipeline<R, S>(
                 }
             }
             let payload = serde_json::json!({
+                "sessionId": session_for_stderr,
                 "session_id": session_for_stderr,
                 "line": line,
                 "level": "info",
@@ -1622,6 +1740,7 @@ async fn run_session_pipeline<R, S>(
         }
     }
     let payload = serde_json::json!({
+        "sessionId": session_id,
         "session_id": session_id,
         "reason": exit_reason,
     });
@@ -1645,6 +1764,7 @@ fn forward_telemetry_line(app: &AppHandle, session_id: &str, line: &str) {
                 _ => "session://telemetry",
             };
             let body = serde_json::json!({
+                "sessionId": session_id,
                 "session_id": session_id,
                 "event": event,
             });
@@ -1652,6 +1772,7 @@ fn forward_telemetry_line(app: &AppHandle, session_id: &str, line: &str) {
             return;
         }
         Err(error) => serde_json::json!({
+            "sessionId": session_id,
             "session_id": session_id,
             "raw": trimmed,
             "parse_error": error.to_string(),
@@ -2026,5 +2147,163 @@ mod tests {
     fn forward_telemetry_line_does_not_panic_on_unparsed_payload() {
         let json = serde_json::from_str::<serde_json::Value>("this is not json");
         assert!(json.is_err());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn daemon_settings_and_pairings_roundtrip_for_gui() {
+        let tmp = std::env::temp_dir().join(format!("qubox-gui-test-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let sock_path = tmp.join("qubox.sock");
+        let db_path = tmp.join("state.db");
+
+        let state = Arc::new(qubox_daemon::state::StateDb::open(&db_path).unwrap());
+        let config = qubox_daemon::DaemonConfig {
+            socket_path: sock_path.clone(),
+            state_db_path: db_path,
+            signaling_url: None,
+            ..qubox_daemon::DaemonConfig::default()
+        };
+        let server = qubox_daemon::ipc::IpcServer::bind(&config, state, None)
+            .await
+            .unwrap();
+        let shutdown = server.shutdown_handle();
+        let server_task = tokio::spawn(async move {
+            let _ = server.run().await;
+        });
+
+        std::env::set_var("XDG_RUNTIME_DIR", &tmp);
+        std::env::remove_var("QUBOX_SERVER");
+
+        complete_onboarding(
+            "gui-test-laptop".to_string(),
+            "ws://170.64.201.135:7000/ws".to_string(),
+            false,
+            None,
+        )
+        .await
+        .unwrap();
+
+        let (resolved_server, resolved_name) = resolve_signaling_and_device_name().await;
+        assert_eq!(resolved_server, "ws://170.64.201.135:7000/ws");
+        assert_eq!(resolved_name.as_deref(), Some("gui-test-laptop"));
+
+        let fake_host_id = Uuid::new_v4().to_string();
+        remember_paired_host(&fake_host_id).await;
+
+        let known = get_known_hosts().await.unwrap();
+        assert!(
+            known.iter().any(|h| h.host_peer_id == fake_host_id),
+            "expected remembered host {fake_host_id} in get_known_hosts, got {known:?}"
+        );
+
+        shutdown.signal_shutdown();
+        let _ = server_task.await;
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    #[ignore = "live E2E test against DigitalOcean Sydney signaling + Iroh relay droplet"]
+    async fn desktop_gui_flow_against_sydney_iroh_relay() {
+        let tmp = std::env::temp_dir().join(format!("qubox-gui-live-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let sock_path = tmp.join("qubox.sock");
+        let db_path = tmp.join("state.db");
+        let id_path = tmp.join("identity.json");
+
+        std::env::set_var("XDG_RUNTIME_DIR", &tmp);
+        std::env::set_var("QUBOX_IDENTITY_PATH", &id_path);
+        std::env::remove_var("QUBOX_SERVER");
+        // Ensure target/debug is in PATH so qubox-daemon finds qubox-host-agent and qubox-client-cli
+        if let Some(cli_dir) = resolve_qubox_client_cli_path().parent() {
+            let current_path = std::env::var("PATH").unwrap_or_default();
+            std::env::set_var("PATH", format!("{}:{current_path}", cli_dir.display()));
+        }
+
+        let state = Arc::new(qubox_daemon::state::StateDb::open(&db_path).unwrap());
+        let config = qubox_daemon::DaemonConfig {
+            socket_path: sock_path.clone(),
+            state_db_path: db_path,
+            signaling_url: None,
+            ..qubox_daemon::DaemonConfig::default()
+        };
+        let server = qubox_daemon::ipc::IpcServer::bind(&config, state, None)
+            .await
+            .unwrap();
+        let shutdown = server.shutdown_handle();
+        let server_task = tokio::spawn(async move {
+            let _ = server.run().await;
+        });
+
+        let host_label = format!("gui-host-{}", &Uuid::new_v4().to_string()[..8]);
+        complete_onboarding(
+            host_label.clone(),
+            "ws://170.64.201.135:7000/ws".to_string(),
+            false,
+            None,
+        )
+        .await
+        .expect("complete_onboarding");
+
+        start_host_agent(None).await.expect("start_host_agent");
+
+        // Poll discover_lan_hosts until our host appears on the Sydney signaling server
+        let mut found_peer_id = None;
+        for _ in 0..20 {
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            if let Ok(hosts) = discover_lan_hosts().await {
+                if let Some(h) = hosts.iter().find(|h| h.device_name == host_label) {
+                    found_peer_id = Some(h.peer_id.clone());
+                    break;
+                }
+            }
+        }
+        let host_peer_id = found_peer_id.expect("host registered on Sydney signaling server");
+
+        // Create share link via daemon (using saved signaling_server setting)
+        let share = create_share_link(300).await.expect("create_share_link");
+        let code = share
+            .get("code")
+            .and_then(|v| v.as_str())
+            .expect("share code")
+            .to_string();
+        assert!(!code.is_empty());
+
+        // Spawn a helper task simulating the GUI operator clicking "Approve" in PairingRequests.tsx
+        let approver = tokio::spawn(async {
+            for _ in 0..30 {
+                tokio::time::sleep(Duration::from_millis(300)).await;
+                if let Ok(val) = list_host_pending_pairings().await {
+                    if let Some(arr) = val.as_array() {
+                        if let Some(first) = arr.first() {
+                            if let Some(req_id) = first.get("request_id").and_then(|v| v.as_str()) {
+                                host_pairing_decide(req_id.to_string(), true)
+                                    .await
+                                    .expect("host_pairing_decide");
+                                return;
+                            }
+                        }
+                    }
+                }
+            }
+            panic!("timed out waiting for pending pairing request in list_host_pending_pairings");
+        });
+
+        // Pair with host via GUI command and verify get_known_hosts persists it in daemon
+        pair_host(host_peer_id.clone()).await.expect("pair_host");
+        approver.await.expect("approver task");
+
+        let known = get_known_hosts().await.expect("get_known_hosts");
+        assert!(
+            known.iter().any(|h| h.host_peer_id == host_peer_id),
+            "paired host must appear in get_known_hosts"
+        );
+
+        stop_host_agent().await.expect("stop_host_agent");
+        shutdown.signal_shutdown();
+        let _ = server_task.await;
+        std::env::remove_var("QUBOX_IDENTITY_PATH");
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 }

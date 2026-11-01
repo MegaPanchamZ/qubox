@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { shareCodeSvg, shareLinkPayload } from "../lib/qr";
+import { useApp } from "./AppContext";
 
 type ShareLinkPayload = {
   code: string;
@@ -9,6 +10,7 @@ type ShareLinkPayload = {
 };
 
 export function SharePanel() {
+  const { refreshKnownHosts } = useApp();
   const [code, setCode] = useState<string | null>(null);
   const [url, setUrl] = useState<string | null>(null);
   const [expiresMs, setExpiresMs] = useState<number | null>(null);
@@ -34,8 +36,15 @@ export function SharePanel() {
   const doRedeem = async () => {
     setErr(null);
     try {
-      await invoke("redeem_share_link", { code: redeem.trim() });
-      setMsg("Redeem requested — wait for host approval if required");
+      const out = await invoke<string>("redeem_share_link", {
+        code: redeem.trim(),
+      });
+      await refreshKnownHosts();
+      setMsg(
+        out
+          ? `Share link redeemed: ${out}`
+          : "Redeem requested — wait for host approval if required",
+      );
     } catch (e) {
       setErr(String(e));
     }

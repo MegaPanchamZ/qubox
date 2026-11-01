@@ -57,6 +57,8 @@ export type Settings = {
   clipboardSync: string | null;
   statsOverlay: boolean;
   autoStartHost: boolean;
+  hostPeerId?: string | null;
+  clientPeerId?: string | null;
 };
 
 export type SessionTelemetry =
@@ -117,6 +119,7 @@ type AppContextValue = {
   refreshRecentSessions: () => Promise<void>;
   refreshHostStatus: () => Promise<void>;
   refreshKnownHosts: () => Promise<void>;
+  refreshSettings: () => Promise<void>;
   ensureNotifications: () => Promise<boolean>;
   pushTelemetry: (sessionId: string, event: SessionTelemetry) => void;
   pushStderr: (line: StderrLine) => void;
@@ -280,6 +283,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setKnownHosts(Array.isArray(hosts) ? hosts : []);
     } catch {
       // leave existing list intact on transient errors
+    }
+  }, []);
+
+  const refreshSettings = useCallback(async () => {
+    try {
+      const loaded = await invoke<Settings>("get_settings");
+      setSettings(loaded);
+    } catch {
+      // leave existing settings intact on transient errors
     }
   }, []);
 
@@ -541,6 +553,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       refreshRecentSessions,
       refreshHostStatus,
       refreshKnownHosts,
+      refreshSettings,
       ensureNotifications,
       pushTelemetry: (sessionId, event) => {
         const bucket = pendingTelemetry.current.get(sessionId) ?? [];
@@ -591,6 +604,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       refreshRecentSessions,
       refreshHostStatus,
       refreshKnownHosts,
+      refreshSettings,
       ensureNotifications,
       scheduleFlush,
     ],

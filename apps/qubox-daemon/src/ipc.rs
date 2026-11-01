@@ -791,16 +791,24 @@ async fn dispatch_request(
 ) -> Result<(), DaemonError> {
     match req {
         IpcRequest::CreateShareLink { ttl_secs } => {
+            let saved_server = state.get_setting("signaling_server").ok().flatten();
+            let effective_server = signaling_url
+                .filter(|s| !s.is_empty())
+                .or_else(|| saved_server.as_deref().filter(|s| !s.is_empty()));
             let resp = run_client_cli_share_or_kick(
-                signaling_url,
+                effective_server,
                 &["create-share-link", "--ttl-secs", &ttl_secs.to_string()],
                 true,
             );
             send_response(stream, corr_id, &resp).await
         }
         IpcRequest::KickSession { session_id, reason } => {
+            let saved_server = state.get_setting("signaling_server").ok().flatten();
+            let effective_server = signaling_url
+                .filter(|s| !s.is_empty())
+                .or_else(|| saved_server.as_deref().filter(|s| !s.is_empty()));
             let resp = run_client_cli_share_or_kick(
-                signaling_url,
+                effective_server,
                 &[
                     "kick-session",
                     "--session",
@@ -895,9 +903,25 @@ async fn dispatch_request(
                 "--ipc-socket".to_string(),
                 socket_path,
             ];
-            if let Some(server) = config.server {
+            let effective_server = config.server.or_else(|| {
+                state
+                    .get_setting("signaling_server")
+                    .ok()
+                    .flatten()
+                    .filter(|s| !s.is_empty())
+            });
+            if let Some(server) = effective_server {
                 args.push("--server".to_string());
                 args.push(server);
+            }
+            if let Some(device_name) = state
+                .get_setting("device_name")
+                .ok()
+                .flatten()
+                .filter(|s| !s.is_empty())
+            {
+                args.push("--name".to_string());
+                args.push(device_name);
             }
             if let Some(mode) = config.privacy_mode.as_deref().filter(|m| !m.is_empty()) {
                 args.push("--privacy-mode".to_string());

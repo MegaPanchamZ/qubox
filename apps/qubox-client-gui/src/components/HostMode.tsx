@@ -19,7 +19,7 @@ const STREAM_MODES: { id: StreamMode; label: string }[] = [
 ];
 
 export function HostModeView() {
-  const { hostRunning, activeSessions } = useApp();
+  const { hostRunning, activeSessions, settings } = useApp();
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [stopArmed, setStopArmed] = useState(false);
@@ -106,6 +106,29 @@ export function HostModeView() {
       {error ? <p className="state state--error">{error}</p> : null}
       {status ? <p className="state">{status}</p> : null}
       <div className="settings-grid">
+        <div className="settings-field">
+          <span>This machine&apos;s Host Identity</span>
+          <p className="subtitle">
+            Host Peer ID: <code>{settings?.hostPeerId ?? "not initialized"}</code>{" "}
+            · Signaling: <code>{settings?.signalingServer ?? "default"}</code>
+          </p>
+          {settings?.hostPeerId ? (
+            <div>
+              <button
+                className="secondary-button"
+                onClick={() => {
+                  if (settings.hostPeerId) {
+                    void navigator.clipboard.writeText(settings.hostPeerId);
+                    setStatus("Copied Host Peer ID to clipboard");
+                  }
+                }}
+                type="button"
+              >
+                Copy Host Peer ID
+              </button>
+            </div>
+          ) : null}
+        </div>
         <div className="settings-field settings-field--inline">
           {isRunning ? (
             <button
