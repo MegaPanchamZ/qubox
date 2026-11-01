@@ -14,6 +14,24 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            . -> target
+
+      - name: Install Linux system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libx11-dev libxrandr-dev libxdo-dev libxkbcommon-dev \
+            libwayland-dev libxext-dev libclang-18-dev \
+            libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libavfilter-dev libavdevice-dev \
+            libpulse-dev libdbus-1-dev libasound2-dev \
+            autoconf automake libtool \
+            libssl-dev libudev-dev libopus-dev \
+            libpipewire-0.3-dev libspa-0.2-dev libsystemd-dev \
+            pkg-config
+
       - name: Build release binaries (linux)
         run: |
           cargo build --release -p qubox-daemon -p qubox-host-agent -p qubox-client-cli
