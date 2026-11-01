@@ -134,26 +134,27 @@ mod linux {
             format!("qubox virtual gamepad {}", slot + 1)
         };
         let dev = uinput::open("/dev/uinput")
-            .map_err(|e| anyhow!(
-                "cannot open /dev/uinput: {e}; install the uinput module \
+            .map_err(|e| {
+                anyhow!(
+                    "cannot open /dev/uinput: {e}; install the uinput module \
                  or check udev rules per ADR-004 \
                  research/decisions/ADR-004-virtual-gamepad-uinput-vigembus.md"
-            ))?
+                )
+            })?
             .name(&name)
             .map_err(|e| anyhow!("failed to set uinput device name: {e}"))?;
 
         // Chain all event registration + axis range setup, then create.
         let dev = register_events(dev)?;
-        dev.create().map_err(|e| anyhow!("failed to create uinput device: {e}"))
+        dev.create()
+            .map_err(|e| anyhow!("failed to create uinput device: {e}"))
     }
 
     pub fn open() -> Result<Device> {
         open_slot(0)
     }
 
-    fn register_events(
-        builder: uinput::device::Builder,
-    ) -> Result<uinput::device::Builder> {
+    fn register_events(builder: uinput::device::Builder) -> Result<uinput::device::Builder> {
         // -- EV_KEY: 14 buttons --
         let builder = builder
             .event(GamePad::South)?
@@ -301,9 +302,7 @@ pub fn describe_state(state: &WireGamepadState) -> String {
     let ly = state.ly;
     let rx = state.rx;
     let ry = state.ry;
-    s.push_str(&format!(
-        " lt={lt} rt={rt} lx={lx} ly={ly} rx={rx} ry={ry}"
-    ));
+    s.push_str(&format!(" lt={lt} rt={rt} lx={lx} ly={ly} rx={rx} ry={ry}"));
     s
 }
 
@@ -323,7 +322,11 @@ mod uinput_tests {
         // 4 d-pad) with 2 reserved positions for a total of 16 in the
         // wire format. Our uinput device registers 14 EV_KEY codes.
         #[cfg(target_os = "linux")]
-        assert_eq!(linux::BUTTON_COUNT, 14, "expected 14 EV_KEY codes registered");
+        assert_eq!(
+            linux::BUTTON_COUNT,
+            14,
+            "expected 14 EV_KEY codes registered"
+        );
         #[cfg(not(target_os = "linux"))]
         println!("skipped on non-Linux (no uinput)");
     }
