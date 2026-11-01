@@ -228,7 +228,7 @@ enum HostEndpointState {
     /// Socket reserved synchronously in `NativeQuicHost::bind`; converted into a full
     /// `iroh::Endpoint` when `accept_authenticated_connection` runs.
     Deferred {
-        secret_key: SecretKey,
+        secret_key: Box<SecretKey>,
         local_addr: SocketAddr,
         reserved_socket: Option<std::net::UdpSocket>,
         v2: bool,
@@ -314,7 +314,7 @@ impl NativeQuicHost {
 
         Ok(Self {
             state: HostEndpointState::Deferred {
-                secret_key,
+                secret_key: Box::new(secret_key),
                 local_addr,
                 reserved_socket: Some(reserved_socket),
                 v2,
@@ -429,7 +429,7 @@ impl NativeQuicHost {
             } => {
                 // Release the reserved OS port immediately before binding the Iroh endpoint on it.
                 drop(reserved_socket.take());
-                let ep = bind_iroh_server_endpoint(secret_key, local_addr, v2).await?;
+                let ep = bind_iroh_server_endpoint(*secret_key, local_addr, v2).await?;
                 ManagedEndpoint::new(ep)
             }
         };
