@@ -54,14 +54,31 @@ export function HostList({
   const [shareCode, setShareCode] = useState<string | null>(null);
   const [shareExpiresMs, setShareExpiresMs] = useState<number | null>(null);
   const [approvingId, setApprovingId] = useState<string | null>(null);
+  const [thisComputerName, setThisComputerName] = useState<string>("This Computer");
 
   const isSharing = hostRunning === true;
+
+  const resolveComputerName = (peerId: string): string => {
+    const saved = knownHosts.find((h) => h.hostPeerId === peerId);
+    if (saved?.displayName) return saved.displayName;
+    const disc = discoveredHosts.find((h) => h.peerId === peerId);
+    if (disc?.deviceName) return disc.deviceName;
+    return "Remote Computer";
+  };
 
   useEffect(() => {
     const load = async () => {
       try {
         await refreshKnownHosts();
         await refreshHostStatus();
+        try {
+          const ob = await invoke<{ deviceName?: string | null }>("get_onboarding");
+          if (ob?.deviceName?.trim()) {
+            setThisComputerName(ob.deviceName.trim());
+          }
+        } catch {
+          // ignore if onboarding query fails in mock environments
+        }
         setLoadError(null);
       } catch (error) {
         setLoadError(String(error));
@@ -270,7 +287,9 @@ export function HostList({
                   to connect
                 </h2>
                 <p className="host-card__meta">
-                  Device ID: <code>{r.client_peer_id.slice(0, 12)}…</code>
+                  Approve to allow{" "}
+                  {r.client_name || r.client_label || "this computer"} to view
+                  and control your screen.
                 </p>
               </div>
               <div style={{ display: "flex", gap: 10 }}>
@@ -318,6 +337,7 @@ export function HostList({
             const decodedCount = events.filter(
               (e) => e.kind === "frame_decoded",
             ).length;
+            const computerName = resolveComputerName(session.hostId);
             return (
               <div
                 key={session.sessionId}
@@ -331,11 +351,10 @@ export function HostList({
               >
                 <div>
                   <h2 style={{ margin: "0 0 4px" }}>
-                    Connected to {session.hostId.slice(0, 12)}…
+                    Connected to {computerName}
                   </h2>
                   <p className="host-card__meta">
-                    Session <code>{session.sessionId.slice(0, 8)}</code> ·{" "}
-                    {decodedCount} frames decoded
+                    Streaming live over Iroh P2P · {decodedCount} frames decoded
                   </p>
                 </div>
                 <div style={{ display: "flex", gap: 10 }}>
@@ -377,8 +396,8 @@ export function HostList({
       {hostNotice ? <p className="state state--info">{hostNotice}</p> : null}
       {connect.kind === "waiting_for_approval" ? (
         <p className="state state--info" data-testid="pair-pending">
-          Waiting for the other computer to click <strong>Approve</strong> (
-          <code>{connect.hostId.slice(0, 12)}…</code>)
+          Waiting for <strong>{resolveComputerName(connect.hostId)}</strong> to
+          click <strong>Approve</strong>…
           <button
             className="secondary-button"
             onClick={() => cancelPendingPair(connect.hostId)}
@@ -432,12 +451,11 @@ export function HostList({
                     : "Screen sharing is off"}
                 </p>
               </div>
-              <h2 style={{ margin: "6px 0 4px" }}>Allow Remote Control</h2>
+              <h2 style={{ margin: "6px 0 4px" }}>{thisComputerName}</h2>
               <p className="host-card__meta">
-                Your Computer ID:{" "}
-                <code data-testid="this-computer-id">
-                  {settings?.hostPeerId ?? "initializing…"}
-                </code>
+                {isSharing
+                  ? "Other devices can connect using a 15-minute Share Code or your Computer ID."
+                  : "Start sharing to control this computer from your other devices."}
               </p>
             </div>
 
@@ -640,7 +658,9 @@ export function HostList({
               <article className="host-card" key={host.hostPeerId}>
                 <p className="host-card__label">Saved Computer</p>
                 <h2>{host.displayName ?? "Paired Computer"}</h2>
-                <p className="host-card__id">{host.hostPeerId}</p>
+                <p className="host-card__meta">
+                  Paired &amp; trusted · Ready for 1-click remote control
+                </p>
                 <div className="host-card__actions">
                   <button
                     className="connect-button"
@@ -667,7 +687,9 @@ export function HostList({
                 >
                   <p className="host-card__label">Online Now</p>
                   <h2>{host.deviceName || "Remote Computer"}</h2>
-                  <p className="host-card__id">{host.peerId}</p>
+                  <p className="host-card__meta">
+                    Available on your server · Click Pair &amp; Connect
+                  </p>
                   <div className="host-card__actions">
                     {waiting ? (
                       <>
