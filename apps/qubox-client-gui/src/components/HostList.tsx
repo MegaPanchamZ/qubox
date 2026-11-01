@@ -338,6 +338,26 @@ export function HostList({
     };
   }, [knownHosts, discoveredHosts]);
 
+  const filtered = useMemo(() => {
+    const q = quickInput.trim().toLowerCase();
+    if (!q) return combined;
+    return {
+      known: combined.known.filter(
+        (h) =>
+          (h.displayName ?? "").toLowerCase().includes(q) ||
+          h.hostPeerId.toLowerCase().includes(q),
+      ),
+      discovered: combined.discovered.filter(
+        (h) =>
+          (h.deviceName ?? "").toLowerCase().includes(q) ||
+          h.peerId.toLowerCase().includes(q),
+      ),
+    };
+  }, [combined, quickInput]);
+
+  const totalCount = combined.known.length + combined.discovered.length;
+  const shownCount = filtered.known.length + filtered.discovered.length;
+
   const handleConnect = async (hostId: string, pair = false) => {
     setConnect(
       pair ? { kind: "pairing", hostId } : { kind: "launching", hostId },
@@ -359,6 +379,16 @@ export function HostList({
   const handleQuickConnect = async () => {
     const target = quickInput.trim();
     if (!target) return;
+
+    // If the user typed a search filter that matches a computer in the list, connect to the top match
+    if (filtered.known.length > 0) {
+      await handleConnect(filtered.known[0].hostPeerId, false);
+      return;
+    }
+    if (filtered.discovered.length > 0) {
+      await handleConnect(filtered.discovered[0].peerId, true);
+      return;
+    }
 
     const looksLikeShareCode =
       /^[A-Za-z0-9]{6,12}$/.test(target) && !target.includes("-");
@@ -395,12 +425,34 @@ export function HostList({
     connect.hostId === hostId;
 
   return (
-    <div className="view" data-testid="computers-view" style={{ gap: 20 }}>
+    <div
+      className="view"
+      data-testid="computers-view"
+      style={{
+        gap: 14,
+        height: "calc(100vh - 88px)",
+        display: "flex",
+        flexDirection: "column",
+        overflow: "hidden",
+      }}
+    >
       <header
         className="view__header"
-        style={{ paddingBottom: 16, alignItems: "center" }}
+        style={{ paddingBottom: 12, alignItems: "center", flexShrink: 0 }}
       >
-        <h1 style={{ fontSize: "1.85rem" }}>Computers</h1>
+        <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
+          <h1 style={{ fontSize: "1.85rem" }}>Computers</h1>
+          {totalCount > 0 ? (
+            <span
+              data-testid="computers-count"
+              style={{ color: "var(--muted)", fontSize: "0.9rem" }}
+            >
+              {quickInput.trim()
+                ? `${shownCount} of ${totalCount}`
+                : totalCount}
+            </span>
+          ) : null}
+        </div>
         <div className="view__actions">
           <button
             data-testid="discover-button"
@@ -678,6 +730,7 @@ export function HostList({
           display: "flex",
           flexDirection: "column",
           gap: 12,
+          flexShrink: 0,
         }}
       >
         <div
@@ -836,7 +889,7 @@ export function HostList({
         ) : null}
       </div>
 
-      {/* 4. OTHER COMPUTERS (Quick Connect + Parsec Access Control Rows) */}
+      {/* 4. OTHER COMPUTERS (Search / Quick Connect + Scrollable Parsec Access Rows) */}
       <div
         className="host-card"
         style={{
@@ -845,6 +898,7 @@ export function HostList({
           gap: 10,
           alignItems: "center",
           padding: "10px 14px",
+          flexShrink: 0,
         }}
       >
         <input
@@ -856,10 +910,27 @@ export function HostList({
               void handleQuickConnect();
             }
           }}
-          placeholder="Enter code or ID…"
+          placeholder="Search computers, or enter code / ID…"
           style={{ flex: 1, minWidth: 200 }}
           value={quickInput}
         />
+        {quickInput ? (
+          <button
+            aria-label="Clear search"
+            data-testid="clear-search-button"
+            onClick={() => setQuickInput("")}
+            style={iconBtnStyle(false)}
+            title="Clear"
+            type="button"
+          >
+            <span
+              className="material-symbols-outlined"
+              style={{ fontSize: "1.05rem" }}
+            >
+              close
+            </span>
+          </button>
+        ) : null}
         <button
           className="connect-button"
           data-testid="quick-connect-button"
@@ -872,22 +943,30 @@ export function HostList({
         </button>
       </div>
 
-      {combined.known.length === 0 && combined.discovered.length === 0 ? (
+      {filtered.known.length === 0 && filtered.discovered.length === 0 ? (
         <div
           className="empty-state"
           data-testid="empty-computers-state"
-          style={{ padding: "24px 16px" }}
+          style={{ padding: "24px 16px", flexShrink: 0 }}
         >
           <p className="empty-state__title" style={{ margin: 0 }}>
-            No other computers
+            {totalCount > 0 ? "No matching computers" : "No other computers"}
           </p>
         </div>
       ) : (
         <div
           data-testid="computers-grid"
-          style={{ display: "flex", flexDirection: "column", gap: 8 }}
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            gap: 8,
+            flex: 1,
+            minHeight: 0,
+            overflowY: "auto",
+            paddingRight: 4,
+          }}
         >
-          {combined.known.map((host) => {
+          {filtered.known.map((host) => {
             const perms = getPermsForPeer(host.hostPeerId);
             return (
               <article
@@ -900,6 +979,7 @@ export function HostList({
                   alignItems: "center",
                   justifyContent: "space-between",
                   gap: 12,
+                  flexShrink: 0,
                 }}
               >
                 <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
@@ -1019,7 +1099,7 @@ export function HostList({
             );
           })}
 
-          {combined.discovered.map((host) => {
+          {filtered.discovered.map((host) => {
             const waiting = isBusyFor(host.peerId);
             return (
               <article
@@ -1032,6 +1112,7 @@ export function HostList({
                   alignItems: "center",
                   justifyContent: "space-between",
                   gap: 12,
+                  flexShrink: 0,
                 }}
               >
                 <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
