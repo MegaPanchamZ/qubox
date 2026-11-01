@@ -1,10 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useApp } from "./AppContext";
+import { shareCodeSvg } from "../lib/qr";
 
 type HostListProps = {
   onStartSession: (hostId: string) => Promise<void>;
   onPairAndStartSession: (hostId: string) => Promise<void>;
+  onCancelSession?: (sessionId: string) => Promise<void>;
+  onKickSession?: (sessionId: string, reason: string) => Promise<void>;
 };
 
 type ConnectPhase =
@@ -14,9 +17,17 @@ type ConnectPhase =
   | { kind: "launching"; hostId: string }
   | { kind: "error"; hostId: string; message: string };
 
+type ShareLinkPayload = {
+  code: string;
+  urlHint: string;
+  expiresUnixMs: number;
+};
+
 export function HostList({
   onStartSession,
   onPairAndStartSession,
+  onCancelSession,
+  onKickSession,
 }: HostListProps) {
   const {
     knownHosts,
@@ -24,24 +35,40 @@ export function HostList({
     setDiscoveredHosts,
     refreshKnownHosts,
     ensureNotifications,
+    hostRunning,
+    refreshHostStatus,
+    settings,
+    hostPendingPairings,
+    removeHostPendingPairing,
+    activeSessions,
+    telemetryBySession,
   } = useApp();
+
   const [loadError, setLoadError] = useState<string | null>(null);
   const [discovering, setDiscovering] = useState(false);
   const [discoveryError, setDiscoveryError] = useState<string | null>(null);
   const [connect, setConnect] = useState<ConnectPhase>({ kind: "idle" });
-  const [manualHostId, setManualHostId] = useState("");
+  const [quickInput, setQuickInput] = useState("");
+  const [hostBusy, setHostBusy] = useState(false);
+  const [hostNotice, setHostNotice] = useState<string | null>(null);
+  const [shareCode, setShareCode] = useState<string | null>(null);
+  const [shareExpiresMs, setShareExpiresMs] = useState<number | null>(null);
+  const [approvingId, setApprovingId] = useState<string | null>(null);
+
+  const isSharing = hostRunning === true;
 
   useEffect(() => {
     const load = async () => {
       try {
         await refreshKnownHosts();
+        await refreshHostStatus();
         setLoadError(null);
       } catch (error) {
         setLoadError(String(error));
       }
     };
     void load();
-  }, [refreshKnownHosts]);
+  }, [refreshKnownHosts, refreshHostStatus]);
 
   const discover = async () => {
     setDiscovering(true);
@@ -63,6 +90,56 @@ export function HostList({
       setDiscoveryError(String(error));
     } finally {
       setDiscovering(false);
+    }
+  };
+
+  const toggleHostSharing = async () => {
+    setHostBusy(true);
+    setHostNotice(null);
+    try {
+      if (isSharing) {
+        await invoke("stop_host_agent");
+        setHostNotice("Screen sharing stopped.");
+      } else {
+        await invoke("start_host_agent", {});
+        setHostNotice("This computer is now ready for remote connections.");
+      }
+      await refreshHostStatus();
+    } catch (error) {
+      setLoadError(String(error));
+    } finally {
+      setHostBusy(false);
+    }
+  };
+
+  const generateShareCode = async () => {
+    setHostNotice(null);
+    try {
+      const res = await invoke<ShareLinkPayload>("create_share_link", {
+        ttlSecs: 900,
+      });
+      setShareCode(res.code);
+      setShareExpiresMs(res.expiresUnixMs || null);
+      setHostNotice("Share code created (valid for 15 minutes).");
+    } catch (error) {
+      setLoadError(`Could not create share code: ${String(error)}`);
+    }
+  };
+
+  const decideIncomingPairing = async (requestId: string, approved: boolean) => {
+    setApprovingId(requestId);
+    try {
+      await invoke("host_pairing_decide", { requestId, approved });
+      removeHostPendingPairing(requestId);
+      setHostNotice(
+        approved
+          ? "Approved connection request."
+          : "Declined connection request.",
+      );
+    } catch (error) {
+      setLoadError(`Approval failed: ${String(error)}`);
+    } finally {
+      setApprovingId(null);
     }
   };
 
@@ -92,6 +169,36 @@ export function HostList({
     }
   };
 
+  const handleQuickConnect = async () => {
+    const target = quickInput.trim();
+    if (!target) return;
+
+    // A short alphanumeric code without hyphens (6-12 chars) is a Share Code
+    const looksLikeShareCode =
+      /^[A-Za-z0-9]{6,12}$/.test(target) && !target.includes("-");
+    if (looksLikeShareCode) {
+      setConnect({ kind: "pairing", hostId: target });
+      try {
+        const out = await invoke<string>("redeem_share_link", { code: target });
+        await refreshKnownHosts();
+        setQuickInput("");
+        setHostNotice(
+          out
+            ? `Connected with share code (${out}).`
+            : "Share code redeemed! You can now click Connect below.",
+        );
+        setConnect({ kind: "idle" });
+      } catch (error) {
+        setConnect({ kind: "error", hostId: target, message: String(error) });
+      }
+      return;
+    }
+
+    // Otherwise check if already in knownHosts; if not, Pair & Connect
+    const alreadyPaired = knownHosts.some((h) => h.hostPeerId === target);
+    await handleConnect(target, !alreadyPaired);
+  };
+
   const cancelPendingPair = (hostId: string) => {
     if (connect.kind === "waiting_for_approval" && connect.hostId === hostId) {
       setConnect({ kind: "idle" });
@@ -103,23 +210,23 @@ export function HostList({
     connect.kind !== "error" &&
     connect.hostId === hostId;
 
-  const ttlSeconds = 4 * 60;
-  const loading = knownHosts.length === 0 && loadError === null;
+  const qrSvg = shareCode ? shareCodeSvg(shareCode) : null;
 
   return (
-    <div className="view">
+    <div className="view" data-testid="computers-view">
       <header className="view__header">
         <div>
-          <p className="eyebrow">Hosts</p>
-          <h1>Connect to a host</h1>
+          <p className="eyebrow">Qubox Remote Desktop</p>
+          <h1>Computers</h1>
           <p className="subtitle">
-            Pair once, then connect from anywhere over Iroh P2P or relay. Use
-            Discover to find hosts registered on your signaling server.
+            Share this screen or connect to another computer anywhere over Iroh
+            P2P.
           </p>
         </div>
         <div className="view__actions">
           <button
             className="secondary-button"
+            data-testid="discover-button"
             disabled={discovering}
             onClick={() => void discover()}
             type="button"
@@ -128,170 +235,444 @@ export function HostList({
               className="material-symbols-outlined"
               style={{ fontSize: "1.1rem" }}
             >
-              {discovering ? "sync" : "search"}
+              {discovering ? "sync" : "refresh"}
             </span>
-            {discovering ? "Scanning…" : "Discover Hosts"}
+            {discovering ? "Scanning…" : "Scan for Computers"}
           </button>
         </div>
       </header>
 
-      {loading ? (
-        <p className="state">
-          <span
-            className="material-symbols-outlined"
-            style={{ fontSize: "1.1rem" }}
-          >
-            sync
-          </span>
-          Loading paired hosts…
-        </p>
+      {/* 1. Incoming Pairing Requests Banner */}
+      {hostPendingPairings.length > 0 ? (
+        <section
+          className="host-card"
+          data-testid="incoming-pairing-banner"
+          style={{
+            borderColor: "var(--primary)",
+            background: "rgba(255, 185, 81, 0.08)",
+          }}
+        >
+          <p className="host-card__label">Incoming Connection Request</p>
+          {hostPendingPairings.map((r) => (
+            <div
+              key={r.request_id}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: 16,
+                flexWrap: "wrap",
+              }}
+            >
+              <div>
+                <h2 style={{ margin: "0 0 4px" }}>
+                  {r.client_name || r.client_label || "Another Computer"} wants
+                  to connect
+                </h2>
+                <p className="host-card__meta">
+                  Device ID: <code>{r.client_peer_id.slice(0, 12)}…</code>
+                </p>
+              </div>
+              <div style={{ display: "flex", gap: 10 }}>
+                <button
+                  className="secondary-button"
+                  disabled={approvingId === r.request_id}
+                  onClick={() => void decideIncomingPairing(r.request_id, false)}
+                  type="button"
+                >
+                  Decline
+                </button>
+                <button
+                  className="connect-button"
+                  data-testid={`approve-pairing-${r.request_id}`}
+                  disabled={approvingId === r.request_id}
+                  onClick={() => void decideIncomingPairing(r.request_id, true)}
+                  type="button"
+                >
+                  Approve &amp; Pair
+                </button>
+              </div>
+            </div>
+          ))}
+        </section>
       ) : null}
+
+      {/* 2. Active Sessions Banner */}
+      {activeSessions.length > 0 ? (
+        <section
+          className="host-card"
+          data-testid="active-sessions-banner"
+          style={{
+            borderColor: "var(--success)",
+            background: "rgba(52, 211, 153, 0.07)",
+          }}
+        >
+          <p
+            className="host-card__label"
+            style={{ color: "var(--success)" }}
+          >
+            Active Remote Session ({activeSessions.length})
+          </p>
+          {activeSessions.map((session) => {
+            const events = telemetryBySession[session.sessionId] ?? [];
+            const decodedCount = events.filter(
+              (e) => e.kind === "frame_decoded",
+            ).length;
+            return (
+              <div
+                key={session.sessionId}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  gap: 16,
+                  flexWrap: "wrap",
+                }}
+              >
+                <div>
+                  <h2 style={{ margin: "0 0 4px" }}>
+                    Connected to {session.hostId.slice(0, 12)}…
+                  </h2>
+                  <p className="host-card__meta">
+                    Session <code>{session.sessionId.slice(0, 8)}</code> ·{" "}
+                    {decodedCount} frames decoded
+                  </p>
+                </div>
+                <div style={{ display: "flex", gap: 10 }}>
+                  {onKickSession ? (
+                    <button
+                      className="secondary-button"
+                      onClick={() =>
+                        void onKickSession(
+                          session.sessionId,
+                          "disconnected by user",
+                        )
+                      }
+                      type="button"
+                    >
+                      Kick Viewer
+                    </button>
+                  ) : null}
+                  {onCancelSession ? (
+                    <button
+                      className="danger-button"
+                      data-testid="disconnect-session-button"
+                      onClick={() => void onCancelSession(session.sessionId)}
+                      type="button"
+                    >
+                      Disconnect
+                    </button>
+                  ) : null}
+                </div>
+              </div>
+            );
+          })}
+        </section>
+      ) : null}
+
       {loadError ? <p className="state state--error">{loadError}</p> : null}
       {discoveryError ? (
-        <p className="state state--error">Discovery failed: {discoveryError}</p>
+        <p className="state state--error">Scan failed: {discoveryError}</p>
       ) : null}
+      {hostNotice ? <p className="state state--info">{hostNotice}</p> : null}
       {connect.kind === "waiting_for_approval" ? (
         <p className="state state--info" data-testid="pair-pending">
-          Waiting for host to accept the pairing request{" "}
-          <code>{connect.hostId.slice(0, 12)}…</code>
+          Waiting for the other computer to click <strong>Approve</strong> (
+          <code>{connect.hostId.slice(0, 12)}…</code>)
           <button
             className="secondary-button"
             onClick={() => cancelPendingPair(connect.hostId)}
             type="button"
             style={{ marginLeft: 8 }}
           >
-            Cancel request
+            Cancel
           </button>
         </p>
       ) : null}
       {connect.kind === "error" ? (
-        <p className="state state--error">Connect failed: {connect.message}</p>
+        <p className="state state--error">Connection failed: {connect.message}</p>
       ) : null}
 
+      {/* 3. THIS COMPUTER (Host Sharing Card) */}
       <section className="section">
-        <h2 className="section__title">Direct connect by Host ID</h2>
+        <h2 className="section__title">This Computer (Share Screen)</h2>
         <div
-          className="settings-field"
-          style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}
+          className="host-card"
+          data-testid="this-computer-card"
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            gap: 18,
+          }}
+        >
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: 16,
+              flexWrap: "wrap",
+            }}
+          >
+            <div>
+              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                <span
+                  style={{
+                    display: "inline-block",
+                    width: 10,
+                    height: 10,
+                    borderRadius: 999,
+                    background: isSharing ? "var(--success)" : "var(--muted)",
+                    boxShadow: isSharing ? "0 0 10px var(--success)" : "none",
+                  }}
+                />
+                <p className="host-card__label" style={{ margin: 0 }}>
+                  {isSharing
+                    ? "Ready for remote connections"
+                    : "Screen sharing is off"}
+                </p>
+              </div>
+              <h2 style={{ margin: "6px 0 4px" }}>Allow Remote Control</h2>
+              <p className="host-card__meta">
+                Your Computer ID:{" "}
+                <code data-testid="this-computer-id">
+                  {settings?.hostPeerId ?? "initializing…"}
+                </code>
+              </p>
+            </div>
+
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+              {settings?.hostPeerId ? (
+                <button
+                  className="secondary-button"
+                  data-testid="copy-host-id"
+                  onClick={() => {
+                    if (settings.hostPeerId) {
+                      void navigator.clipboard.writeText(settings.hostPeerId);
+                      setHostNotice("Copied Your Computer ID to clipboard.");
+                    }
+                  }}
+                  type="button"
+                >
+                  <span
+                    className="material-symbols-outlined"
+                    style={{ fontSize: "1.05rem" }}
+                  >
+                    content_copy
+                  </span>
+                  Copy ID
+                </button>
+              ) : null}
+
+              <button
+                className="secondary-button"
+                data-testid="create-share-code"
+                onClick={() => void generateShareCode()}
+                type="button"
+              >
+                <span
+                  className="material-symbols-outlined"
+                  style={{ fontSize: "1.05rem" }}
+                >
+                  qr_code_2
+                </span>
+                One-Time Share Code
+              </button>
+
+              <button
+                className={isSharing ? "danger-button" : "primary-button"}
+                data-testid="toggle-host-sharing"
+                disabled={hostBusy}
+                onClick={() => void toggleHostSharing()}
+                type="button"
+              >
+                <span
+                  className="material-symbols-outlined"
+                  style={{ fontSize: "1.1rem" }}
+                >
+                  {isSharing ? "stop_circle" : "cast"}
+                </span>
+                {hostBusy
+                  ? "Working…"
+                  : isSharing
+                    ? "Stop Sharing"
+                    : "Start Sharing"}
+              </button>
+            </div>
+          </div>
+
+          {shareCode ? (
+            <div
+              className="share-code-box"
+              data-testid="share-code-display"
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: 20,
+                flexWrap: "wrap",
+                padding: 16,
+                borderRadius: 14,
+                background: "rgba(0, 0, 0, 0.35)",
+                border: "1px solid var(--panel-border)",
+              }}
+            >
+              <div>
+                <p className="host-card__label">15-Minute Share Code</p>
+                <code
+                  className="share-code"
+                  style={{
+                    fontSize: "1.6rem",
+                    fontWeight: 800,
+                    letterSpacing: "0.14em",
+                    color: "var(--primary)",
+                  }}
+                >
+                  {shareCode}
+                </code>
+                {shareExpiresMs ? (
+                  <p className="host-card__meta" style={{ marginTop: 4 }}>
+                    Expires at {new Date(shareExpiresMs).toLocaleTimeString()}
+                  </p>
+                ) : null}
+                <div style={{ marginTop: 10, display: "flex", gap: 8 }}>
+                  <button
+                    className="secondary-button"
+                    onClick={() => {
+                      void navigator.clipboard.writeText(shareCode);
+                      setHostNotice("Copied share code to clipboard.");
+                    }}
+                    type="button"
+                  >
+                    Copy Code
+                  </button>
+                  <button
+                    className="ghost-button"
+                    onClick={() => setShareCode(null)}
+                    type="button"
+                  >
+                    Hide
+                  </button>
+                </div>
+              </div>
+              {qrSvg ? (
+                <div
+                  className="share-qr"
+                  aria-label="Share code QR"
+                  role="img"
+                  style={{ width: 120, height: 120 }}
+                  dangerouslySetInnerHTML={{ __html: qrSvg }}
+                />
+              ) : null}
+            </div>
+          ) : null}
+        </div>
+      </section>
+
+      {/* 4. CONNECT TO ANOTHER COMPUTER */}
+      <section className="section">
+        <h2 className="section__title">Connect to Another Computer</h2>
+
+        {/* Quick Connect Bar */}
+        <div
+          className="host-card"
+          style={{
+            display: "flex",
+            flexDirection: "row",
+            gap: 12,
+            flexWrap: "wrap",
+            alignItems: "center",
+            padding: "18px 22px",
+          }}
         >
           <input
             className="text-input"
             data-testid="manual-host-id"
-            onChange={(e) => setManualHostId(e.target.value)}
-            placeholder="Host Peer ID (UUID) or device name"
-            style={{ flex: 1, minWidth: 260 }}
-            value={manualHostId}
+            onChange={(e) => setQuickInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && quickInput.trim()) {
+                void handleQuickConnect();
+              }
+            }}
+            placeholder="Paste a Share Code (e.g. A7K9M2) or Computer ID…"
+            style={{ flex: 1, minWidth: 240 }}
+            value={quickInput}
           />
           <button
-            className="secondary-button"
-            disabled={!manualHostId.trim() || isBusyFor(manualHostId.trim())}
-            onClick={() => void handleConnect(manualHostId.trim(), true)}
-            type="button"
-          >
-            Pair &amp; connect
-          </button>
-          <button
             className="connect-button"
-            disabled={!manualHostId.trim() || isBusyFor(manualHostId.trim())}
-            onClick={() => void handleConnect(manualHostId.trim(), false)}
+            data-testid="quick-connect-button"
+            disabled={!quickInput.trim() || isBusyFor(quickInput.trim())}
+            onClick={() => void handleQuickConnect()}
             type="button"
           >
+            <span
+              className="material-symbols-outlined"
+              style={{ fontSize: "1.1rem" }}
+            >
+              bolt
+            </span>
             Connect
           </button>
         </div>
-      </section>
 
-      <section className="section">
-        <h2 className="section__title">Paired hosts</h2>
-        {!loading && combined.known.length === 0 ? (
-          <div className="empty-state">
+        {/* Unified Computers Grid */}
+        {combined.known.length === 0 && combined.discovered.length === 0 ? (
+          <div className="empty-state" data-testid="empty-computers-state">
             <span
               className="material-symbols-outlined"
               style={{
-                fontSize: "2.5rem",
+                fontSize: "2.4rem",
                 color: "var(--muted)",
-                marginBottom: "12px",
+                marginBottom: "10px",
               }}
             >
-              sensors_off
+              devices
             </span>
-            <p className="empty-state__title">No paired hosts yet</p>
+            <p className="empty-state__title">No other computers found yet</p>
             <p className="empty-state__body">
-              Pair a host from the Pairing tab. Existing CLI pairings will show
-              up here automatically.
+              Click <strong>Scan for Computers</strong> above to find online
+              computers on your server, or paste a Share Code / Computer ID.
             </p>
           </div>
-        ) : null}
-        {combined.known.length > 0 ? (
-          <div className="host-grid">
+        ) : (
+          <div className="host-grid" data-testid="computers-grid">
             {combined.known.map((host) => (
               <article className="host-card" key={host.hostPeerId}>
-                <p className="host-card__label">Paired Host</p>
-                <h2>{host.displayName ?? "Display name unavailable"}</h2>
+                <p className="host-card__label">Saved Computer</p>
+                <h2>{host.displayName ?? "Paired Computer"}</h2>
                 <p className="host-card__id">{host.hostPeerId}</p>
                 <div className="host-card__actions">
                   <button
                     className="connect-button"
+                    data-testid={`connect-known-${host.hostPeerId}`}
                     disabled={isBusyFor(host.hostPeerId)}
-                    onClick={() => void handleConnect(host.hostPeerId)}
+                    onClick={() => void handleConnect(host.hostPeerId, false)}
                     type="button"
                   >
                     {connect.kind === "launching" &&
                     connect.hostId === host.hostPeerId
-                      ? "Launching…"
+                      ? "Connecting…"
                       : "Connect"}
                   </button>
                 </div>
               </article>
             ))}
-          </div>
-        ) : null}
-      </section>
 
-      <section className="section">
-        <h2 className="section__title">Discovered on LAN</h2>
-        {combined.discovered.length === 0 ? (
-          <p className="state">
-            <span
-              className="material-symbols-outlined"
-              style={{ fontSize: "1.1rem" }}
-            >
-              info
-            </span>
-            Run a discovery scan to populate this list. Results expire after{" "}
-            {Math.round(ttlSeconds / 60)} minutes.
-          </p>
-        ) : (
-          <div className="host-grid">
             {combined.discovered.map((host) => {
-              const ageSec = Math.max(
-                0,
-                Math.round((Date.now() - host.discoveredAt) / 1000),
-              );
               const waiting = isBusyFor(host.peerId);
               return (
                 <article
                   className="host-card host-card--discovered"
                   key={host.peerId}
                 >
-                  <p className="host-card__label">Discovered</p>
-                  <h2>{host.deviceName || host.peerId}</h2>
+                  <p className="host-card__label">Online Now</p>
+                  <h2>{host.deviceName || "Remote Computer"}</h2>
                   <p className="host-card__id">{host.peerId}</p>
-                  <p className="host-card__meta">
-                    {host.transports.length > 0
-                      ? host.transports.join(" · ")
-                      : "transport unknown"}
-                  </p>
-                  <p className="host-card__meta">seen {ageSec}s ago</p>
                   <div className="host-card__actions">
                     {waiting ? (
                       <>
-                        <button
-                          className="connect-button"
-                          disabled
-                          type="button"
-                        >
-                          Waiting for host…
+                        <button className="connect-button" disabled type="button">
+                          Waiting for approval…
                         </button>
                         <button
                           className="secondary-button"
@@ -304,11 +685,12 @@ export function HostList({
                     ) : (
                       <button
                         className="connect-button"
+                        data-testid={`pair-connect-${host.peerId}`}
                         disabled={isBusyFor(host.peerId)}
                         onClick={() => void handleConnect(host.peerId, true)}
                         type="button"
                       >
-                        Pair &amp; connect
+                        Pair &amp; Connect
                       </button>
                     )}
                   </div>

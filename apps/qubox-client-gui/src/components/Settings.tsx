@@ -1,6 +1,8 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useApp } from "./AppContext";
+import { FileSyncView } from "./FileSync";
+import { DEFAULT_RELAY_SERVER } from "./FirstRun";
 
 type FormState = {
   signalingServer: string;
@@ -14,28 +16,21 @@ type FormState = {
 };
 
 const DEFAULT_FORM: FormState = {
-  signalingServer: "",
+  signalingServer: DEFAULT_RELAY_SERVER,
   bitrateKbps: 20_000,
   fpsCap: 60,
   decoderBackend: "ffmpeg",
   micEnabled: false,
-  clipboardSync: "off",
+  clipboardSync: "both",
   statsOverlay: true,
   autoStartHost: false,
 };
 
-const BITRATE_MIN = 1_000;
-const BITRATE_MAX = 200_000;
-const FPS_MIN = 15;
-const FPS_MAX = 240;
-
 export function SettingsView() {
-  const { settings } = useApp();
+  const { settings, refreshSettings } = useApp();
   const [form, setForm] = useState<FormState>(DEFAULT_FORM);
-  const [savingKey, setSavingKey] = useState<string | null>(null);
-  const [saveError, setSaveError] = useState<string | null>(null);
   const [saveOk, setSaveOk] = useState<string | null>(null);
-  const [formErrors, setFormErrors] = useState<Record<string, string>>({});
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!settings) return;
@@ -44,7 +39,7 @@ export function SettingsView() {
     const clip = (settings.clipboardSync ??
       "off") as FormState["clipboardSync"];
     setForm({
-      signalingServer: settings.signalingServer ?? "",
+      signalingServer: settings.signalingServer || DEFAULT_RELAY_SERVER,
       bitrateKbps: settings.bitrateKbps ?? 20_000,
       fpsCap: settings.fpsCap ?? 60,
       decoderBackend: decoder,
@@ -55,387 +50,209 @@ export function SettingsView() {
     });
   }, [settings]);
 
-  const isHwDecode = form.decoderBackend === "hw-decode";
-
-  const save = async (key: string, value: string, label: string) => {
-    setSavingKey(key);
+  const saveKey = async (key: string, value: string, label: string) => {
     setSaveError(null);
-    setSaveOk(null);
     try {
       await invoke("set_setting", { key, value });
+      await refreshSettings();
       setSaveOk(`Saved ${label}`);
     } catch (error) {
       setSaveError(String(error));
-    } finally {
-      setSavingKey(null);
     }
   };
-
-  const boolToString = (b: boolean): string => (b ? "true" : "false");
-  const numToString = (n: number): string => n.toString(10);
-
-  const validateBitrate = (n: number): string | null => {
-    if (!Number.isFinite(n)) return "Bitrate must be a number";
-    if (n < BITRATE_MIN || n > BITRATE_MAX) {
-      return `Bitrate must be between ${BITRATE_MIN} and ${BITRATE_MAX} kbps`;
-    }
-    return null;
-  };
-
-  const validateFps = (n: number): string | null => {
-    if (!Number.isFinite(n)) return "FPS must be a number";
-    if (n < FPS_MIN || n > FPS_MAX) {
-      return `FPS cap must be between ${FPS_MIN} and ${FPS_MAX}`;
-    }
-    return null;
-  };
-
-  const validateSignaling = (raw: string): string | null => {
-    const trimmed = raw.trim();
-    if (trimmed.length === 0) return null;
-    if (!/^wss?:\/\/.+/i.test(trimmed)) {
-      return "Signaling URL must start with ws:// or wss://";
-    }
-    return null;
-  };
-
-  const summary = useMemo(() => {
-    const errs: Record<string, string> = {};
-    const sErr = validateSignaling(form.signalingServer);
-    if (sErr) errs.signaling_server = sErr;
-    const bErr = validateBitrate(form.bitrateKbps);
-    if (bErr) errs.bitrate_kbps = bErr;
-    const fErr = validateFps(form.fpsCap);
-    if (fErr) errs.fps_cap = fErr;
-    return errs;
-  }, [form]);
-
-  useEffect(() => {
-    setFormErrors(summary);
-  }, [summary]);
 
   return (
-    <div className="view">
+    <div className="view" data-testid="settings-view">
       <header className="view__header">
         <div>
-          <p className="eyebrow">Settings</p>
-          <h1>Client preferences</h1>
+          <p className="eyebrow">Preferences</p>
+          <h1>Settings</h1>
           <p className="subtitle">
-            Changes are written through the daemon IPC. The signaling server and
-            decoder backend are applied to the next launched session.
+            Customize video quality, audio, clipboard sharing, and server
+            options.
           </p>
         </div>
       </header>
 
       {saveError ? <p className="state state--error">{saveError}</p> : null}
-      {saveOk ? <p className="state">{saveOk}</p> : null}
-      {!settings ? <p className="state">Loading settings…</p> : null}
+      {saveOk ? <p className="state state--info">{saveOk}</p> : null}
 
-      <div className="settings-grid">
-        <label className="settings-field">
-          <span>Signaling server</span>
-          <input
-            className="text-input"
-            onChange={(event) =>
-              setForm((prev) => ({
-                ...prev,
-                signalingServer: event.target.value,
-              }))
-            }
-            type="text"
-            value={form.signalingServer}
-          />
-          {formErrors.signaling_server ? (
-            <p className="state state--error" style={{ fontSize: "0.8rem" }}>
-              {formErrors.signaling_server}
-            </p>
-          ) : null}
-          <button
-            className="secondary-button"
-            disabled={
-              Boolean(formErrors.signaling_server) ||
-              savingKey === "signaling_server"
-            }
-            onClick={() =>
-              void save(
-                "signaling_server",
-                form.signalingServer.trim(),
-                "signaling server",
-              )
-            }
-            type="button"
-          >
-            <span
-              className="material-symbols-outlined"
-              style={{ fontSize: "1.1rem" }}
-            >
-              {savingKey === "signaling_server" ? "sync" : "save"}
-            </span>
-            {savingKey === "signaling_server" ? "Saving…" : "Save"}
-          </button>
-        </label>
+      <section className="section">
+        <h2 className="section__title">General &amp; Sharing</h2>
+        <div className="settings-grid">
+          <label className="settings-field settings-field--inline">
+            <input
+              checked={form.autoStartHost}
+              onChange={(e) => {
+                const next = e.target.checked;
+                setForm((p) => ({ ...p, autoStartHost: next }));
+                void saveKey(
+                  "auto_start_host",
+                  next ? "true" : "false",
+                  "auto-start sharing",
+                );
+              }}
+              type="checkbox"
+            />
+            <span>Automatically allow remote connections when Qubox opens</span>
+          </label>
 
-        <label className="settings-field">
-          <span>Bitrate cap (kbps)</span>
-          <input
-            className="text-input"
-            max={BITRATE_MAX}
-            min={BITRATE_MIN}
-            onChange={(event) =>
-              setForm((prev) => ({
-                ...prev,
-                bitrateKbps: Number(event.target.value),
-              }))
-            }
-            step={1000}
-            type="number"
-            value={Number.isFinite(form.bitrateKbps) ? form.bitrateKbps : ""}
-          />
-          {formErrors.bitrate_kbps ? (
-            <p className="state state--error" style={{ fontSize: "0.8rem" }}>
-              {formErrors.bitrate_kbps}
-            </p>
-          ) : null}
-          <button
-            className="secondary-button"
-            disabled={
-              Boolean(formErrors.bitrate_kbps) || savingKey === "bitrate_kbps"
-            }
-            onClick={() =>
-              void save(
-                "bitrate_kbps",
-                numToString(form.bitrateKbps),
-                "bitrate cap",
-              )
-            }
-            type="button"
-          >
-            <span
-              className="material-symbols-outlined"
-              style={{ fontSize: "1.1rem" }}
-            >
-              {savingKey === "bitrate_kbps" ? "sync" : "save"}
-            </span>
-            {savingKey === "bitrate_kbps" ? "Saving…" : "Save"}
-          </button>
-        </label>
+          <label className="settings-field settings-field--inline">
+            <input
+              checked={form.micEnabled}
+              onChange={(e) => {
+                const next = e.target.checked;
+                setForm((p) => ({ ...p, micEnabled: next }));
+                void saveKey(
+                  "mic_enabled",
+                  next ? "true" : "false",
+                  "microphone sharing",
+                );
+              }}
+              type="checkbox"
+            />
+            <span>Forward microphone audio during remote sessions</span>
+          </label>
 
-        <label className="settings-field">
-          <span>FPS cap</span>
-          <input
-            className="text-input"
-            max={FPS_MAX}
-            min={FPS_MIN}
-            onChange={(event) =>
-              setForm((prev) => ({
-                ...prev,
-                fpsCap: Number(event.target.value),
-              }))
-            }
-            type="number"
-            value={Number.isFinite(form.fpsCap) ? form.fpsCap : ""}
-          />
-          {formErrors.fps_cap ? (
-            <p className="state state--error" style={{ fontSize: "0.8rem" }}>
-              {formErrors.fps_cap}
-            </p>
-          ) : null}
-          <button
-            className="secondary-button"
-            disabled={Boolean(formErrors.fps_cap) || savingKey === "fps_cap"}
-            onClick={() =>
-              void save("fps_cap", numToString(form.fpsCap), "FPS cap")
-            }
-            type="button"
-          >
-            <span
-              className="material-symbols-outlined"
-              style={{ fontSize: "1.1rem" }}
+          <label className="settings-field">
+            <span>Clipboard Sync</span>
+            <select
+              className="text-input"
+              onChange={(e) => {
+                const next = e.target.value as FormState["clipboardSync"];
+                setForm((p) => ({ ...p, clipboardSync: next }));
+                void saveKey("clipboard_sync", next, "clipboard sync");
+              }}
+              value={form.clipboardSync}
             >
-              {savingKey === "fps_cap" ? "sync" : "save"}
-            </span>
-            {savingKey === "fps_cap" ? "Saving…" : "Save"}
-          </button>
-        </label>
+              <option value="both">Both directions (Copy &amp; Paste anywhere)</option>
+              <option value="host_to_client">Host to Client only</option>
+              <option value="client_to_host">Client to Host only</option>
+              <option value="off">Off</option>
+            </select>
+          </label>
 
-        <label className="settings-field">
-          <span>Decoder backend</span>
-          <select
-            className="text-input"
-            onChange={(event) =>
-              setForm((prev) => ({
-                ...prev,
-                decoderBackend:
-                  event.target.value === "hw-decode" ? "hw-decode" : "ffmpeg",
-              }))
-            }
-            value={form.decoderBackend}
-          >
-            <option value="ffmpeg">ffmpeg (subprocess)</option>
-            <option value="hw-decode">HW decode (ffmpeg-next)</option>
-          </select>
-          {isHwDecode ? (
-            <p className="state state--info" style={{ fontSize: "0.82rem" }}>
-              Hardware decode requires working GPU drivers. If a session fails
-              to start, switch back to <code>ffmpeg</code>.
-            </p>
-          ) : null}
-          <button
-            className="secondary-button"
-            disabled={savingKey === "decoder_backend"}
-            onClick={() =>
-              void save(
-                "decoder_backend",
-                form.decoderBackend,
-                "decoder backend",
-              )
-            }
-            type="button"
-          >
-            <span
-              className="material-symbols-outlined"
-              style={{ fontSize: "1.1rem" }}
-            >
-              {savingKey === "decoder_backend" ? "sync" : "save"}
-            </span>
-            {savingKey === "decoder_backend" ? "Saving…" : "Save"}
-          </button>
-        </label>
+          <label className="settings-field settings-field--inline">
+            <input
+              checked={form.statsOverlay}
+              onChange={(e) => {
+                const next = e.target.checked;
+                setForm((p) => ({ ...p, statsOverlay: next }));
+                void saveKey(
+                  "stats_overlay",
+                  next ? "true" : "false",
+                  "performance overlay",
+                );
+              }}
+              type="checkbox"
+            />
+            <span>Show FPS &amp; latency overlay during sessions</span>
+          </label>
+        </div>
+      </section>
 
-        <label className="settings-field settings-field--inline">
-          <input
-            checked={form.micEnabled}
-            onChange={(event) =>
-              setForm((prev) => ({ ...prev, micEnabled: event.target.checked }))
-            }
-            type="checkbox"
-          />
-          <span>Enable microphone forwarding by default</span>
-          <button
-            className="secondary-button"
-            disabled={savingKey === "mic_enabled"}
-            onClick={() =>
-              void save(
-                "mic_enabled",
-                boolToString(form.micEnabled),
-                "microphone forwarding",
-              )
-            }
-            type="button"
-          >
-            <span
-              className="material-symbols-outlined"
-              style={{ fontSize: "1.1rem" }}
+      <section className="section">
+        <h2 className="section__title">Stream Quality</h2>
+        <div className="settings-grid">
+          <label className="settings-field">
+            <span>Frame Rate (FPS)</span>
+            <select
+              className="text-input"
+              onChange={(e) => {
+                const next = Number(e.target.value);
+                setForm((p) => ({ ...p, fpsCap: next }));
+                void saveKey("fps_cap", String(next), "frame rate");
+              }}
+              value={form.fpsCap}
             >
-              {savingKey === "mic_enabled" ? "sync" : "save"}
-            </span>
-            {savingKey === "mic_enabled" ? "Saving…" : "Save"}
-          </button>
-        </label>
+              <option value={30}>30 FPS (Battery saver)</option>
+              <option value={60}>60 FPS (Standard smooth)</option>
+              <option value={120}>120 FPS (High refresh)</option>
+              <option value={144}>144 FPS (Ultra low latency)</option>
+            </select>
+          </label>
 
-        <label className="settings-field">
-          <span>Clipboard sync</span>
-          <select
-            className="text-input"
-            onChange={(event) =>
-              setForm((prev) => ({
-                ...prev,
-                clipboardSync: event.target.value as FormState["clipboardSync"],
-              }))
-            }
-            value={form.clipboardSync}
-          >
-            <option value="off">Off</option>
-            <option value="host_to_client">Host → Client</option>
-            <option value="client_to_host">Client → Host</option>
-            <option value="both">Both directions</option>
-          </select>
-          <button
-            className="secondary-button"
-            disabled={savingKey === "clipboard_sync"}
-            onClick={() =>
-              void save("clipboard_sync", form.clipboardSync, "clipboard sync")
-            }
-            type="button"
-          >
-            <span
-              className="material-symbols-outlined"
-              style={{ fontSize: "1.1rem" }}
+          <label className="settings-field">
+            <span>Max Video Bitrate</span>
+            <select
+              className="text-input"
+              onChange={(e) => {
+                const next = Number(e.target.value);
+                setForm((p) => ({ ...p, bitrateKbps: next }));
+                void saveKey("bitrate_kbps", String(next), "video bitrate");
+              }}
+              value={form.bitrateKbps}
             >
-              {savingKey === "clipboard_sync" ? "sync" : "save"}
-            </span>
-            {savingKey === "clipboard_sync" ? "Saving…" : "Save"}
-          </button>
-        </label>
+              <option value={5_000}>5 Mbps (Low bandwidth)</option>
+              <option value={15_000}>15 Mbps (Balanced 1080p)</option>
+              <option value={20_000}>20 Mbps (High quality)</option>
+              <option value={50_000}>50 Mbps (4K / LAN)</option>
+            </select>
+          </label>
 
-        <label className="settings-field settings-field--inline">
-          <input
-            checked={form.statsOverlay}
-            onChange={(event) =>
-              setForm((prev) => ({
-                ...prev,
-                statsOverlay: event.target.checked,
-              }))
-            }
-            type="checkbox"
-          />
-          <span>Show stats overlay in session</span>
-          <button
-            className="secondary-button"
-            disabled={savingKey === "stats_overlay"}
-            onClick={() =>
-              void save(
-                "stats_overlay",
-                boolToString(form.statsOverlay),
-                "stats overlay",
-              )
-            }
-            type="button"
-          >
-            <span
-              className="material-symbols-outlined"
-              style={{ fontSize: "1.1rem" }}
+          <label className="settings-field">
+            <span>Video Decoder</span>
+            <select
+              className="text-input"
+              onChange={(e) => {
+                const next =
+                  e.target.value === "hw-decode" ? "hw-decode" : "ffmpeg";
+                setForm((p) => ({ ...p, decoderBackend: next }));
+                void saveKey("decoder_backend", next, "video decoder");
+              }}
+              value={form.decoderBackend}
             >
-              {savingKey === "stats_overlay" ? "sync" : "save"}
-            </span>
-            {savingKey === "stats_overlay" ? "Saving…" : "Save"}
-          </button>
-        </label>
+              <option value="ffmpeg">Standard (Compatible with all GPUs)</option>
+              <option value="hw-decode">Hardware Accelerated (GPU)</option>
+            </select>
+          </label>
+        </div>
+      </section>
 
-        <label className="settings-field settings-field--inline">
-          <input
-            checked={form.autoStartHost}
-            onChange={(event) =>
-              setForm((prev) => ({
-                ...prev,
-                autoStartHost: event.target.checked,
-              }))
-            }
-            type="checkbox"
-          />
-          <span>Automatically start host on app open</span>
-          <button
-            className="secondary-button"
-            disabled={savingKey === "auto_start_host"}
-            onClick={() =>
-              void save(
-                "auto_start_host",
-                boolToString(form.autoStartHost),
-                "auto-start host",
-              )
-            }
-            type="button"
-          >
-            <span
-              className="material-symbols-outlined"
-              style={{ fontSize: "1.1rem" }}
-            >
-              {savingKey === "auto_start_host" ? "sync" : "save"}
-            </span>
-            {savingKey === "auto_start_host" ? "Saving…" : "Save"}
-          </button>
-        </label>
-      </div>
+      <details className="host-card" style={{ cursor: "pointer" }}>
+        <summary style={{ fontWeight: 700, fontSize: "1rem" }}>
+          Advanced Server &amp; File Sync Options
+        </summary>
+        <div
+          style={{
+            marginTop: 20,
+            display: "flex",
+            flexDirection: "column",
+            gap: 20,
+            cursor: "default",
+          }}
+        >
+          <label className="settings-field">
+            <span>Signaling &amp; Iroh Relay Server URL</span>
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+              <input
+                className="text-input"
+                onChange={(e) =>
+                  setForm((p) => ({ ...p, signalingServer: e.target.value }))
+                }
+                style={{ flex: 1, minWidth: 260 }}
+                type="text"
+                value={form.signalingServer}
+              />
+              <button
+                className="secondary-button"
+                onClick={() =>
+                  void saveKey(
+                    "signaling_server",
+                    form.signalingServer.trim(),
+                    "server URL",
+                  )
+                }
+                type="button"
+              >
+                Save Server URL
+              </button>
+            </div>
+          </label>
+
+          <FileSyncView />
+        </div>
+      </details>
     </div>
   );
 }

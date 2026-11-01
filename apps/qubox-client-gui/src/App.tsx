@@ -1,23 +1,18 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
 import { AppProvider, useApp } from "./components/AppContext";
 import { Sidebar, type View } from "./components/Sidebar";
 import { HostList } from "./components/HostList";
-import { PairingRequests } from "./components/PairingRequests";
-import { SessionView } from "./components/SessionView";
 import { SettingsView } from "./components/Settings";
-import { FileSyncView } from "./components/FileSync";
 import { FirstRun } from "./components/FirstRun";
-import { HostModeView } from "./components/HostMode";
 
 function Shell() {
   const [view, setView] = useState<View>("hosts");
   const [ready, setReady] = useState(false);
   const [needsOnboarding, setNeedsOnboarding] = useState(false);
-  const [drainHint, setDrainHint] = useState<string | null>(null);
   const {
     pendingPairings,
+    hostPendingPairings,
     activeSessions,
     conflictCount,
     ensureNotifications,
@@ -36,7 +31,6 @@ function Shell() {
           setReady(true);
         }
       } catch {
-        // Daemon offline: still show app; first-run will fail with hint.
         if (!cancelled) {
           setNeedsOnboarding(true);
           setReady(true);
@@ -48,23 +42,6 @@ function Shell() {
     };
   }, []);
 
-  useEffect(() => {
-    let un: (() => void) | undefined;
-    void listen<{ pending: number }>("filesync://drain-ready", (e) => {
-      const n = e.payload?.pending ?? 0;
-      if (n > 0) {
-        setDrainHint(`${n} File Sync job(s) ready while session is up`);
-      }
-    }).then((fn) => {
-      un = fn;
-    });
-    return () => {
-      un?.();
-    };
-  }, []);
-
-  // Ask for notification permission as soon as the main app shell loads;
-  // the user is going to need it for hidden-window pairing/conflict pings.
   useEffect(() => {
     void ensureNotifications();
   }, [ensureNotifications]);
@@ -79,7 +56,7 @@ function Shell() {
           statsOverlay: settings?.statsOverlay ?? true,
         },
       });
-      setView("sessions");
+      setView("hosts");
     } catch (error) {
       console.error("start_session_subprocess failed", error);
       throw error;
@@ -137,39 +114,21 @@ function Shell() {
       <Sidebar
         activeSessionCount={activeSessions.length}
         onChange={setView}
-        pendingPairingCount={pendingPairings.length}
+        pendingPairingCount={pendingPairings.length + hostPendingPairings.length}
         view={view}
         conflictCount={conflictCount}
       />
       <section className="panel">
-        {drainHint ? (
-          <p className="state" style={{ margin: "12px 20px 0" }}>
-            {drainHint}{" "}
-            <button
-              className="secondary-button"
-              onClick={() => {
-                setView("sync");
-                setDrainHint(null);
-              }}
-              type="button"
-            >
-              Open File Sync
-            </button>
-          </p>
-        ) : null}
-        {view === "hosts" ? (
+        {view === "settings" ? (
+          <SettingsView />
+        ) : (
           <HostList
             onStartSession={startSession}
             onPairAndStartSession={pairAndStartSession}
+            onCancelSession={cancelSession}
+            onKickSession={kickSession}
           />
-        ) : null}
-        {view === "host" ? <HostModeView /> : null}
-        {view === "pairing" ? <PairingRequests /> : null}
-        {view === "sessions" ? (
-          <SessionView onCancel={cancelSession} onKick={kickSession} />
-        ) : null}
-        {view === "sync" ? <FileSyncView /> : null}
-        {view === "settings" ? <SettingsView /> : null}
+        )}
       </section>
     </main>
   );

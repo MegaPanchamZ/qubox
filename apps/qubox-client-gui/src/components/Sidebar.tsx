@@ -1,5 +1,10 @@
 export type View =
-  "hosts" | "host" | "pairing" | "sessions" | "sync" | "settings";
+  | "hosts"
+  | "host"
+  | "pairing"
+  | "sessions"
+  | "sync"
+  | "settings";
 
 type SidebarProps = {
   view: View;
@@ -10,11 +15,7 @@ type SidebarProps = {
 };
 
 const ITEMS: { id: View; label: string; icon: string }[] = [
-  { id: "hosts", label: "Hosts", icon: "devices" },
-  { id: "host", label: "Host mode", icon: "router" },
-  { id: "pairing", label: "Pairing", icon: "link" },
-  { id: "sessions", label: "Sessions", icon: "play_circle" },
-  { id: "sync", label: "File Sync", icon: "swap_horiz" },
+  { id: "hosts", label: "Computers", icon: "devices" },
   { id: "settings", label: "Settings", icon: "settings" },
 ];
 
@@ -33,14 +34,15 @@ export function Sidebar({
       <nav className="rail__nav">
         {ITEMS.map((item) => {
           const badge =
-            item.id === "pairing"
-              ? pendingPairingCount
-              : item.id === "sessions"
-                ? activeSessionCount
-                : item.id === "sync"
-                  ? conflictCount
-                  : 0;
-          const active = view === item.id;
+            item.id === "hosts"
+              ? pendingPairingCount + activeSessionCount
+              : item.id === "settings"
+                ? conflictCount
+                : 0;
+          const active =
+            item.id === "hosts"
+              ? view !== "settings"
+              : view === "settings";
           return (
             <button
               key={item.id}
@@ -61,7 +63,20 @@ export function Sidebar({
           );
         })}
       </nav>
-      <div className="rail__status" />
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+          justifyContent: "center",
+          fontSize: "0.78rem",
+          color: "var(--muted)",
+          paddingTop: 8,
+        }}
+      >
+        <div className="rail__status" style={{ margin: 0 }} />
+        <span>Iroh P2P Ready</span>
+      </div>
     </aside>
   );
 }
